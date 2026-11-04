@@ -71,6 +71,9 @@ def fail(msg):
     os._exit(1)  # the other thread may sit in a socket read
 
 
+MIN_FREE = 256 << 20  # bytes left free on the cache's file system while a video downloads
+
+
 class Throttle:
     def __init__(self, per_s=2):
         self.gap, self.last = 1 / per_s, 0
@@ -846,6 +849,10 @@ def fetch(a):
 
     def vprog(ms, frames, nbytes):
         if tick_v():
+            # the whole video lands on /var/opt, shared with the Store and the other tools: stop before it fills
+            free = shutil.disk_usage(a.dir).free
+            if free < MIN_FREE:
+                fail(f'head unit storage almost full ({free >> 20} MiB free): video stopped')
             emit(ev='video', ms=ms, frames=frames, bytes=nbytes,
                  pct=min(100, round(ms * 100 / dur_ms)) if dur_ms else 0)
 

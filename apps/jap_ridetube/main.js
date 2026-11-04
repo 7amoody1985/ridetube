@@ -71,7 +71,14 @@ mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
         const parked = Parked.watch(ctx, log, { strict: true });
-        const noVideo = () => parked.moving() && settings.get('video_driving') !== true;   // the drive lock
+        // the drive lock: Video while driving counts only once switched on while parked, so a press while moving
+        // cannot bring the picture up; switching it off works at once
+        let videoDrivingOk = false;
+        const noVideo = () => {
+            const on = settings.get('video_driving') === true, moving = parked.moving();
+            videoDrivingOk = moving ? videoDrivingOk && on : on;
+            return moving && !videoDrivingOk;
+        };
 
         /* ---------- the daemon ---------- */
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);

@@ -15,7 +15,10 @@ the car, over the car's own internet connection:
 - The sound plays through the car's own media player.
 - While driving, the picture is replaced by a podcast view (title, progress, controls) and the sound plays on.
   The picture comes back when the car is parked again.
-- Nothing is stored for later: the cache holds only the last few videos played.
+- Nothing is stored for later. The video playing is downloaded to the head unit in full while it plays, then
+  deleted: expect the video's whole size on your data plan, even if you stop early. The download stops if the
+  head unit's storage gets low.
+- Signed in, what you watch goes to your YouTube history, as on a TV.
 
 ## Requirements
 
@@ -40,7 +43,8 @@ Node.js 22 that RideTube's service runs on. Then install RideTube. The Store ins
 ## Settings
 
 - **Video while driving**: off by default. Leave it off unless the car is coded for video in motion and only
-  passengers can see the screen. You use it at your own risk.
+  passengers can see the screen. You use it at your own risk. It takes effect only once switched on while the
+  car is parked: pressed while driving, the picture stays off until the next stop.
 - **Fill the screen**: off by default (black bars); on, the picture is cropped to fill the screen.
 - **Video quality**: auto (720p on Wi-Fi, 480p on phone data), 720p, 480p or 360p.
 - **Show members-only videos**: off by default. A channel can also be hidden from its page.
@@ -52,7 +56,12 @@ The parked check reads the car's speed. A reading older than 5 seconds counts as
 
 ## Tested on
 
-A BMW with iDrive 7 (MGU).
+| | |
+|---|---|
+| Car | BMW X5 xDrive45e (G05), iDrive 7 (MGU, ID7 HMI), firmware P18_23w44.2-1-3 |
+| Internet | the Store's uplink over home Wi-Fi and an iPhone hotspot |
+
+One car only so far. Reports from other cars are welcome in the issues.
 
 ## Known limits
 
@@ -65,6 +74,13 @@ A BMW with iDrive 7 (MGU).
 - The switch from the first seconds of sound to the full file may be heard as a short break.
 - Any app installed on the head unit can drive RideTube's service through its control socket (it is open to the
   group every app shares). Install only apps you trust; see `native/jap-ridetube-d/README.md`, "Security notes".
+
+## Uninstall
+
+1. In RideTube, **Sign out** (or later, remove "YouTube on TV" at https://myaccount.google.com/permissions):
+   uninstalling deletes the sign-in from the car, but Google keeps the grant until it is revoked.
+2. In the MGU Store, uninstall **RideTube**, then its service `jap-ridetube-d`. A bad update can be undone in the
+   Store while the previous version is kept.
 
 ## Layout
 

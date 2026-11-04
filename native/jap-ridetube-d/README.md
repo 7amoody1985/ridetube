@@ -149,8 +149,8 @@ starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB
 - ytdec dies while playing → restarted once at the current clock; a second death → `error`
   `video failed, audio only`, the state stays `playing` and audio continues. No change in
   `stats.decoded` for 5 s while playing with video on → the child is killed (counts as a death).
-- LRU: at most 6 ids in the cache by dir mtime (a play touches its dir), never the playing or
-  preparing one.
+- Cache: `keep` played ids by dir mtime (default 0: a video is deleted once played), never the
+  playing or preparing one. ytfetch stops a download when less than 256 MiB is left free.
 - Never exits on its own; uncaught errors → log, release audio, idle.
 - Unit: `Restart=on-failure`, `RestartSec=3`, `TimeoutStopSec=5`, `LimitCORE=1`; `recmgr`
   and `crashNames` in `component.json` (recmgr's list counts from the next boot; the unit is

@@ -5,6 +5,15 @@
 > YouTube's Terms of Service and the laws of your country, and for using it safely: by default the picture
 > shows only while the car is parked.
 
+| | |
+|---|---|
+| ![Home](docs/media/home.png) | ![Player](docs/media/player.png) |
+| Home: your shelves, Continue watching first | The player, with chapters on the progress bar |
+| ![Podcast mode while driving](docs/media/driving.png) | ![Sign in](docs/media/signin.png) |
+| While driving: the sound plays on, no picture | Sign in with a code on your phone |
+
+Rendered on a computer with demo data (Blender open movie titles), not photographed in a car.
+
 RideTube plays videos on the BMW iDrive 7 head unit (MGU), installed from the MGU Store. Everything runs on
 the car, over the car's own internet connection:
 

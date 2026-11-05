@@ -399,8 +399,14 @@ async function appFrames() {
         const seeks = d.cmds('seek').length;
         await sleep(300); await hu.loopFn();                 // (an unchanged model redraws within 250 ms)
         assert.ok(!frame().vrect, 'no video while driving');
-        // Video while driving on (a car coded for video in motion): the picture stays while moving
+        // Video while driving on (a car coded for video in motion): switched on while moving, it waits for a stop;
+        // switched on while parked, the picture stays while moving
         hu.ctx.settings.set('video_driving', true);
+        await sleep(300); await hu.loopFn();
+        assert.ok(!frame().vrect, 'Video while driving switched on while moving: no picture until parked');
+        speedH({ speedVehicleCentreOfGravity: 0 });
+        await sleep(300); await hu.loopFn();
+        speedH({ speedVehicleCentreOfGravity: 50 * 64 });
         await sleep(300); await hu.loopFn();
         assert.ok(frame().vrect, 'Video while driving: video while moving');
         assert.deepStrictEqual(d.cmds('video').slice(-1)[0], { cmd: 'video', on: true }, 'Video while driving: video on');

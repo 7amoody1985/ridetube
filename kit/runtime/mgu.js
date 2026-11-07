@@ -148,6 +148,12 @@ class Ui {
         this._visHandlers = [];
         this._focus = Object.create(null);    // stateName -> false while a popup covers it
         this._focusHandlers = [];
+        // stateName -> when it last came to the front (opened by us, or the HMI's own visible event). The
+        // HMI's stack keeps a screen listed while another of ours covers it (the drawn VIEW under a menu),
+        // so visible alone does not say which one is in front: the newest one is.
+        this._frontAt = Object.create(null);
+        this._frontN = 0;
+        this._frontHandlers = [];
         this.timing = { png: 0, push: 0 };    // ms spent encoding / handing images to the HMI
         this._cnText = new HmiText();
     }
@@ -193,7 +199,14 @@ class Ui {
         const c = this.comp(name);
         if (c) c.on('action', (ev) => { log.info('click ' + name); Promise.resolve().then(() => fn(ev || {})).catch((e) => log.error('click ' + name, e)); });
     }
-    open(stateName) { return this._try('open ' + stateName, this.rhmi.openState(stateName)); }
+    open(stateName) { this._toFront(stateName); return this._try('open ' + stateName, this.rhmi.openState(stateName)); }
+    /** When stateName last came to the front (a counter, 0: never): the newest of the visible ones is in front. */
+    frontAt(stateName) { return this._frontAt[stateName] || 0; }
+    onFront(fn) { this._frontHandlers.push(fn); }
+    _toFront(stateName) {
+        this._frontAt[stateName] = ++this._frontN;
+        this._frontHandlers.forEach((fn) => { try { fn(stateName); } catch (e) { log.error(e); } });
+    }
     close(stateName) { return this._try('close ' + stateName, this.rhmi.closeState(stateName)); }
     isVisible(stateName) { return !!this._visible[stateName]; }
     /** false while an HMI popup covers the (visible) screen */
@@ -643,7 +656,7 @@ async function runInner(impl) {
     const tracked = (SPEC.screens || []).concat(SPEC.settings && SPEC.settings.length ? [{ name: 'SETTINGS' }] : []);
     tracked.forEach((s) => {
         const st = ui.comp(s.name);
-        if (st && st.on) st.on('visible', (ev) => ui._setVisible(s.name, !!(ev && ev.visible)));
+        if (st && st.on) st.on('visible', (ev) => { if (ev && ev.visible) ui._toFront(s.name); ui._setVisible(s.name, !!(ev && ev.visible)); });
         // a popup over the screen (options, warnings, calls) takes its focus: the display hides
         // the GPU overlay meanwhile, so the popup is never covered
         if (st && st.on) st.on('focus', (ev) => ui._setFocus(s.name, !(ev && ev.focus === false)));

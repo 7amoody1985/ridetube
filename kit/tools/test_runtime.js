@@ -214,6 +214,41 @@ test('a new scale keeps the uploads (the renderer keeps them), a new size sends 
     } finally { t.end(); }
 });
 
+test('a menu of the app opened over the drawn page: the picture stays off while it is in front', async () => {
+    // as RideTube: VIEW drawn, its Search rail entry opens the HMI menu MAIN. The HMI's stack still lists VIEW
+    // under MAIN (mgu.js then keeps VIEW visible and gives it its focus back), so only MAIN being newer says
+    // which one is in front (mgu.js Ui.frontAt: ui.open, or the HMI's visible event)
+    let conn = null;
+    onConn = (c) => { conn = c; ready(c); };
+    const log = { errors: [], info() {}, warn() {}, debug() {}, error: (...a) => log.errors.push(a) };
+    const vis = new Set(), visH = [], frontH = [], at = {};
+    let n = 0;
+    const ui = {
+        rhmi: null, close() {}, visible() {}, isVisible: (s) => vis.has(s), hasFocus: () => true,
+        onVisible: (fn) => visH.push(fn), onFront: (fn) => frontH.push(fn), frontAt: (s) => at[s] || 0,
+        setVisible: (s, v) => { if (v === vis.has(s)) return; if (v) vis.add(s); else vis.delete(s); visH.forEach((fn) => fn(s, v)); },
+        open: (s) => { at[s] = ++n; frontH.forEach((fn) => fn(s)); ui.setVisible(s, true); },
+    };
+    const spec = { id: 'test', title: 'Test', screens: [{ name: 'VIEW', kind: 'canvas', buttons: [] }, { name: 'MAIN', kind: 'menu', items: [] }] };
+    ui.open('VIEW');
+    const d = new Display(ui, log, spec, { get: () => undefined, onChange() {} }, () => themes.theme());
+    try {
+        assert(await waitFor(() => conn && d.active() && d.own()), 'display on the renderer');
+        await waitFor(() => d.gpu.visible, 1000);
+        assert(d.gpu.visible, 'the drawn page shows');
+        ui.open('MAIN');                                     // the rail's Search: VIEW stays in the stack
+        assert(!d.gpu.visible, 'the menu opened: the picture is off at once');
+        d._syncVisible(); await sleep(450);                  // the HMI touched outside the claims (CLOSED) -> a resync 700 ms later
+        assert(!d.gpu.visible, 'the picture came back over the menu');
+        ui.open('VIEW');                                     // Home, Results, a search (MAIN may stay listed under it)
+        await sleep(450);                                    // (SHOW_DELAY_MS)
+        assert(d.gpu.visible, 'back on the drawn page: the picture shows again');
+        ui.open('MAIN'); ui.setVisible('MAIN', false);       // the menu left with BACK: it leaves the stack
+        await sleep(450);
+        assert(d.gpu.visible, 'BACK from the menu: the picture shows again');
+    } finally { d.closeSheet(); d.gpu.close(); clearInterval(d.keepTimer); }
+});
+
 (async () => {
     await new Promise((r) => server.listen(process.env.MGU_RENDERD_SOCKET, r));
     let failed = 0;

@@ -101,8 +101,11 @@ class Display {
         const canvasScreens = (spec.screens || []).filter((s) => s.kind === 'canvas');
         this.screen = canvasScreens[0] || null;
         if (!this.screen) return;
+        // the app's other HMI screens (a menu opened from the drawn page): in front, they cover the picture
+        this.others = (spec.screens || []).filter((s) => s !== this.screen && s.kind !== 'canvas').map((s) => s.name);
+        if (this.ui.onFront) this.ui.onFront((name) => { if (name === this.screen.name || this.others.indexOf(name) >= 0) this._syncVisible(); });
         this.ui.onVisible((name, v) => {
-            if (name === 'SETTINGS') { this._syncVisible(); if (!v) this._lost(); return; }
+            if (name === 'SETTINGS' || this.others.indexOf(name) >= 0) { this._syncVisible(); if (!v) this._lost(); return; }
             if (name !== this.screen.name) return;
             if (v) this.barOff = 0;                   // the HMI builds the screen afresh
             if (!v) this.closeSheet();
@@ -617,7 +620,13 @@ class Display {
     /** the screen is up and not covered by an HMI popup */
     _shown() {
         // the HMI's settings screen over ours (no drawn settings: another renderer, software): it shows, not our picture
-        return this.ui.isVisible(this.screen.name) && !this.ui.isVisible('SETTINGS') && (!this.ui.hasFocus || this.ui.hasFocus(this.screen.name));
+        return this.ui.isVisible(this.screen.name) && !this.ui.isVisible('SETTINGS') && !this._covered() && (!this.ui.hasFocus || this.ui.hasFocus(this.screen.name));
+    }
+    /** Another of the app's HMI screens came to the front after ours and is still up (RideTube's Search menu). */
+    _covered() {
+        if (!this.ui.frontAt || !this.others) return false;
+        const mine = this.ui.frontAt(this.screen.name);
+        return this.others.some((n) => this.ui.isVisible(n) && this.ui.frontAt(n) > mine);
     }
 
     _syncVisible() {

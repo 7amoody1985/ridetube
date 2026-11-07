@@ -135,7 +135,7 @@ async function main() {
     const acct = path.join(stateDir, 'account.json');
     const ctl = path.join(tmp, 'fetch.ctl');
     const d = new Daemon({
-        someip: someip, srcGen: srcGen, ytdec: fakeYtdec, cacheDir: cache, logDir: tmp, sock: path.join(tmp, 'ctl.sock'),
+        someip: someip, srcGen: srcGen, ytdec: fakeYtdec, cacheDir: cache, logDir: tmp, ramDir: null, ramFallback: null, thumbMax: 150, statusFile: path.join(tmp, 'status.json'), sock: path.join(tmp, 'ctl.sock'),
         watchdogMs: 800, tickMs: 200, keep: 20, stateDir: stateDir, noSetuid: true, spare: false, resume: false, fetchRetryMs: [],
         fetcher: [process.execPath, path.join(__dirname, 'fake_ytfetch.js'), ctl],
         accountFile: acct, ytRequest: fakeYt, log: (m) => logs.push(m)
@@ -403,6 +403,89 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
         assert.ok(!alive(pid), 'gone by the idle state');
         assert.ok(d.fetcher === null && d.preparing === null);
+    });
+
+    // ---- fork: the video in RAM
+    const ram = path.join(tmp, 'ram');
+    const stdinLines = () => (fs.existsSync(ctl + '.stdin') ? fs.readFileSync(ctl + '.stdin', 'utf8').split('\n').filter(Boolean) : []);
+    await t('fork: in RAM, --stream and a spill folder; the position on stdin (1/s, a seek at once); the spill folder goes', async () => {
+        if (!fs.existsSync(ram)) fs.mkdirSync(ram);
+        d.ram = ram;
+        fs.writeFileSync(ctl, ''); fs.writeFileSync(ytlog, ''); setMode('ok');
+        const id = 'RRRRRRRRRR1', dir = path.join(ram, id), spill = path.join(cache, id);
+        await fetchPlay(id);
+        const l = fetchLog();
+        assert.deepStrictEqual(l.argv.slice(1), ['fetch', '--cache-dir', path.join(cache, 'ytdlp'), '--height', '720', '--stream', '120000,45000',
+            '--spill-dir', spill, '--', id, dir]);
+        assert.ok(!fs.existsSync(spill), 'no spill folder once it streams');
+        assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(dir, 'audio.m4a'));
+        assert.strictEqual(d.cur.stream, true);
+        tick(1000); tick(1200);
+        c.send({ cmd: 'seek', ms: 20000 });
+        await waitUntil(() => stdinLines().indexOf('pos 20000') >= 0);
+        assert.deepStrictEqual(stdinLines(), ['pos 1000', 'pos 20000'], 'one a second, a seek at once');
+    });
+
+    await t('fork: a seek back before what RAM holds: fetched again, resuming there; counted', async () => {
+        const pid = fetchLog().pid;
+        fs.writeFileSync(ctl, 'trim');
+        await waitUntil(() => d.cur && d.cur.trimMs === 30000);
+        fs.writeFileSync(ctl, '');
+        d.opts.resume = true;
+        c.clear();
+        c.send({ cmd: 'seek', ms: 40000 });   // past the trim: still in RAM, no fetch
+        await sleep(200);
+        assert.strictEqual(fetchLog().pid, pid);
+        c.send({ cmd: 'seek', ms: 15000 });   // before it
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+        assert.notStrictEqual(fetchLog().pid, pid, 'a new fetch');
+        assert.ok(!alive(pid), 'the old one stopped');
+        assert.strictEqual(d.counts.refetches, 1);
+        assert.strictEqual(d.cur.refetch, 1);
+        assert.strictEqual(d.startAt, 15000, 'resumes there on its first tick');
+        d.opts.resume = false;
+    });
+
+    await t('fork: the debug report: status.json (no ids), {"cmd":"debug"}, one sessions.jsonl line at the stop; RAM emptied', async () => {
+        d.writeStatus(true);
+        const s = JSON.parse(fs.readFileSync(path.join(tmp, 'status.json'), 'utf8'));
+        assert.strictEqual(s.media, 'ram');
+        assert.strictEqual(s.state, 'playing');
+        assert.strictEqual(s.playing.stored, 'ram-stream');
+        assert.strictEqual(s.counts.refetches, 1);
+        assert.ok(s.mem.avail_mb > 0 && s.rss_mb.service > 0);
+        assert.strictEqual(typeof s.ram.used_mb, 'number');
+        assert.ok(JSON.stringify(s).indexOf('RRRRRRRRRR1') < 0 && JSON.stringify(s).indexOf('Fetched') < 0, 'nothing of what was watched');
+        c.clear();
+        c.send({ cmd: 'debug' });
+        const e = await c.waitFor((x) => x.ev === 'debug');
+        assert.strictEqual(e.playing.refetch === undefined, true);
+        assert.strictEqual(e.counts.plays >= 2, true);
+        const before = fs.existsSync(path.join(tmp, 'sessions.jsonl')) ? fs.readFileSync(path.join(tmp, 'sessions.jsonl'), 'utf8').split('\n').filter(Boolean).length : 0;
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        const lines = fs.readFileSync(path.join(tmp, 'sessions.jsonl'), 'utf8').split('\n').filter(Boolean).map((x) => JSON.parse(x));
+        assert.strictEqual(lines.length, before + 1, 'one line for the play and its refetch');
+        const last = lines[lines.length - 1];
+        assert.strictEqual(last.how, 'idle');
+        assert.strictEqual(last.stored, 'ram-stream');
+        assert.strictEqual(last.refetch, 1);
+        assert.strictEqual(last.downloaded_mb, 6);
+        assert.ok(!fs.existsSync(path.join(ram, 'RRRRRRRRRR1')), 'gone from RAM once played');
+    });
+
+    await t('fork: a video ytfetch cannot stream goes whole into the spill folder on flash; its RAM folder goes', async () => {
+        try {
+            fs.writeFileSync(ctl, 'spill');
+            const id = 'RRRRRRRRRR2';
+            await fetchPlay(id);
+            assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(cache, id, 'audio.m4a'));
+            assert.ok(!fs.existsSync(path.join(ram, id)));
+            assert.strictEqual(d.cur.spill, 'test');
+            assert.strictEqual(d.counts.spills, 1);
+            c.send({ cmd: 'stop' });
+            await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        } finally { d.ram = null; fs.writeFileSync(ctl, ''); }
     });
 
     await t('speed: a warm spare takes the prefetch (stream lookup); the next spare takes the play, with --info', async () => {
@@ -1029,7 +1112,7 @@ async function main() {
 
     await t('daemon without a fetch uid: sign-in and feeds say so, nothing spawned, no crash', async () => {
         const evs = [];
-        const d2 = new Daemon({ someip: someip, srcGen: srcGen, cacheDir: cache, logDir: tmp, sock: path.join(tmp, 'ctl3.sock'),
+        const d2 = new Daemon({ someip: someip, srcGen: srcGen, cacheDir: cache, logDir: tmp, ramDir: null, ramFallback: null, thumbMax: 150, statusFile: path.join(tmp, 'status.json'), sock: path.join(tmp, 'ctl3.sock'),
             accountFile: path.join(tmp, 'acct2.json'), stateDir: path.join(tmp, 'st2'), etcDir: uo.etcDir, oapRoot: uo.oapRoot,
             toolRoot: path.join(tmp, 'none'), procDir: uo.procDir, mainapps: [], fetchCmd: [process.execPath, fakeFetch, flog, 'ok'], log: (m) => logs.push(m) });
         d2.emit = (o) => evs.push(o);
@@ -1113,7 +1196,7 @@ async function main() {
 
     await t('thumbs: cached thumb.rgba by its length, else thumbs/<id>.rgba, else the helper (env {}, cwd /), checked, kept, 150 at most', async () => {
         const evs = [], tlog = path.join(tmp, 'thumb.log'), tdir = path.join(cache, 'thumbs');
-        const d3 = new Daemon({ someip: someip, srcGen: srcGen, ytdec: fakeYtdec, cacheDir: cache, logDir: tmp, sock: path.join(tmp, 'ctl3.sock'),
+        const d3 = new Daemon({ someip: someip, srcGen: srcGen, ytdec: fakeYtdec, cacheDir: cache, logDir: tmp, ramDir: null, ramFallback: null, thumbMax: 150, statusFile: path.join(tmp, 'status.json'), sock: path.join(tmp, 'ctl3.sock'),
             accountFile: path.join(tmp, 'acct3.json'), noSetuid: true, thumbCmd: [process.execPath, path.join(__dirname, 'fake_thumb.js'), tlog],
             ytRequest: fakeYt, log: (m) => logs.push(m) });
         d3.emit = (o) => evs.push(o);

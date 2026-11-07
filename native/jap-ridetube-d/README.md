@@ -11,6 +11,61 @@ run on the car; nothing is downloaded for keeps: the cache holds the last few vi
 - media: `/var/opt/jap-ridetube-d/cache/<id>/` {meta.json, thumb.rgba, audio.m4a, index.bin, video.h264, and
   `audio.head.m4a` while the rest of the audio downloads}, written on the car by the fetcher (below).
 
+## Fork: the video in RAM, and a debug report (0.4.0, 2026-11-07)
+
+Added in [7amoody1985/ridetube](https://github.com/7amoody1985/ridetube); not in JustAnotherPU's original.
+
+**Streaming in RAM.** Before, every video was written whole to the head unit's flash (`/var/opt`, about 1.1 GB an
+hour of 720p, deleted after). Now:
+
+- The unit mounts a tmpfs capped at 256 MB at `/run/jap-ridetube-media` (`ExecStartPre`; unmounted at stop).
+  Without it ytd.js takes `/dev/shm/jap-ridetube-media`, without either the flash cache as before (the log says
+  which: `media in RAM: ...` / `media on flash: ...`). Each video's folder, the thumbs (60 at most) and the
+  prefetched lookups go there.
+- `ytfetch.py fetch --stream 120000,45000 --spill-dir <cache>/<id>`: the video's https format is fetched in Range
+  requests of 2 MiB, each only while less than 120 s is fetched past playback, and `video.h264` is hole-punched
+  (`fallocate PUNCH_HOLE`) up to the last keyframe 45 s behind it. ytd.js sends `pos <ms>` on the fetcher's stdin
+  (at most once a second, at once for a seek). ytdec is unchanged: it reads each access unit at its own offset,
+  and every keyframe carries its SPS/PPS, so it never reads a punched part. The audio is fetched whole, as before.
+  A video ytfetch cannot stream that way (no ranges, no size, more RAM than the tmpfs has, no hole punching)
+  goes whole into the spill folder on flash, as before the fork (`spill` event, `spill_why` in the report).
+- A seek back before what RAM still holds (more than 45 s back): the play again from there, as a quality change
+  does (the sound stops for a few seconds). Forward past what is fetched: it downloads on to there.
+- Flash writes left: the resume point (every 60 s, was 15 s), one line a play in `sessions.jsonl`, yt-dlp's
+  own cache.
+- RAM while a 720p video plays: about 165 s of video (~50 MB at 2.5 Mbit/s) plus its audio (~1 MB a minute;
+  twice while it is made flat). Over about 90 minutes the audio no longer fits the 256 MB plan: those spill.
+
+**The debug report.** Light on purpose: a few reads of `/proc` every 10 s while in use, nothing when idle.
+
+| Where | What |
+|---|---|
+| `/run/jap-ridetube-d/status.json` (RAM, 0644) | rewritten every 10 s while in use and on every state change; gone at a restart |
+| `/var/opt/jap-ridetube-d/log/sessions.jsonl` (flash) | one JSON line a play, kept under 64 KB (the newer half stays) |
+| `{"cmd":"debug"}` on `ctl.sock` | the same as status.json, as `{"ev":"debug", ...}` |
+
+Neither holds what was watched (no video ids, no titles: an id in an error message shows as `<id>`).
+
+`status.json`: `version`, `at`, `uptime_s`, `state`, `buffering`, `app_connected`, `media` (`ram` / `flash`),
+`ram` {`dir`, `mount`, `size_mb`, `used_mb`}, `playing` {`stored` (`ram-stream` / `ram` / `flash`), `spill_why`,
+`elapsed_s`, `total_s`, `fetched_s`, `trimmed_s`, `ram_peak_mb`, `downloaded_mb`, `window_waited_s`,
+`buffering_n`, `height`, `ytdec_deaths`} or null, `mem` {`avail_mb`, `total_mb`, `swap_used_mb`}, `rss_mb`
+{`service`, `ytdec`, `fetcher`, `spare`}, `load` (1 min), `counts` {`plays`, `ram`, `spills`, `refetches`,
+`errors`, `ytdecDeaths`}, `errors` (the last 5: `at`, `msg`).
+
+`sessions.jsonl` lines: `at`, `how` (`idle` / `ended` / `error`), `stored`, `spill_why`, `watched_s`, `total_s`,
+`height`, `ram_peak_mb`, `downloaded_mb`, `buffering_n`, `window_waited_s`, `ytdec_deaths`, `refetch`,
+`mem_avail_mb`.
+
+Reading them over the car's Wi-Fi hotspot (root's SSH key):
+
+    ssh root@172.16.222.97 cat /run/jap-ridetube-d/status.json
+    ssh root@172.16.222.97 tail -n 20 /var/opt/jap-ridetube-d/log/sessions.jsonl
+    ssh root@172.16.222.97 journalctl -u jap-ridetube-d -n 200 --no-pager
+
+Another app on the head unit can read both files as they are (status.json 0644 under a 0755 folder;
+sessions.jsonl under the 0755 log folder), for example to send them to a phone.
+
 ## Architecture
 
 Every internet request runs as the daemon's fetch uid (below, "Internet: the fetch uid"), never root:

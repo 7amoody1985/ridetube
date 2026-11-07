@@ -55,9 +55,23 @@ function defaults() {
         skip: ['sponsor', 'selfpromo', 'interaction', 'intro'], // SponsorBlock categories skipped (the play's own `skip` wins)
         sbCategories: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], // looked up, sent in extras  // a prefetched stream lookup is used this long (ytfetch: 30 min, URLs: ~6 h)
         headMarginMs: 1500,  // on the head file: wait for audio.m4a this close to the head's end
-        thumbMax: 150,
+        thumbMax: 60,        // in RAM now (230 KB each): 150 was 35 MB
         ytTimeoutMs: 10000,
         keep: 0,             // played videos kept in the cache (0: deleted once played; nothing is kept for offline)
+        // fork (2026-11-07): the playing video in RAM, not on the head unit's flash. The unit mounts a capped tmpfs
+        // at ramDir; without it a folder on /dev/shm (also a tmpfs); without either, the cache on flash as before.
+        // The video is fetched streamAheadMs past playback at most and punched streamBehindMs behind it.
+        ramDir: env.MGU_YT_RAM || '/run/jap-ridetube-media',
+        ramFallback: '/dev/shm/jap-ridetube-media',
+        ramCheck: true,      // the folder must be on a tmpfs (/proc/mounts); tests turn it off
+        streamAheadMs: 120000,
+        streamBehindMs: 45000,
+        ramBudget: 0,        // bytes a stream may plan for (0: what the tmpfs has free)
+        posSaveMs: 60000,    // the resume point while playing (forced on pause and stop): 4 flash writes a minute before
+        // the debug report: status.json (RAM, every statusMs while in use), one line a play in sessions.jsonl (flash)
+        statusFile: env.MGU_YT_STATUS || '/run/jap-ridetube-d/status.json',
+        statusMs: 10000,
+        sessionsMax: 65536,
         watchdogMs: 5000,
         tickMs: 5000,
         availWaitMs: 5000,
@@ -158,6 +172,7 @@ function pruneCache(cacheDir, keep, protect, log) {
 // tool from state/internet-uids). Picked as mgu-updater's js/uids.js picks its own: the lowest free
 // number above MainApp's app uid ranges, kept in state/uids.json while nothing else holds it.
 const SELF = 'jap-ridetube-d';
+const VERSION = '0.4.0';   // (fork: component.json's version)
 const MAX_UID = 60000; // login.defs UID_MAX
 const MAINAPPS = [{ root: '/usr/lib/oap-mainapp', hmi: 'HmiMain3D' }, { root: '/usr/lib/oap-mainapp21', hmi: 'Hmi8' }];
 const lines = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n'); } catch (e) { return []; } };
@@ -769,6 +784,11 @@ function Daemon(o) {
     this.thumbQ = [Promise.resolve(), Promise.resolve(), Promise.resolve()];
     this.thumbN = 0;
     this.timers = [];
+    this.ram = null;      // the RAM folder (start: pickRam), else null: the cache on flash
+    this.posFedAt = 0;    // the last "pos" line to the streaming fetcher
+    this.counts = { plays: 0, ram: 0, spills: 0, refetches: 0, errors: 0, ytdecDeaths: 0 };
+    this.errors = [];     // the last 5 playback errors, for the debug report
+    this.startedAt = Date.now();
     this.ready = new Promise((r) => { this.readyResolve = r; }); // leftover check done
     this.audio = new Audio(this.opts, {
         time: (v) => this.onTime(v),
@@ -796,6 +816,15 @@ Daemon.prototype.fetch = function (req) {
 Daemon.prototype.spawnFetchUid = function (cmd, args, stdin) {
     const ids = this.opts.noSetuid ? {} : { uid: this.uid(), gid: this.uid() };
     return cp.spawn(cmd[0], cmd.slice(1).concat(args), Object.assign(ids, { cwd: '/', env: {}, stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] }));
+};
+// the streaming fetcher's window follows playback: "pos <ms>" at most once a second (at once for a seek)
+Daemon.prototype.feedPos = function (ms, now) {
+    const f = this.fetcher;
+    if (!f || !f.stdin || !this.cur || !this.cur.stream) return;
+    const t = Date.now();
+    if (!now && t - this.posFedAt < 1000) return;
+    this.posFedAt = t;
+    try { f.stdin.write('pos ' + Math.max(0, Math.floor(ms)) + '\n'); } catch (e) { /* it ended */ }
 };
 // yt-dlp's cache dir (5 chars: listCache's 11-char id filter skips it), the fetch uid's
 Daemon.prototype.ytc = function () {
@@ -843,7 +872,7 @@ Daemon.prototype.positions = function () {
 Daemon.prototype.savePos = function (force) {
     const c = this.cur;
     if (!c || !this.total || this.head && !c.durationMs) return;
-    if (!force && Date.now() - (this.posAt || 0) < 15000) return;
+    if (!force && Date.now() - (this.posAt || 0) < this.opts.posSaveMs) return;
     this.posAt = Date.now();
     const p = this.positions(), m = readMeta(c.dir, c.id);
     p[c.id] = { ms: this.elapsed, total: this.total, done: this.total - this.elapsed < Math.max(5000, this.total * 0.05),
@@ -907,11 +936,11 @@ Daemon.prototype.spawnJob = function (job) {
     const s = this.spare;
     this.spare = null;
     if (s && s.child.exitCode === null && s.child.signalCode === null) { // still loading: serve reads the job once warm
-        s.child.stdin.end(JSON.stringify(job) + '\n');
+        if (job[0] === 'fetch') s.child.stdin.write(JSON.stringify(job) + '\n'); else s.child.stdin.end(JSON.stringify(job) + '\n');
         return s.child;
     }
     if (s) { try { s.child.kill('SIGKILL'); } catch (e) { /* gone */ } }
-    return this.spawnFetchUid(this.opts.fetcher, job);
+    return this.spawnFetchUid(this.opts.fetcher, job, job[0] === 'fetch');
 };
 // from tick: a spare while the app is in use and no fetch is starting; none past warmMs
 Daemon.prototype.keepWarm = function () {
@@ -929,16 +958,18 @@ Daemon.prototype.keepWarm = function () {
     child.on('error', (e) => this.log('spare: ' + e.message));
     child.on('close', () => { if (this.spare === s) this.spare = null; });
 };
-Daemon.prototype.infoFile = function (id) { return path.join(this.opts.cacheDir, 'ytdlp', 'info', id + '.json'); };
+Daemon.prototype.infoFile = function (id) { return this.ram ? path.join(this.ram, 'info', id + '.json') : path.join(this.opts.cacheDir, 'ytdlp', 'info', id + '.json'); };
 Daemon.prototype.freshInfo = function (id) {
     try { return Date.now() - fs.statSync(this.infoFile(id)).mtime.getTime() < this.opts.infoMaxMs; } catch (e) { return false; }
 };
 Daemon.prototype.prefetch = function (id) {
     if (!ID_RE.test(String(id)) || !this.opts.spare) return undefined;
     if (this.extracting) { if (this.extracting.id !== id) this.nextPrefetch = id; return undefined; }
-    if (isPlayable(path.join(this.opts.cacheDir, id)) || this.preparing === id || this.freshInfo(id)) return undefined;
+    if (isPlayable(path.join(this.media(), id)) || this.preparing === id || this.freshInfo(id)) return undefined;
     const idir = path.dirname(this.infoFile(id));
-    mkdirp(path.join(this.ytc(), 'info'));
+    this.ytc();
+    mkdirp(idir);
+    fs.chmodSync(idir, 0o700);
     this.chownFetch(idir);
     try { fs.readdirSync(idir).forEach((n) => { const f = path.join(idir, n); if (Date.now() - fs.statSync(f).mtime.getTime() > this.opts.infoMaxMs) fs.unlinkSync(f); }); } catch (e) { /* best effort */ }
     const child = this.spawnJob(['extract', '--cache-dir', this.ytc(), '--', id, this.infoFile(id)]);
@@ -963,7 +994,11 @@ Daemon.prototype.start = async function () {
     // 0711: the fetch uid reaches its own folders in it, nobody else can list what was watched
     try { mkdirp(this.opts.cacheDir); fs.chmodSync(this.opts.cacheDir, 0o711); } catch (e) { this.log('cache dir: ' + e.message); }
     try { mkdirp(this.opts.logDir); } catch (e) { this.log('log dir: ' + e.message); }
+    this.ram = this.pickRam();
+    this.log(this.ram ? 'media in RAM: ' + this.ram : 'media on flash: no tmpfs for ' + this.opts.ramDir);
     this.listen();
+    this.timers.push(setInterval(() => this.guard(() => this.writeStatus(false)), this.opts.statusMs));
+    this.writeStatus(true);
     // the uplink learns our fetch uid at start (its 5 s rescan), before anyone signs in
     if (this.childFetch && this.fetchUid === null) { try { this.fetchUid = pickFetchUid(this.opts); } catch (e) { this.log('internet uid: ' + e.message); } }
     this.timers.push(setInterval(() => this.guard(() => this.watchdog()), 1000));
@@ -983,6 +1018,122 @@ Daemon.prototype.start = async function () {
         }
     }
 };
+// ---- media in RAM (fork): the first of ramDir, ramFallback that is on a tmpfs, made 0711 as the cache
+function tmpfsOf(dir, mounts) {
+    let best = null;
+    String(mounts || '').split('\n').forEach((l) => {
+        const f = l.split(' ');
+        if (f.length < 4) return;
+        const mnt = f[1].replace(/\\040/g, ' ');
+        if ((dir === mnt || dir.indexOf(mnt === '/' ? '/' : mnt + '/') === 0) && (!best || mnt.length > best.mnt.length)) {
+            const size = /(?:^|,)size=(\d+)k(?:,|$)/.exec(f[3]);
+            best = { mnt: mnt, type: f[2], sizeKb: size ? Number(size[1]) : null };
+        }
+    });
+    return best && best.type === 'tmpfs' ? best : null;
+}
+Daemon.prototype.pickRam = function () {
+    const o = this.opts;
+    let mounts = '';
+    try { mounts = fs.readFileSync('/proc/mounts', 'utf8'); } catch (e) { /* not Linux: no RAM folder unless ramCheck is off */ }
+    for (const d of [o.ramDir, o.ramFallback]) {
+        if (!d) continue;
+        const t = o.ramCheck ? tmpfsOf(d, mounts) : { mnt: d, sizeKb: null };
+        if (!t) continue;
+        try {
+            mkdirp(d);
+            fs.chmodSync(d, 0o711);
+            this.ramMount = t;
+            return d;
+        } catch (e) { this.log('ram dir ' + d + ': ' + e.message); }
+    }
+    return null;
+};
+// where a video's folder, the thumbs and the prefetched lookups go: RAM when there is one
+Daemon.prototype.media = function () { return this.ram || this.opts.cacheDir; };
+
+// ---- the debug report (fork). status.json on /run (RAM) every statusMs while in use, and at once on a state change:
+// RAM, the stream window, memory, the processes' sizes; nothing of what was watched (no ids, no titles). sessions.jsonl
+// in logDir (flash): one short line a play, the file kept under sessionsMax. Also on the socket: {"cmd":"debug"}.
+function kbOf(text, key) { const m = new RegExp('^' + key + ':\\s+(\\d+)', 'm').exec(text || ''); return m ? Number(m[1]) : null; }
+function readText(f) { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return ''; } }
+function rssMb(pid) { const k = pid ? kbOf(readText('/proc/' + pid + '/status'), 'VmRSS') : null; return k === null ? null : Math.round(k / 1024); }
+function duKb(p) { // what p holds in RAM or on disk: blocks, so punched holes do not count
+    let st;
+    try { st = fs.lstatSync(p); } catch (e) { return 0; }
+    if (!st.isDirectory()) return Math.ceil(st.blocks / 2);
+    let n = 0;
+    try { fs.readdirSync(p).forEach((x) => { n += duKb(path.join(p, x)); }); } catch (e) { /* gone */ }
+    return n;
+}
+const mb = (kb) => (kb === null || kb === undefined ? null : Math.round(kb / 102.4) / 10);
+Daemon.prototype.status = function () {
+    const c = this.cur, mem = readText('/proc/meminfo'), now = Date.now();
+    const ramKb = this.ram ? duKb(this.ram) : null;
+    if (c && ramKb !== null) c.ramPeakKb = Math.max(c.ramPeakKb || 0, ramKb);
+    const swapT = kbOf(mem, 'SwapTotal'), swapF = kbOf(mem, 'SwapFree');
+    return {
+        service: SELF, version: VERSION, at: new Date(now).toISOString(), uptime_s: Math.round((now - this.startedAt) / 1000),
+        state: this.state, buffering: !!this.buffering, app_connected: !!this.client,
+        media: this.ram ? 'ram' : 'flash',
+        ram: this.ram ? { dir: this.ram, mount: this.ramMount && this.ramMount.mnt, size_mb: this.ramMount ? mb(this.ramMount.sizeKb) : null, used_mb: mb(ramKb) } : null,
+        playing: c ? {
+            stored: c.spill ? 'flash' : c.stream ? 'ram-stream' : this.ram ? 'ram' : 'flash', spill_why: c.spill || null,
+            elapsed_s: Math.round(this.elapsed / 1000), total_s: Math.round(this.total / 1000),
+            fetched_s: this.fetchedMs === Infinity ? 'all' : Math.round((this.fetchedMs || 0) / 1000),
+            trimmed_s: Math.round((c.trimMs || 0) / 1000), ram_peak_mb: mb(c.ramPeakKb),
+            downloaded_mb: mb(((c.dlPrev || 0) + (c.dlBytes || 0)) / 1024), window_waited_s: c.waited || 0, buffering_n: c.bufferingN || 0,
+            height: c.height, ytdec_deaths: this.deaths || 0
+        } : null,
+        mem: { avail_mb: mb(kbOf(mem, 'MemAvailable')), total_mb: mb(kbOf(mem, 'MemTotal')),
+            swap_used_mb: swapT === null || swapF === null ? null : mb(swapT - swapF) },
+        rss_mb: { service: Math.round(process.memoryUsage().rss / 1048576), ytdec: rssMb(this.child && this.child.pid),
+            fetcher: rssMb(this.fetcher && this.fetcher.pid), spare: rssMb(this.spare && this.spare.child.pid) },
+        load: Number(readText('/proc/loadavg').split(' ')[0]) || null,
+        counts: this.counts, errors: this.errors
+    };
+};
+// every statusMs while in use; idle: once, then nothing until something happens (force: at once)
+Daemon.prototype.writeStatus = function (force) {
+    const busy = this.state !== 'idle' || !!this.fetcher || !!this.client;
+    if (!force && !busy && this.statusIdle) return;
+    this.statusIdle = !busy;
+    const f = this.opts.statusFile;
+    if (!f) return;
+    try {
+        mkdirp(path.dirname(f));
+        fs.writeFileSync(f + '.tmp', JSON.stringify(this.status(), null, 1) + '\n', { mode: 0o644 });
+        fs.renameSync(f + '.tmp', f);
+    } catch (e) { if (!this.statusErr) { this.statusErr = true; this.log('status: ' + e.message); } }
+};
+Daemon.prototype.noteError = function (msg) {
+    this.counts.errors++;
+    const id = this.cur && this.cur.id;   // (the report says nothing of what was watched)
+    this.errors.push({ at: new Date().toISOString(), msg: (id ? String(msg).split(id).join('<id>') : String(msg)).slice(0, 200) });
+    if (this.errors.length > 5) this.errors.shift();
+};
+// one line a play into sessions.jsonl (the play's numbers, no id or title); the file keeps its newer half past sessionsMax
+Daemon.prototype.endSession = function (how) {
+    const c = this.cur;
+    if (!c || c.logged || !this.opts.logDir) return;
+    c.logged = true;
+    if (this.ram) c.ramPeakKb = Math.max(c.ramPeakKb || 0, duKb(this.ram));
+    const line = JSON.stringify({ at: new Date().toISOString(), how: how, stored: c.spill ? 'flash' : c.stream ? 'ram-stream' : this.ram ? 'ram' : 'flash',
+        spill_why: c.spill || undefined, watched_s: Math.round((this.elapsed || 0) / 1000), total_s: Math.round((this.total || 0) / 1000),
+        height: c.height, ram_peak_mb: mb(c.ramPeakKb), downloaded_mb: mb(((c.dlPrev || 0) + (c.dlBytes || 0)) / 1024), buffering_n: c.bufferingN || 0,
+        window_waited_s: c.waited || 0, ytdec_deaths: this.deaths || 0, refetch: c.refetch || 0,
+        mem_avail_mb: mb(kbOf(readText('/proc/meminfo'), 'MemAvailable')) }) + '\n';
+    const f = path.join(this.opts.logDir, 'sessions.jsonl');
+    try {
+        let size = 0;
+        try { size = fs.statSync(f).size; } catch (e) { /* first one */ }
+        if (size + line.length > this.opts.sessionsMax) {
+            const keep = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
+            fs.writeFileSync(f, keep.slice(Math.floor(keep.length / 2)).join('\n') + '\n' + line);
+        } else fs.appendFileSync(f, line);
+    } catch (e) { this.log('sessions: ' + e.message); }
+};
+
 Daemon.prototype.guard = function (fn) {
     try {
         const r = fn();
@@ -1051,6 +1202,7 @@ Daemon.prototype.onLine = function (line) {
     switch (m.cmd) {
     case 'prefetch': return this.prefetch(m.id);
     case 'positions': return this.sendPositions();
+    case 'debug': return this.emit(Object.assign({ ev: 'debug' }, this.status()));
     case 'status': this.sendState(); if (this.total) this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total }); return undefined;
     case 'search': return this.search(m.q);
     case 'thumb': return this.thumb(m.id);
@@ -1072,11 +1224,15 @@ Daemon.prototype.onLine = function (line) {
     }
 };
 Daemon.prototype.setState = function (s) {
+    const changed = this.state !== s;
     this.state = s;
+    if (changed && this.timers.length) this.writeStatus(true);
     this.sendState();
 };
 Daemon.prototype.sendState = function (pct) {
+    const was = this.buffering;
     this.buffering = this.isBuffering();
+    if (this.buffering && !was && this.cur) this.cur.bufferingN = (this.cur.bufferingN || 0) + 1;
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
         id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering };
     this.emit(o);
@@ -1093,6 +1249,8 @@ Daemon.prototype.prune = function () {
     const protect = [];
     if (this.cur) protect.push(this.cur.id);
     if (this.preparing) protect.push(this.preparing);
+    // RAM: nothing kept past the play; flash: the spill folders, and a cache from before the fork
+    if (this.ram) pruneCache(this.ram, 0, protect, this.log);
     return pruneCache(this.opts.cacheDir, this.opts.keep, protect, this.log);
 };
 // ---- search / thumbs
@@ -1116,9 +1274,9 @@ Daemon.prototype.search = async function (q) {
 };
 Daemon.prototype.thumb = async function (id) {
     if (!ID_RE.test(String(id))) return this.emit({ ev: 'error', msg: 'bad id' });
-    const tdir = path.join(this.opts.cacheDir, 'thumbs'), tf = path.join(tdir, id + '.rgba');
+    const tdir = path.join(this.media(), 'thumbs'), tf = path.join(tdir, id + '.rgba');
     const read = (f) => { try { return fs.readFileSync(f); } catch (e) { return null; } };
-    let data = read(path.join(this.opts.cacheDir, id, 'thumb.rgba')) || read(tf);
+    let data = read(path.join(this.media(), id, 'thumb.rgba')) || read(tf);
     if (!data) {
         // at most 3 helpers at once: each is a Node 22 process, and a page asks for 20 thumbs
         const i = this.thumbN++ % this.thumbQ.length;
@@ -1166,7 +1324,8 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
     if (!/^\d{2,4}x\d{2,4}$/.test(String(rect))) rect = '1280x720';
     await this.stop(null);
     const gen = ++this.gen;
-    const dir = path.join(this.opts.cacheDir, id);
+    const dir = path.join(this.media(), id);
+    this.counts.plays++;
     const meta0 = readMeta(dir, id);
     this.cur = { id: id, title: meta0.title, durationMs: meta0.duration_s > 0 ? meta0.duration_s * 1000 : undefined, dir: dir, rect: rect, fill: fill, gen: gen, height: qualityHeight(quality, readJson(this.opts.leaseFile)),
         skip: Array.isArray(skip) ? skip.filter((x) => typeof x === 'string') : null, chapters: (readJson(path.join(dir, 'meta.json')) || {}).chapters };
@@ -1182,7 +1341,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
     this.settle = null;
     this.fullReady = true;
     let headMs = null;
-    if (!isPlayable(dir)) {
+    if (this.ram || !isPlayable(dir)) {
         this.fullReady = false;
         this.setState('preparing');
         const waits = this.opts.fetchRetryMs || [];
@@ -1223,7 +1382,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
         await withTimeout(this.ready, 10000, 'audio service'); // never connect before the leftover sweep
         if (gen !== this.gen) return undefined;
         if (headMs !== null && !this.fullReady) this.head = { ms: headMs };
-        await this.audio.play(path.join(dir, this.head ? 'audio.head.m4a' : 'audio.m4a'));
+        await this.audio.play(path.join(this.cur.dir, this.head ? 'audio.head.m4a' : 'audio.m4a'));
     } catch (e) {
         if (gen !== this.gen) return this.audio.release();
         return this.failPlayback(e.message);
@@ -1302,7 +1461,14 @@ Daemon.prototype.fetchVideo = function (id, dir) {
         fs.chmodSync(dir, 0o700);
         this.chownFetch(dir);
         const info = this.freshInfo(id) ? ['--info', this.infoFile(id)] : [];
-        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, ['--', id, dir]));
+        // in RAM: stream (ytfetch decides: a video it cannot stream goes whole into the spill folder on flash)
+        const spill = path.join(this.opts.cacheDir, id), stream = !!this.ram && dir !== spill;
+        if (stream) { rmrf(spill); mkdirp(spill); fs.chmodSync(spill, 0o700); this.chownFetch(spill); }
+        const sargs = stream ? ['--stream', this.opts.streamAheadMs + ',' + this.opts.streamBehindMs, '--spill-dir', spill]
+            .concat(this.opts.ramBudget ? ['--budget', String(this.opts.ramBudget)] : []) : [];
+        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, sargs, ['--', id, dir]));
+        if (child.stdin) child.stdin.on('error', () => { /* it ended: close says */ });
+        const c = this.cur;
         this.fetcher = child;
         this.preparing = id;
         this.fetchedMs = 0;
@@ -1324,6 +1490,7 @@ Daemon.prototype.fetchVideo = function (id, dir) {
                     return;
                 } else if (started) {
                     this.log('fetch ' + id + ': ' + (err || why));
+                    this.noteError('video incomplete: ' + (err || why));
                     this.emit({ ev: 'error', msg: 'video incomplete: ' + (err || why) });
                 }
                 this.checkBuffering();
@@ -1334,7 +1501,19 @@ Daemon.prototype.fetchVideo = function (id, dir) {
             if (child !== this.fetcher) return;
             let m;
             try { m = JSON.parse(l); } catch (e) { return; }
-            if (m.ev === 'meta') {
+            if (m.ev === 'stream') {
+                c.stream = true;
+                this.counts.ram++;
+                rmrf(spill);
+                this.log('fetch ' + id + ': streaming in RAM (plans for ' + Math.round((Number(m.need) || 0) / 1048576) + ' MiB)');
+            } else if (m.ev === 'spill') {
+                c.spill = String(m.why || 'spill');
+                this.counts.spills++;
+                if (m.dir === spill) { c.dir = spill; rmrf(dir); }
+                this.log('fetch ' + id + ': whole video on flash: ' + c.spill);
+            } else if (m.ev === 'trim') {
+                c.trimMs = Number(m.ms) || 0;
+            } else if (m.ev === 'meta') {
                 if (m.title) this.cur.title = String(m.title);
                 if (m.duration_s > 0) this.cur.durationMs = m.duration_s * 1000;
                 if (Array.isArray(m.chapters)) this.cur.chapters = m.chapters;
@@ -1348,6 +1527,7 @@ Daemon.prototype.fetchVideo = function (id, dir) {
             }
             else if (m.ev === 'video') {
                 this.fetchedMs = Number(m.ms) || 0;
+                if (m.dl !== undefined) { c.dlBytes = Number(m.dl) || 0; c.waited = Number(m.waited) || 0; } else if (m.bytes) c.dlBytes = Number(m.bytes) || 0;
                 if (audio || head !== null) pct(70 + 29 * Math.min(1, this.fetchedMs / this.opts.startVideoMs));
             } else if (m.ev === 'done') done = true;
             else if (m.ev === 'error') err = String(m.msg);
@@ -1374,6 +1554,8 @@ Daemon.prototype.stopFetch = function () {
 };
 Daemon.prototype.failPlayback = async function (msg) {
     this.log('error: ' + msg);
+    this.noteError(msg);
+    this.endSession('error');
     this.ticking = false;
     this.killYtdec();
     await Promise.all([this.audio.release(), this.stopFetch()]);
@@ -1393,6 +1575,7 @@ Daemon.prototype.stop = async function (reason) {
     this.killYtdec();
     await Promise.all([this.audio.release(), this.stopFetch()]);
     if (reason) {
+        this.endSession(reason);
         this.setState(reason);
         if (this.pos) this.sendPositions();
         this.cur = null;
@@ -1456,6 +1639,8 @@ Daemon.prototype.seek = async function (ms) {
     if (this.state !== 'playing' && this.state !== 'paused') return;
     ms = Math.max(0, Math.floor(Number(ms) || 0));
     if (this.total) ms = Math.min(ms, Math.max(0, this.total - 1000));
+    if (this.cur && this.cur.stream && this.cur.trimMs && ms < this.cur.trimMs + 1000) return this.refetchAt(ms);
+    this.feedPos(ms, true);
     this.elapsed = ms;
     this.lastProgress = Date.now();
     this.lastTickAt = Date.now();
@@ -1482,6 +1667,20 @@ Daemon.prototype.setFill = function (on) {
     if (!this.child) return; // the next ytdec takes it
     this.killYtdec();
     this.spawnYtdec(this.paused || this.headWait ? this.elapsed : this.elapsed + (Date.now() - this.lastTickAt));
+};
+// fork: a seek back past what RAM still holds (punched): the play again from there, as a quality change does
+// (stop saves ms as the resume point, play starts there); the sound stops for a few seconds
+Daemon.prototype.refetchAt = async function (ms) {
+    const c = this.cur, n = (c.refetch || 0) + 1;
+    this.log('seek to ' + ms + ' before what RAM holds (from ' + c.trimMs + '): fetched again');
+    this.counts.refetches++;
+    this.elapsed = ms;
+    c.logged = true;                       // one session line for the whole play
+    await this.stop(null);
+    rmrf(c.dir);
+    await this.play(c.id, c.rect, c.fill, ms, c.height, c.skip);
+    if (this.cur && this.cur.id === c.id) { this.cur.refetch = n; this.cur.bufferingN = c.bufferingN || 0; this.cur.dlPrev = (c.dlPrev || 0) + (c.dlBytes || 0); }
+    return undefined;
 };
 // Video quality while playing: the same video fetched again at that height, from where it is
 Daemon.prototype.requality = async function (quality) {
@@ -1511,6 +1710,7 @@ Daemon.prototype.onTime = function (v) {
     this.savePos(false);
     if (this.cur.track && Date.now() - this.cur.track.at > 60000) this.ping(this.cur, true);
     this.toYtdec('clock ' + v.elapsed + ' ' + monoMs());
+    this.feedPos(v.elapsed, false);
     this.checkBuffering();
     const now = Date.now();
     if (now - this.lastTimeEv >= 240) { // <= 4/s
@@ -1610,6 +1810,7 @@ Daemon.prototype.ytdecDied = function (child, why) {
     this.child = null;
     if (!this.ticking) return;
     this.deaths++;
+    this.counts.ytdecDeaths++;
     this.log('ytdec died (' + why + '), death ' + this.deaths);
     if (this.deaths === 1) return this.spawnYtdec(this.elapsed);
     this.emit({ ev: 'error', msg: 'video failed, audio only' });

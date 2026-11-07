@@ -9,14 +9,17 @@
 >
 > - **App 0.3.8 (2026-11-07):** the Search menu, which holds the settings, stays open. Before, the video page
 >   came back over it about a second after it opened (`kit/runtime/display.js`, `kit/runtime/mgu.js`).
-> - `tools/patch_package.py` builds the app's package from a published one, without BMW's SDK, for fixes to the
->   javascript alone.
+> - **Service 0.4.0, app 0.3.9 (2026-11-07):** the playing video streams in RAM instead of being written whole to the
+>   head unit's flash, and the service writes a debug report (`native/jap-ridetube-d/README.md`, "Fork"). The
+>   browsing pages redraw less often.
+> - `tools/patch_package.py` and `tools/patch_service.py` build the app's and the service's packages from published
+>   ones, without BMW's SDK or Docker, for fixes to the javascript and Python alone.
 >
-> **Install:** keep `JustAnotherPU/ridetube:releases` and `JustAnotherPU/mgu-apps:releases` as Store sources (the
-> service `jap-ridetube-d` and Node.js 22 still come from them), and add `7amoody1985/mgu-apps:releases`, which
-> offers this fork's app. An app already installed from another source is updated only by that source, so
-> uninstall the **RideTube app** once (not its service), then install RideTube from `7amoody1985/mgu-apps`. The
-> sign-in is kept: the service holds it.
+> **Install:** add `7amoody1985/mgu-apps:releases`, which offers this fork's app and service, and keep
+> `JustAnotherPU/mgu-apps:releases` (Node.js 22 comes from it). An app or tool already installed from another
+> source is updated only by that source, so uninstall the original **RideTube** app and its **RideTube service**
+> once, then install RideTube from `7amoody1985/mgu-apps` (it brings its service). Uninstalling the service
+> deletes the YouTube sign-in: sign in again.
 
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
 > endorsed by or sponsored by Google or YouTube. Use it at your own risk. You are responsible for following

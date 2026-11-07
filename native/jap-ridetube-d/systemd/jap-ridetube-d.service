@@ -8,6 +8,12 @@ After=local-fs.target
 # root: SOME/IP to the MediaPlayer.
 User=root
 ExecStartPre=-/bin/sh -c 'mkdir -p /var/opt/jap-ridetube-d/cache /var/opt/jap-ridetube-d/log /var/opt/jap-ridetube-d/state && chmod 0755 /var/opt/jap-ridetube-d && chmod 0711 /var/opt/jap-ridetube-d/cache && chmod 0700 /var/opt/jap-ridetube-d/state'
+# Fork (2026-11-07): the playing video in RAM, not on flash: a tmpfs capped at 256 MB (it holds only what is written,
+# about 60-90 MB while a video plays). A plain mount, not TemporaryFileSystem=, so the BMW MediaPlayer sees the audio
+# file there too. Without it ytd.js takes /dev/shm, else the flash cache as before.
+ExecStartPre=-/bin/sh -c 'mkdir -p /run/jap-ridetube-media && { grep -q " /run/jap-ridetube-media tmpfs " /proc/mounts || mount -t tmpfs -o size=256m,mode=0711,nosuid,nodev,noexec tmpfs /run/jap-ridetube-media; }'
+# frees the RAM when the service stops (busy: kept, the next start takes it as it is)
+ExecStopPost=-/bin/sh -c 'umount /run/jap-ridetube-media 2>/dev/null; rmdir /run/jap-ridetube-media 2>/dev/null; true'
 # youtube.com/tv answers with 11 kB of headers; Node 8.14+ refuses more than 8 kB (HPE_HEADER_OVERFLOW)
 ExecStart=/usr/bin/node --max-http-header-size=65536 /var/opt/jap-ridetube-d/current/ytd.js
 # The app (group tm_oap_app) must traverse the dir; ctl.sock itself is 0660 root:tm_oap_app.

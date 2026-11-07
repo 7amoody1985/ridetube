@@ -4,20 +4,40 @@
 // cwd, uid to <ctl>.log, writes the files as ytfetch.py does, then waits for <ctl> to say done or error.
 // <ctl> at start: "fail" = an error before audio is ready ("gone": a refused video); "head" = audio_head (60 s) before the video, audio_ready
 // after it; "hold" = audio_head, audio_ready only once <ctl> says "full" or "done"; else audio_ready, no head.
-// serve: says warm, then runs the argv list read from stdin (logged with served: true). extract: writes <dir> = info.json.
+// serve: says warm, then runs the argv list of the first line read from stdin (logged with served: true); a fetch keeps reading.
+// extract: writes <dir> = info.json.
+// fork: with --stream A,B --spill-dir S: a "stream" event (or with <ctl> "spill" at start: "spill", the files then into S), every
+// stdin line after the job appended to <ctl>.stdin; <ctl> "trim" says trim (30 s) once.
 const fs = require('fs');
 const path = require('path');
 const ctl = process.argv[2];
 const say = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+let lines = null;               // stdin lines after the job (the daemon's "pos <ms>")
+function readLines(first) {
+    let buf = '', got = false;
+    process.stdin.on('data', (d) => {
+        buf += d;
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+            const l = buf.slice(0, i);
+            buf = buf.slice(i + 1);
+            if (!got && first) { got = true; first(l); continue; }
+            if (lines) lines(l);
+        }
+    });
+    process.stdin.on('end', () => { if (!got && first && buf.trim()) { got = true; first(buf); } });
+}
 if (process.argv[3] === 'serve') {
     say({ ev: 'warm' });
-    let buf = '';
-    process.stdin.on('data', (d) => { buf += d; });
-    process.stdin.on('end', () => { if (buf.trim()) run(JSON.parse(buf), true); });
-} else run(process.argv.slice(3), false);
+    readLines((l) => run(JSON.parse(l), true));
+} else {
+    readLines(null);
+    run(process.argv.slice(3), false);
+}
 
 function run(args, served) {
-const id = args[args.length - 2], dir = args[args.length - 1];
+const id = args[args.length - 2];
+let dir = args[args.length - 1];
 if (args[0] === 'extract') {
     fs.writeFileSync(ctl + '.extract', JSON.stringify({ argv: args, served: served }));
     setTimeout(() => { fs.writeFileSync(dir, JSON.stringify({ id: id })); say({ ev: 'info', id: id }); }, 150);
@@ -25,22 +45,30 @@ if (args[0] === 'extract') {
 }
 const mode = () => { try { return fs.readFileSync(ctl, 'utf8').trim(); } catch (e) { return ''; } };
 const start = mode(), withHead = start === 'head' || start === 'hold';
+const si = args.indexOf('--stream'), spill = args.indexOf('--spill-dir') >= 0 ? args[args.indexOf('--spill-dir') + 1] : null;
 fs.writeFileSync(ctl + '.log', JSON.stringify({ argv: [ctl].concat(args), served: served, env: Object.keys(process.env), cwd: process.cwd(), uid: process.getuid(), pid: process.pid }));
-let full = false;
+if (si >= 0) {
+    try { fs.unlinkSync(ctl + '.stdin'); } catch (e) { /* none */ }
+    lines = (l) => fs.appendFileSync(ctl + '.stdin', l + '\n');
+    if (start === 'spill' && spill) { say({ ev: 'spill', why: 'test', dir: spill }); dir = spill; } else say({ ev: 'stream', ahead_ms: 120000, behind_ms: 45000, need: 50 << 20 });
+}
+let full = false, trimmed = false;
 const audioReady = () => { full = true; fs.renameSync(path.join(dir, 'audio.m4a.part'), path.join(dir, 'audio.m4a')); say({ ev: 'audio_ready', bytes: 1 }); };
 const steps = [
     () => { fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ id: id, title: 'Fetched ' + id, channel: 'C', duration_s: 600 })); say({ ev: 'meta', title: 'Fetched ' + id, duration_s: 600 }); },
     () => { if (start === 'fail') { say({ ev: 'error', msg: 'boom' }); process.exit(1); } if (start === 'gone') { say({ ev: 'error', msg: 'Video unavailable' }); process.exit(1); } fs.writeFileSync(path.join(dir, 'audio.m4a.part'), 'a'); say({ ev: 'audio', pct: 50 }); },
     () => { if (withHead) { fs.writeFileSync(path.join(dir, 'audio.head.m4a'), 'h'); say({ ev: 'audio_head', ms: 60000, bytes: 1 }); } else audioReady(); },
     () => { fs.writeFileSync(path.join(dir, 'index.bin'), 'i'); fs.writeFileSync(path.join(dir, 'video.h264.part'), 'v'); say({ ev: 'video', ms: 5000, frames: 150, bytes: 1, pct: 8 }); },
-    () => say({ ev: 'video', ms: 12000, frames: 360, bytes: 2, pct: 20 })
+    () => say(si >= 0 ? { ev: 'video', ms: 12000, frames: 360, bytes: 2, dl: 3 << 20, waited: 0, pct: 20 } : { ev: 'video', ms: 12000, frames: 360, bytes: 2, pct: 20 })
 ];
 let i = 0;
 const t = setInterval(() => {
     if (i < steps.length) return steps[i++]();
     const m = mode();
     if (!full && (start === 'head' || m === 'full' || m === 'done')) audioReady();
-    if (m === 'done') { fs.renameSync(path.join(dir, 'video.h264.part'), path.join(dir, 'video.h264')); say({ ev: 'done' }); clearInterval(t); }
+    if (m === 'trim' && !trimmed) { trimmed = true; say({ ev: 'trim', ms: 30000, bytes: 1 << 20 }); }
+    // (stdin let go: ytfetch.py exits after done whatever its stdin; this fake would wait on it)
+    if (m === 'done') { fs.renameSync(path.join(dir, 'video.h264.part'), path.join(dir, 'video.h264')); say({ ev: 'done' }); clearInterval(t); process.stdin.destroy(); }
     if (m === 'error') { say({ ev: 'error', msg: 'HTTP 403' }); process.exit(1); }
     return undefined;
 }, 60);

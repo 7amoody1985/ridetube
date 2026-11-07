@@ -73,6 +73,147 @@ def fail(msg):
 
 MIN_FREE = 256 << 20  # bytes left free on the cache's file system while a video downloads
 
+# ---------------------------------------------------------------- streaming into RAM (fork, 2026-11-07)
+# fetch --stream AHEAD_MS,BEHIND_MS: the folder is on a tmpfs; the video is fetched in Range requests of VIDEO_CHUNK
+# only while less than AHEAD_MS is fetched past the playback position (the daemon sends "pos <ms>" lines on stdin),
+# and video.h264 is hole-punched up to the last keyframe BEHIND_MS before it. ytdec reads each access unit at its
+# own offset (pread) and every keyframe carries its SPS/PPS, so the punched part is never read.
+VIDEO_CHUNK = 2 << 20
+TRIM_MIN = 1 << 20      # punch at least this much at a time
+RAM_FLOOR = 24 << 20    # keep this much of the tmpfs free: the window waits instead
+FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE = 1, 2
+
+
+def punch_fn():
+    """fallocate(PUNCH_HOLE) through libc, or None when this Python has no ctypes / libc has no fallocate."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        f = libc.fallocate
+        f.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int64, ctypes.c_int64]
+        f.restype = ctypes.c_int
+    except (ImportError, OSError, AttributeError):
+        return None
+
+    def punch(fd, off, n):
+        if f(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, off, n) != 0:
+            e = ctypes.get_errno()
+            raise OSError(e, os.strerror(e))
+    return punch
+
+
+def can_punch(d, punch):
+    """A probe in d: punching frees blocks there (tmpfs since Linux 3.5)."""
+    if punch is None:
+        return False
+    p = os.path.join(d, '.punch')
+    try:
+        fd = os.open(p, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, b'\1' * (256 << 10))
+            os.fsync(fd)
+            before = os.fstat(fd).st_blocks
+            punch(fd, 0, 128 << 10)
+            return os.fstat(fd).st_blocks < before
+        finally:
+            os.close(fd)
+            os.remove(p)
+    except OSError:
+        return False
+
+
+class Window:
+    """The playback position (the daemon's "pos <ms>" lines) against the video fetched so far, both in ms."""
+
+    def __init__(self, ahead_ms, behind_ms):
+        self.ahead, self.behind = ahead_ms, behind_ms
+        self.play, self.fetched = 0, 0
+        self.waited = 0.0          # seconds spent waiting for room (the debug report)
+        self.cv = threading.Condition()
+
+    def listen(self, f):
+        def run():
+            try:
+                for line in f:
+                    p = line.split()
+                    if len(p) == 2 and p[0] == 'pos' and p[1].isdigit():
+                        with self.cv:
+                            self.play = int(p[1])
+                            self.cv.notify_all()
+            except (OSError, ValueError):
+                pass  # the daemon is gone: it kills us too
+        threading.Thread(target=run, daemon=True).start()
+
+    def wait_room(self, free_ok):
+        t0 = time.monotonic()
+        with self.cv:
+            while self.fetched - self.play > self.ahead or not free_ok():
+                self.cv.wait(1.0)
+        self.waited += time.monotonic() - t0
+
+
+class PacedReader:
+    """A file for demux_video: url's total bytes in Range requests of chunk, each once the window has room."""
+
+    def __init__(self, url, headers, total, ctx, window, free_ok, chunk=VIDEO_CHUNK, timeout=20):
+        self.url, self.headers, self.total, self.ctx, self.timeout = url, headers, total, ctx, timeout
+        self.window, self.free_ok, self.chunk = window, free_ok, chunk
+        self.buf, self.at, self.off, self.bytes = b'', 0, 0, 0
+
+    def _get(self, s, e):
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(self.url, headers=dict(self.headers, Range=f'bytes={s}-{e - 1}'))
+                with urllib.request.urlopen(req, timeout=self.timeout, context=self.ctx) as r:
+                    if r.status != 206:
+                        raise OSError(f'HTTP {r.status} to a Range request')
+                    out = bytearray()
+                    while len(out) < e - s:
+                        b = r.read(min(1 << 16, e - s - len(out)))
+                        if not b:
+                            raise OSError(f'short read at {s + len(out)} of {s}-{e}')
+                        out += b
+                    return bytes(out)
+            except (OSError, http.client.HTTPException):
+                if attempt == 3:
+                    raise
+                time.sleep(1 + attempt)
+
+    def read(self, n):
+        while len(self.buf) - self.at < n and self.off < self.total:
+            self.window.wait_room(self.free_ok)
+            e = min(self.off + self.chunk, self.total)
+            data = self._get(self.off, e)
+            self.bytes += len(data)
+            self.buf, self.at, self.off = self.buf[self.at:] + data, 0, e
+        b = self.buf[self.at:self.at + n]
+        self.at += len(b)
+        return b
+
+
+class Trimmer:
+    """Punches video.h264 up to the last keyframe window.behind before the playback position."""
+
+    def __init__(self, window, punch):
+        self.window, self.punch = window, punch
+        self.keys = []             # (ms, pos) of keyframes past the punched part
+        self.done, self.ms = 0, 0  # punched up to this byte / this keyframe's ms
+
+    def key(self, ms, pos):
+        self.keys.append((ms, pos))
+
+    def after_write(self, fd):
+        cut = self.window.play - self.window.behind
+        i = 0
+        while i + 1 < len(self.keys) and self.keys[i + 1][0] <= cut:
+            i += 1
+        if not self.keys or self.keys[i][0] > cut or self.keys[i][1] - self.done < TRIM_MIN:
+            return
+        ms, pos = self.keys[i]
+        self.punch(fd, self.done, pos - self.done)
+        self.done, self.ms, self.keys = pos, ms, self.keys[i:]
+        emit(ev='trim', ms=ms, bytes=pos)
+
 
 class Throttle:
     def __init__(self, per_s=2):
@@ -538,8 +679,9 @@ def read_box(f):
     return t, h + body
 
 
-def demux_video(f, d, duration_s, on_progress):
-    """Stream fMP4 from f into d/video.h264.part + d/index.bin. Returns (frames, bytes, max_ms)."""
+def demux_video(f, d, duration_s, on_progress, trim=None):
+    """Stream fMP4 from f into d/video.h264.part + d/index.bin. Returns (frames, bytes, max_ms).
+    trim (a Trimmer): told every keyframe, and called after each write to punch what has played."""
     vfd = os.open(os.path.join(d, 'video.h264.part'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     ifd = os.open(os.path.join(d, 'index.bin'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     at, conv, tk, base, pos, count, max_ms, dts, moof = 0, None, None, None, 0, 0, 0, 0, None
@@ -589,6 +731,8 @@ def demux_video(f, d, duration_s, on_progress):
                     max_ms = max(max_ms, ms)
                     vbuf.append(au)
                     ibuf.append(REC.pack(ms, pos, len(au), key))
+                    if trim is not None and key:
+                        trim.key(ms, pos)
                     pos += len(au)
                     count += 1
                 # order matters to the reader: bytes, then their records, then the count
@@ -597,6 +741,8 @@ def demux_video(f, d, duration_s, on_progress):
                 os.pwrite(ifd, struct.pack('<I', count), 16)
                 moof = None
                 on_progress(max_ms, count, pos)
+                if trim is not None:
+                    trim.after_write(vfd)
             at += len(b)
     finally:
         os.close(vfd)
@@ -778,6 +924,53 @@ def audio_ranged(a, ya, info, meta):
     return src
 
 
+def ram_free(d):
+    try:
+        s = os.statvfs(d)
+        return s.f_bavail * s.f_frsize
+    except OSError:
+        return 0
+
+
+def plan_stream(a, ya, yv, info):
+    """--stream: (Window, video format, punch) to stream the video in RAM, or None (an event says why): then the
+    whole video is fetched as before, into --spill-dir (on flash) when given. Decided before anything is written."""
+    ahead, behind = a.stream
+    why, fv, need = None, None, 0
+    try:
+        fv = yv.process_ie_result(copy.deepcopy(info), download=False)
+        fv = (fv.get('requested_downloads') or [fv])[0]
+        fa = ya.process_ie_result(copy.deepcopy(info), download=False)
+        fa = (fa.get('requested_downloads') or [fa])[0]
+    except Exception as e:  # noqa: BLE001 - the old path reports what yt-dlp says
+        why = f'formats: {e}'
+    if not why:
+        dur, vsize = info.get('duration') or 0, fv.get('filesize')
+        asize = fa.get('filesize') or fa.get('filesize_approx') or 0
+        if fv.get('protocol') not in ('https', 'http') or not fv.get('url') or not vsize:
+            why = 'video not fetchable in ranges'
+        elif not dur:
+            why = 'no duration'
+        else:
+            # the audio twice while it is made flat, the video window, the chunks in flight, the floor
+            need = int(2 * asize + vsize / dur * (ahead + behind) / 1000 + 3 * VIDEO_CHUNK + RAM_FLOOR)
+            room = min(a.budget, ram_free(a.dir)) if a.budget else ram_free(a.dir)
+            if need > room:
+                why = f'needs {need >> 20} MiB of RAM, {room >> 20} MiB there'
+    punch = None if why else punch_fn()
+    if not why and not can_punch(a.dir, punch):
+        why = 'no hole punching on ' + a.dir
+    if why:
+        emit(ev='spill', why=why, dir=a.spill_dir or a.dir)
+        if a.spill_dir:
+            a.dir = a.spill_dir
+        return None
+    w = Window(ahead, behind)
+    w.listen(sys.stdin)
+    emit(ev='stream', ahead_ms=ahead, behind_ms=behind, need=need, video_bytes=fv['filesize'])
+    return w, fv, punch
+
+
 def fetch(a):
     if not ID_RE.match(a.id):
         fail('bad id')
@@ -801,6 +994,14 @@ def fetch(a):
         info = info or extract(yt_dlp, a, url)
     except Exception as e:  # noqa: BLE001 - any yt-dlp failure is reported to the daemon
         fail(f'extract: {e}')
+    if not any((x.get('vcodec') or '').startswith('avc1') for x in info.get('formats') or []):
+        fail('no avc1 video')
+    stream = plan_stream(a, ya, yv, info) if a.stream else None   # (may move a.dir to --spill-dir)
+    if not stream and a.stream and a.spill_dir:   # yt-dlp's own audio download (no ranges) into the spill folder too
+        if isinstance(ya.params.get('outtmpl'), dict):
+            ya.params['outtmpl']['default'] = os.path.join(a.dir, 'audio.src.%(ext)s')
+        else:
+            ya.params['outtmpl'] = {'default': os.path.join(a.dir, 'audio.src.%(ext)s')}
     meta = {'id': a.id, 'title': info.get('title'), 'channel': info.get('channel') or info.get('uploader'),
             'duration_s': info.get('duration'),
             'chapters': [[int((c.get('start_time') or 0) * 1000), str(c.get('title') or '')[:80]]
@@ -809,8 +1010,6 @@ def fetch(a):
         json.dump(meta, f)
     os.replace(os.path.join(a.dir, 'meta.json.tmp'), os.path.join(a.dir, 'meta.json'))
     emit(ev='meta', title=meta['title'], duration_s=meta['duration_s'], chapters=meta['chapters'])
-    if not any((x.get('vcodec') or '').startswith('avc1') for x in info.get('formats') or []):
-        fail('no avc1 video')
 
     def audio():
         try:
@@ -830,6 +1029,9 @@ def fetch(a):
             emit(ev='audio_ready', bytes=n)
         except BaseException as e:  # noqa: BLE001
             fail(f'audio: {ya.params["logger"].last or e}')
+
+    if stream:
+        return fetch_stream(a, meta, stream, audio, done_a)
 
     rfd, wfd = os.pipe()
     sys.stdout = io.TextIOWrapper(os.fdopen(wfd, 'wb'))  # yt-dlp writes outtmpl '-' to sys.stdout.buffer
@@ -868,6 +1070,35 @@ def fetch(a):
         fail('audio: unfinished')
     emit(ev='done')
     sys.stdout = _out
+    return 0
+
+
+def fetch_stream(a, meta, stream, audio, done_a):
+    """The video through a PacedReader into the RAM folder, punched behind playback; the audio as before."""
+    w, fv, punch = stream
+    ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+    reader = PacedReader(fv['url'], fv.get('http_headers') or {}, fv['filesize'], ctx, w,
+                         lambda: ram_free(a.dir) >= RAM_FLOOR)
+    trim = Trimmer(w, punch)
+    ta = threading.Thread(target=audio, daemon=True)
+    ta.start()
+    tick_v, dur_ms = Throttle(), (meta['duration_s'] or 0) * 1000
+
+    def vprog(ms, frames, nbytes):
+        w.fetched = ms
+        if tick_v():
+            emit(ev='video', ms=ms, frames=frames, bytes=nbytes, dl=reader.bytes, waited=round(w.waited),
+                 pct=min(100, round(ms * 100 / dur_ms)) if dur_ms else 0)
+
+    try:
+        frames, nbytes, ms = demux_video(reader, a.dir, meta['duration_s'], vprog, trim=trim)
+    except Exception as e:  # noqa: BLE001
+        fail(f'video: {e}')
+    emit(ev='video', ms=ms, frames=frames, bytes=nbytes, dl=reader.bytes, waited=round(w.waited), pct=100)
+    ta.join()
+    if not done_a:
+        fail('audio: unfinished')
+    emit(ev='done')
     return 0
 
 
@@ -996,6 +1227,10 @@ def main(argv=None):
     ap.add_argument('--pyz')
     ap.add_argument('--uid', type=int)
     ap.add_argument('--info')
+    # fork: stream the video in RAM (the folder on a tmpfs), else the whole video into --spill-dir
+    ap.add_argument('--stream', type=lambda s: tuple(int(x) for x in s.split(',')), metavar='AHEAD_MS,BEHIND_MS')
+    ap.add_argument('--spill-dir')
+    ap.add_argument('--budget', type=int, default=0, help='bytes of RAM the stream may plan for (0: the tmpfs free)')
     a = ap.parse_args(argv)
     if a.cmd == 'check':
         return check(a)

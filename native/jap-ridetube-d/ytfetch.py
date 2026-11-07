@@ -144,6 +144,9 @@ class Window:
                 pass  # the daemon is gone: it kills us too
         threading.Thread(target=run, daemon=True).start()
 
+    def full(self, free_ok):
+        return self.fetched - self.play > self.ahead or not free_ok()
+
     def wait_room(self, free_ok):
         t0 = time.monotonic()
         with self.cv:
@@ -155,9 +158,12 @@ class Window:
 class PacedReader:
     """A file for demux_video: url's total bytes in Range requests of chunk, each once the window has room."""
 
-    def __init__(self, url, headers, total, ctx, window, free_ok, chunk=VIDEO_CHUNK, timeout=20):
+    def __init__(self, url, headers, total, ctx, window, free_ok, chunk=VIDEO_CHUNK, timeout=20, before_wait=None):
         self.url, self.headers, self.total, self.ctx, self.timeout = url, headers, total, ctx, timeout
         self.window, self.free_ok, self.chunk = window, free_ok, chunk
+        # called once before each wait: the progress events are throttled, so the last one may be behind what is
+        # fetched; said before waiting, the daemon's fetched point (buffering, the report) is the real one
+        self.before_wait = before_wait
         self.buf, self.at, self.off, self.bytes = b'', 0, 0, 0
 
     def _get(self, s, e):
@@ -181,6 +187,8 @@ class PacedReader:
 
     def read(self, n):
         while len(self.buf) - self.at < n and self.off < self.total:
+            if self.before_wait and self.window.full(self.free_ok):
+                self.before_wait()
             self.window.wait_room(self.free_ok)
             e = min(self.off + self.chunk, self.total)
             data = self._get(self.off, e)
@@ -1077,18 +1085,26 @@ def fetch_stream(a, meta, stream, audio, done_a):
     """The video through a PacedReader into the RAM folder, punched behind playback; the audio as before."""
     w, fv, punch = stream
     ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+    tick_v, dur_ms, last = Throttle(), (meta['duration_s'] or 0) * 1000, {'said': None, 'now': None}
+
+    def say_video():
+        if last['now'] and last['now'] != last['said']:
+            ms, frames, nbytes = last['now']
+            last['said'] = last['now']
+            emit(ev='video', ms=ms, frames=frames, bytes=nbytes, dl=reader.bytes, waited=round(w.waited),
+                 pct=min(100, round(ms * 100 / dur_ms)) if dur_ms else 0)
+
     reader = PacedReader(fv['url'], fv.get('http_headers') or {}, fv['filesize'], ctx, w,
-                         lambda: ram_free(a.dir) >= RAM_FLOOR)
+                         lambda: ram_free(a.dir) >= RAM_FLOOR, before_wait=say_video)
     trim = Trimmer(w, punch)
     ta = threading.Thread(target=audio, daemon=True)
     ta.start()
-    tick_v, dur_ms = Throttle(), (meta['duration_s'] or 0) * 1000
 
     def vprog(ms, frames, nbytes):
         w.fetched = ms
+        last['now'] = (ms, frames, nbytes)
         if tick_v():
-            emit(ev='video', ms=ms, frames=frames, bytes=nbytes, dl=reader.bytes, waited=round(w.waited),
-                 pct=min(100, round(ms * 100 / dur_ms)) if dur_ms else 0)
+            say_video()
 
     try:
         frames, nbytes, ms = demux_video(reader, a.dir, meta['duration_s'], vprog, trim=trim)

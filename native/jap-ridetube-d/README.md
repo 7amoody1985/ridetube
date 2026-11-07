@@ -232,6 +232,8 @@ starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB
     node test/test_ytd.js           # fake someip, fake ytdec, fake fetcher, fake youtube.com
     node test/test_thumb.js         # Node 22+: ffmpeg-made JPEGs (baseline, resampled, progressive via jpegtran); online part skipped offline
     python3.12 -I test/test_ytfetch.py   # ffmpeg fixtures, local Range server (head MP4, ranged == one stream); online part skipped offline
+    python3 -I test/test_stream.py       # fork: the stream window, the paced reader, punching, the stream-or-spill plan (no ffmpeg)
+    python3 -I test/live_stream.py $PWD/ytfetch.py $PWD/build/ytdlp.pyz   # fork, online: streamed == whole fetch, RAM peak
     MGU_STORE=... ./build.sh [path/to/ytdec]   # → dist/jap-ridetube-d@<version>.tgz (default ../ytdec/build/target/ytdec)
 
 `build.sh`: checks ytdec is an x86-64 ELF, runs `tools/build_pyz.sh` (→ `build/ytdlp.pyz`),

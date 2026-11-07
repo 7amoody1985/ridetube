@@ -172,7 +172,7 @@ function pruneCache(cacheDir, keep, protect, log) {
 // tool from state/internet-uids). Picked as mgu-updater's js/uids.js picks its own: the lowest free
 // number above MainApp's app uid ranges, kept in state/uids.json while nothing else holds it.
 const SELF = 'jap-ridetube-d';
-const VERSION = '0.4.0';   // (fork: component.json's version)
+const VERSION = '0.4.1';   // (fork: component.json's version)
 const MAX_UID = 60000; // login.defs UID_MAX
 const MAINAPPS = [{ root: '/usr/lib/oap-mainapp', hmi: 'HmiMain3D' }, { root: '/usr/lib/oap-mainapp21', hmi: 'Hmi8' }];
 const lines = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n'); } catch (e) { return []; } };

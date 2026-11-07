@@ -88,6 +88,24 @@ class Stream(unittest.TestCase):
         self.assertTrue(done.wait(3), 'goes on once playback catches up')
         self.assertGreater(w.waited, 0.3)
 
+    def test_reader_says_its_progress_before_it_waits(self):
+        w = ytfetch.Window(1000, 0)
+        said = []
+        r = ytfetch.PacedReader(self.url, {}, len(DATA), None, w, lambda: True, chunk=65536,
+                                before_wait=lambda: said.append(w.fetched))
+        r.read(1000)
+        self.assertEqual(said, [], 'room: no wait, nothing said')
+        w.fetched = 5000
+        th = threading.Thread(target=lambda: r.read(100000), daemon=True)
+        th.start()
+        time.sleep(0.3)
+        self.assertEqual(said, [5000], 'once, before the wait (a throttled event may be behind)')
+        with w.cv:
+            w.play = 4500
+            w.cv.notify_all()
+        th.join(5)                            # (done before the next test counts the server's hits)
+        self.assertFalse(th.is_alive())
+
     def test_reader_waits_while_ram_is_short(self):
         w = ytfetch.Window(10 ** 9, 0)
         free = {'ok': False}

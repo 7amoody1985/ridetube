@@ -1,5 +1,17 @@
 # Changelog
 
+## Service 0.4.1 (fork by 7amoody1985, 2026-11-08)
+
+- Streaming: the fetcher says how far it has fetched before it waits for room. Its progress events are throttled
+  (2 a second), so the last one could be up to a chunk behind while it waited: the service could show buffering
+  (and the debug report an old `fetched_s`) with the video there. Found by a live check against YouTube.
+- Tests: `test/mgyi.py` takes ffprobe from PATH (it named Homebrew's only); the ffmpeg and online tests of
+  `test_ytfetch.py` now run on Linux. `test/live_stream.py`: a live check that streams the check video (3:33,
+  720p) into /dev/shm with simulated playback and a jump, then compares it with a whole fetch; it passed 3 of 3,
+  with at most 11 MB in RAM (26.4 MB whole), the index, the audio and every byte past the punched part identical.
+- `test_ytd.js` "zoom while playing": waits for ytdec's seek line before checking it (it raced the fake's log and
+  failed now and then, on the original code too).
+
 ## App 0.3.9, service 0.4.0 (fork by 7amoody1985, 2026-11-07)
 
 - Service: the playing video streams in RAM instead of being written whole to the head unit's flash. A 256 MB

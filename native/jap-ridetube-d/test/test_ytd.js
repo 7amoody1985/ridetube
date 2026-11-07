@@ -817,6 +817,8 @@ async function main() {
         await waitUntil(() => ytdecLines().filter((l) => / argv /.test(l)).length === 2);
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(!/--fill/.test(argv[0]) && /--rect 1280x720 --fill /.test(argv[1]), argv.join('\n'));
+        // (fork: the seek reaches the fake's log a moment after its argv line: wait for it, then check where)
+        await waitUntil(() => ytdecLines().filter((l) => / in seek /.test(l)).length > 0);
         assert.ok(ytdecLines().some((l) => / in seek 40\d\d$/.test(l)), 'at the clock');
         c.send({ cmd: 'fill', on: true });
         await sleep(300);

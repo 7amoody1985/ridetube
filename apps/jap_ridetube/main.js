@@ -177,7 +177,7 @@ mgu.run({
 
         /* ---------- playing ---------- */
         // the decoder's picture size. Full-screen layout: the whole screen, for the full view (ytdec fits, or
-        // fills when that crops at most 15 %; the fill setting, on by default, always crops); the player draws the same frame
+        // fills when that crops at most 15 %; the fill setting, off by default, always crops); the player draws the same frame
         // smaller (op 19 fits it into its box). The daemon has no rect change, so the size is the full view's
         // from the start. Else the box in screen pixels.
         function rect() {
@@ -930,8 +930,10 @@ mgu.run({
         function render() {
             const now = Date.now();
             upNext = autoNext();
-            // redraw on a change (and 4 times a second); unchanged, the same frame again keeps the layer alive (>= 1 message/s)
-            if (!last || dirty || model.rev !== lastRev || now - lastT > 250) {
+            // redraw on a change; the player also 4 times a second (its clock, the overlay's timeout, toasts, Up next),
+            // the browsing pages only every 2 s (all they show comes with dirty or model.rev). Unchanged, the same
+            // frame again keeps the layer alive (the kit resends it: >= 1 message/s)
+            if (!last || dirty || model.rev !== lastRev || now - lastT > (mode === 'player' ? 250 : 2000)) {
                 dirty = false; lastRev = model.rev; lastT = now;
                 const cv = ctx.canvas(W, H).clear(C.bg);
                 frameNo++;

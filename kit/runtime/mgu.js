@@ -1,4 +1,6 @@
 'use strict';
+// Modified by 7amoody1985 (2026-11-07, RideTube fork): Ui.frontAt / onFront, which of the app's screens came
+// to the front last.
 /**
  * mgu.js - the MGU App Kit runtime. Sits on top of BMW's oap-sdk and gives an
  * app everything it needs in a few calls:

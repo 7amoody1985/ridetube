@@ -1,4 +1,6 @@
 'use strict';
+// Modified by 7amoody1985 (2026-11-07, RideTube fork): another of the app's HMI screens in front covers the
+// drawn page (_covered, ui.frontAt).
 /**
  * display.js - where an app's drawn screen goes.
  *

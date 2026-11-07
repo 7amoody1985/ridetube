@@ -1,5 +1,23 @@
 # RideTube
 
+> **This is a modified fork, not the original.** RideTube is made by
+> [JustAnotherPU](https://github.com/JustAnotherPU/ridetube); this copy by
+> [7amoody1985](https://github.com/7amoody1985) adds fixes on top of it and is not endorsed by the original
+> developer. Use the original unless you need one of these fixes.
+>
+> Changes in this fork (see [CHANGELOG.md](CHANGELOG.md) and the commit history for every change and its date):
+>
+> - **App 0.3.8 (2026-11-07):** the Search menu, which holds the settings, stays open. Before, the video page
+>   came back over it about a second after it opened (`kit/runtime/display.js`, `kit/runtime/mgu.js`).
+> - `tools/patch_package.py` builds the app's package from a published one, without BMW's SDK, for fixes to the
+>   javascript alone.
+>
+> **Install:** keep `JustAnotherPU/ridetube:releases` and `JustAnotherPU/mgu-apps:releases` as Store sources (the
+> service `jap-ridetube-d` and Node.js 22 still come from them), and add `7amoody1985/mgu-apps:releases`, which
+> offers this fork's app. An app already installed from another source is updated only by that source, so
+> uninstall the **RideTube app** once (not its service), then install RideTube from `7amoody1985/mgu-apps`. The
+> sign-in is kept: the service holds it.
+
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
 > endorsed by or sponsored by Google or YouTube. Use it at your own risk. You are responsible for following
 > YouTube's Terms of Service and the laws of your country, and for using it safely: by default the picture

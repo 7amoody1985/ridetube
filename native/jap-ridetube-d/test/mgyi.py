@@ -12,7 +12,7 @@ HDR = struct.Struct('<4sHHHHHxxI12x')  # 32 bytes, frame count at offset 16
 REC = struct.Struct('<IQIB')            # 17 bytes: pts_ms, pos, size, key
 PREFIX = {6, 7, 8, 9}                   # SEI, SPS, PPS, AUD
 SLICE = {1, 5}
-FFPROBE = '/opt/homebrew/bin/ffprobe'
+FFPROBE = __import__('shutil').which('ffprobe') or '/opt/homebrew/bin/ffprobe'   # (fork: PATH first, so Linux runs it too)
 
 
 def nal_starts(buf):

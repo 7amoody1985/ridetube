@@ -1,14 +1,14 @@
-# jap-ridetube-d
+# mdq-ridetube-d
 
-The car-side daemon of RideTube (`ytd.js`, Node 8, root, `jap-ridetube-d.service`), packaged as an
+The car-side daemon of RideTube (`ytd.js`, Node 8, root, `mdq-ridetube-d.service`), packaged as an
 mgu-deploy tool with the video decoder `ytdec` (built in `../ytdec`). yt-dlp, search and thumbnails all
 run on the car; nothing is downloaded for keeps: the cache holds the last few videos played.
 
 - audio: BMW MediaPlayer over SOME/IP (`/usr/lib/someip.node`), source 1046 → sink 1024,
   `playFile` on `cache/<id>/audio.m4a`.
-- video: `ytdec --dir cache/<id> --rect WxH [--fill] --log /var/opt/jap-ridetube-d/log/ytdec.log`, which
+- video: `ytdec --dir cache/<id> --rect WxH [--fill] --log /var/opt/mdq-ridetube-d/log/ytdec.log`, which
   writes `/dev/shm/mgu-video-ridetube` for mgu-render; paced by `clock <elapsed_ms> <mono_ms>` lines.
-- media: `/var/opt/jap-ridetube-d/cache/<id>/` {meta.json, thumb.rgba, audio.m4a, index.bin, video.h264, and
+- media: `/var/opt/mdq-ridetube-d/cache/<id>/` {meta.json, thumb.rgba, audio.m4a, index.bin, video.h264, and
   `audio.head.m4a` while the rest of the audio downloads}, written on the car by the fetcher (below).
 
 ## Fork: the video in RAM, and a debug report (0.4.0, 2026-11-07)
@@ -18,8 +18,8 @@ Added in [7amoody1985/ridetube](https://github.com/7amoody1985/ridetube); not in
 **Streaming in RAM.** Before, every video was written whole to the head unit's flash (`/var/opt`, about 1.1 GB an
 hour of 720p, deleted after). Now:
 
-- The unit mounts a tmpfs capped at 256 MB at `/run/jap-ridetube-media` (`ExecStartPre`; unmounted at stop).
-  Without it ytd.js takes `/dev/shm/jap-ridetube-media`, without either the flash cache as before (the log says
+- The unit mounts a tmpfs capped at 256 MB at `/run/mdq-ridetube-media` (`ExecStartPre`; unmounted at stop).
+  Without it ytd.js takes `/dev/shm/mdq-ridetube-media`, without either the flash cache as before (the log says
   which: `media in RAM: ...` / `media on flash: ...`). Each video's folder, the thumbs (60 at most) and the
   prefetched lookups go there.
 - `ytfetch.py fetch --stream 120000,45000 --spill-dir <cache>/<id>`: the video's https format is fetched in Range
@@ -40,8 +40,8 @@ hour of 720p, deleted after). Now:
 
 | Where | What |
 |---|---|
-| `/run/jap-ridetube-d/status.json` (RAM, 0644) | rewritten every 10 s while in use and on every state change; gone at a restart |
-| `/var/opt/jap-ridetube-d/log/sessions.jsonl` (flash) | one JSON line a play, kept under 64 KB (the newer half stays) |
+| `/run/mdq-ridetube-d/status.json` (RAM, 0644) | rewritten every 10 s while in use and on every state change; gone at a restart |
+| `/var/opt/mdq-ridetube-d/log/sessions.jsonl` (flash) | one JSON line a play, kept under 64 KB (the newer half stays) |
 | `{"cmd":"debug"}` on `ctl.sock` | the same as status.json, as `{"ev":"debug", ...}` |
 
 Neither holds what was watched (no video ids, no titles: an id in an error message shows as `<id>`).
@@ -59,9 +59,9 @@ Neither holds what was watched (no video ids, no titles: an id in an error messa
 
 Reading them over the car's Wi-Fi hotspot (root's SSH key):
 
-    ssh root@172.16.222.97 cat /run/jap-ridetube-d/status.json
-    ssh root@172.16.222.97 tail -n 20 /var/opt/jap-ridetube-d/log/sessions.jsonl
-    ssh root@172.16.222.97 journalctl -u jap-ridetube-d -n 200 --no-pager
+    ssh root@172.16.222.97 cat /run/mdq-ridetube-d/status.json
+    ssh root@172.16.222.97 tail -n 20 /var/opt/mdq-ridetube-d/log/sessions.jsonl
+    ssh root@172.16.222.97 journalctl -u mdq-ridetube-d -n 200 --no-pager
 
 Another app on the head unit can read both files as they are (status.json 0644 under a 0755 folder;
 sessions.jsonl under the 0755 log folder), for example to send them to a phone.
@@ -72,7 +72,7 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
 
 - `ytfetch.py` in mgu-python (`/var/opt/mgu-python/current/bin/python3 -I`), with yt-dlp from
   `ytdlp.pyz` on its `sys.path`, fetches the playing video straight into its cache dir
-  (`cache/<id>/`); yt-dlp's own cache is `/var/opt/jap-ridetube-d/cache/ytdlp`.
+  (`cache/<id>/`); yt-dlp's own cache is `/var/opt/mdq-ridetube-d/cache/ytdlp`.
 - Playable gate: a play starts once enough of the files is on disk to play, not when the download
   ends; until then the state is `preparing` and `pct` is the download progress towards playable.
 - Audio (0.2.1): `playFile` needs a complete file, so the fetcher downloads the audio format yt-dlp picked
@@ -110,16 +110,16 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
 
 ## Self-check on the car (root)
 
-    /var/opt/mgu-python/current/bin/python3 -I /var/opt/jap-ridetube-d/current/ytfetch.py check --cache-dir /var/opt/jap-ridetube-d/cache/ytdlp
-    U=$(sed 's/.*"fetch":\([0-9]*\).*/\1/' /var/opt/jap-ridetube-d/state/uids.json); /var/opt/mgu-python/current/bin/python3 -I -c "import os,sys;u=int(sys.argv[1]);os.setgroups([]);os.setgid(u);os.setuid(u);os.execv('/var/opt/jap-node22/current/bin/node',['node','/var/opt/jap-ridetube-d/current/thumb.js','dQw4w9WgXcQ'])" $U | wc -c    # 230400
-    sh /var/opt/jap-ridetube-d/current/check.sh    # offline; exit 0
+    /var/opt/mgu-python/current/bin/python3 -I /var/opt/mdq-ridetube-d/current/ytfetch.py check --cache-dir /var/opt/mdq-ridetube-d/cache/ytdlp
+    U=$(sed 's/.*"fetch":\([0-9]*\).*/\1/' /var/opt/mdq-ridetube-d/state/uids.json); /var/opt/mgu-python/current/bin/python3 -I -c "import os,sys;u=int(sys.argv[1]);os.setgroups([]);os.setgid(u);os.setuid(u);os.execv('/var/opt/jap-node22/current/bin/node',['node','/var/opt/mdq-ridetube-d/current/thumb.js','dQw4w9WgXcQ'])" $U | wc -c    # 230400
+    sh /var/opt/mdq-ridetube-d/current/check.sh    # offline; exit 0
 
 The first two need the internet, which the uplink gives the fetch uid, never root: `ytfetch.py check`
 drops to that uid itself (from `state/uids.json`); `thumb.js` does not, so the second line runs it
 as that uid. `check.sh` is the install `check`: yt-dlp (and `yt_dlp_ejs`) import from
 `ytdlp.pyz` in mgu-python, and node22 loads the JPEG decoder and `thumb.js`.
 
-## Control socket `/run/jap-ridetube-d/ctl.sock` (0660 root:tm_oap_app), JSON lines
+## Control socket `/run/mdq-ridetube-d/ctl.sock` (0660 root:tm_oap_app), JSON lines
 
 The audio head is internal: `time.total` is the video's length, not the head's.
 
@@ -165,7 +165,7 @@ The car signs in itself with the TV device sign-in: the client id and secret are
 is polled, then refreshes the token when less than 5 min is left (`invalid_grant` = signed out).
 Feeds: `POST /youtubei/v1/browse` as `TVHTML5`, `FEwhat_to_watch` (home), `FEsubscriptions`
 (subs), `VLWL` (wl); their video tiles, each id once (no shorts, channels, playlists), at most 50.
-The account (tokens and the scraped secret) is `/var/opt/jap-ridetube-d/state/account.json`, 0600 in the
+The account (tokens and the scraped secret) is `/var/opt/mdq-ridetube-d/state/account.json`, 0600 in the
 0700 state dir, written atomically; nothing secret goes on the socket or into the log. `sign_out` wins
 over work in flight: a refresh, device-code request or poll started before it saves, shows and
 re-arms nothing. Asks for a feed while its browse is in flight share that browse.
@@ -192,7 +192,7 @@ The uid is picked as mgu-updater's `js/uids.js` picks its own, at start and on f
   the error `no internet uid on the car (see the log)`.
 
 It is written to `state/internet-uids` (component.json `"internet": true, "uids":
-"state/internet-uids"`: the deploy tool copies it into `/var/opt/mgu-uplink/uids.d/jap-ridetube-d`) and,
+"state/internet-uids"`: the deploy tool copies it into `/var/opt/mgu-uplink/uids.d/mdq-ridetube-d`) and,
 while the uplink is installed, straight into that drop-in (the uplink rescans every 5 s). The unit
 starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB.
 
@@ -220,10 +220,10 @@ starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB
   mgu-render, and running it under another uid was not tested on a head unit. It reads only the video folder
   the daemon names (`--dir`) and takes commands only from the daemon's pipe. It opens no socket and fetches
   nothing.
-- `/run/jap-ridetube-d/ctl.sock` is 0660 root:`tm_oap_app`. Every app on the head unit shares that group, so any
+- `/run/mdq-ridetube-d/ctl.sock` is 0660 root:`tm_oap_app`. Every app on the head unit shares that group, so any
   installed app (not only RideTube) can drive the daemon: play, search, read the feeds and the watch history, or
   sign the account in or out. Install only apps you trust.
-- The cache (`/var/opt/jap-ridetube-d/cache`) is 0711: the fetch uid reaches its own folders, and nobody else can
+- The cache (`/var/opt/mdq-ridetube-d/cache`) is 0711: the fetch uid reaches its own folders, and nobody else can
   list what was watched. Each video's folder and the thumbnail folder are 0700, and `positions.json` (where each
   video was left, the watch history) is 0600. The account tokens live in `state/` (0700).
 
@@ -234,7 +234,7 @@ starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB
     python3.12 -I test/test_ytfetch.py   # ffmpeg fixtures, local Range server (head MP4, ranged == one stream); online part skipped offline
     python3 -I test/test_stream.py       # fork: the stream window, the paced reader, punching, the stream-or-spill plan (no ffmpeg)
     python3 -I test/live_stream.py $PWD/ytfetch.py $PWD/build/ytdlp.pyz   # fork, online: streamed == whole fetch, RAM peak
-    MGU_STORE=... ./build.sh [path/to/ytdec]   # → dist/jap-ridetube-d@<version>.tgz (default ../ytdec/build/target/ytdec)
+    MGU_STORE=... ./build.sh [path/to/ytdec]   # → dist/mdq-ridetube-d@<version>.tgz (default ../ytdec/build/target/ytdec)
 
 `build.sh`: checks ytdec is an x86-64 ELF, runs `tools/build_pyz.sh` (→ `build/ytdlp.pyz`),
 `tools/vendor_jpeg.sh` when `vendor/jpeg-js/` is missing, the three tests, copies ytdec into `build/`,

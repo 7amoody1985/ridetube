@@ -1,8 +1,8 @@
 'use strict';
 /**
- * yt.js - RideTube's link to the car daemon jap-ridetube-d (ytd.js) and its playback state.
+ * yt.js - RideTube's link to the car daemon mdq-ridetube-d (ytd.js) and its playback state.
  *
- *   Ctl    the control socket /run/jap-ridetube-d/ctl.sock: JSON lines, reconnects every 2 s.
+ *   Ctl    the control socket /run/mdq-ridetube-d/ctl.sock: JSON lines, reconnects every 2 s.
  *          App -> daemon: search{q} thumb{id} play{id,rect:"WxH",fill} pause resume seek{ms} stop quality{quality} fill{on} video{on} status
  *                         auth_status auth sign_out feed{which:home|subs|wl} channels channel{id}
  *          Daemon -> app: (a played video is deleted from the car once stopped; nothing is kept for offline)
@@ -20,7 +20,7 @@
  */
 const net = require('net');
 
-const SOCKET = '/run/jap-ridetube-d/ctl.sock';
+const SOCKET = '/run/mdq-ridetube-d/ctl.sock';
 const MAX_LINE = 1 << 20;            // a 320x180 thumb is 307 kB of base64; anything far past that is not ours
 const FEEDS = ['home', 'subs', 'wl'];
 const FEED_MAX = 20;                 // a feed's flat list (its pictures: as many as drawn, main.js's pool)
@@ -43,27 +43,27 @@ class Ctl {
         if (this.closed) return this;
         const s = this.sock = net.createConnection(this.path);
         s.setEncoding('utf8');
-        s.on('connect', () => { this.up = true; this.buf = ''; this.log.info('jap-ridetube-d: connected'); this._emit('up'); });
+        s.on('connect', () => { this.up = true; this.buf = ''; this.log.info('mdq-ridetube-d: connected'); this._emit('up'); });
         s.on('data', (d) => this._data(d));
-        s.on('error', (e) => { if (!this.errLogged) { this.errLogged = true; this.log.warn('jap-ridetube-d: ' + e.message); } });
+        s.on('error', (e) => { if (!this.errLogged) { this.errLogged = true; this.log.warn('mdq-ridetube-d: ' + e.message); } });
         s.on('close', () => {
             const was = this.up;
             this.up = false; this.sock = null;
-            if (was) { this.errLogged = false; this.log.warn('jap-ridetube-d: connection closed'); this._emit('down'); }
+            if (was) { this.errLogged = false; this.log.warn('mdq-ridetube-d: connection closed'); this._emit('down'); }
             if (!this.closed) this.retry = setTimeout(() => this.connect(), 2000);
         });
         return this;
     }
     _data(d) {
         this.buf += d;
-        if (this.buf.length > MAX_LINE && this.buf.indexOf('\n') < 0) { this.log.warn('jap-ridetube-d: line too long, dropped'); this.buf = ''; return; }
+        if (this.buf.length > MAX_LINE && this.buf.indexOf('\n') < 0) { this.log.warn('mdq-ridetube-d: line too long, dropped'); this.buf = ''; return; }
         let i;
         while ((i = this.buf.indexOf('\n')) >= 0) {
             const line = this.buf.slice(0, i);
             this.buf = this.buf.slice(i + 1);
             if (!line.trim()) continue;
             let m;
-            try { m = JSON.parse(line); } catch (e) { this.log.warn('jap-ridetube-d: bad line ' + line.slice(0, 80)); continue; }
+            try { m = JSON.parse(line); } catch (e) { this.log.warn('mdq-ridetube-d: bad line ' + line.slice(0, 80)); continue; }
             if (m && typeof m.ev === 'string') this._emit('msg', m);
         }
     }
@@ -250,7 +250,7 @@ class Model {
         this.q = q; this.searching = true; this.searchError = null; this.searchT = Date.now();
         this._changed();
         if (this.send({ cmd: 'search', q })) return true;
-        this.searching = false; this.searchError = 'The RideTube service (jap-ridetube-d) is not running';
+        this.searching = false; this.searchError = 'The RideTube service (mdq-ridetube-d) is not running';
         return false;
     }
     /** it: the tile tapped ({title, channel}), else the lists' item: shown until the daemon says its own title */
@@ -294,7 +294,7 @@ class Model {
         f.loading = true; f.error = null; f.t = Date.now();
         this._changed();
         if (this.send({ cmd: 'feed', which })) return true;
-        f.loading = false; f.error = 'The RideTube service (jap-ridetube-d) is not running';
+        f.loading = false; f.error = 'The RideTube service (mdq-ridetube-d) is not running';
         return false;
     }
     /** a feed with no answer after ms: an error, as for searches */
@@ -317,7 +317,7 @@ class Model {
         c.loading = true; c.error = null; c.t = Date.now();
         this._changed();
         if (this.send({ cmd: 'channels' })) return true;
-        c.loading = false; c.error = 'The RideTube service (jap-ridetube-d) is not running';
+        c.loading = false; c.error = 'The RideTube service (mdq-ridetube-d) is not running';
         return false;
     }
     /** the channels whose name starts with q (one letter or digit), else holds q (also the @handle); case and accents aside */
@@ -336,7 +336,7 @@ class Model {
         c.loading = true; c.error = null; c.t = Date.now();
         this._changed();
         if (this.send({ cmd: 'channel', id })) return true;
-        c.loading = false; c.error = 'The RideTube service (jap-ridetube-d) is not running';
+        c.loading = false; c.error = 'The RideTube service (mdq-ridetube-d) is not running';
         return false;
     }
     /** video wanted (player on screen and the car parked): tells the daemon when that changes */

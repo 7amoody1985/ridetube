@@ -1,7 +1,7 @@
 'use strict';
 
-// RideTube (apps/jap_ridetube): the control-socket client and the playback state against a fake jap-ridetube-d daemon on a
-// temporary Unix socket; then, when dist/jap_ridetube is built, one results and one player frame through the stubbed
+// RideTube (apps/mdq_ridetube): the control-socket client and the playback state against a fake mdq-ridetube-d daemon on a
+// temporary Unix socket; then, when dist/mdq_ridetube is built, one results and one player frame through the stubbed
 // head unit into a renderer stream (pictures as message 10, the video as 13 + op 19), the feed tabs, the sign-in
 // page and signing out; where the kit runs the screen: the rail and the bar, Home's shelves (arrows, the controller
 // bringing any tile into view, thumbs asked for the drawn tiles only, the picture pool). No SDK or car needed:
@@ -12,7 +12,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { Ctl, Model, clock } = require('../../apps/jap_ridetube/yt');
+const { Ctl, Model, clock } = require('../../apps/mdq_ridetube/yt');
 
 const quiet = { info() {}, warn() {}, error(m, e) { throw e || new Error(m); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -263,8 +263,8 @@ function scan(s) {
 
 // the app itself, drawn into a renderer stream (preview path of kit/tools/hu-stub.js)
 async function appFrames() {
-    const stage = path.join(__dirname, '..', '..', 'dist', 'jap_ridetube');
-    if (!fs.existsSync(path.join(stage, 'source', 'javascript', 'app.js'))) { console.log('skip app frames (python3 kit/tools/build.py jap_ridetube first)'); return; }
+    const stage = path.join(__dirname, '..', '..', 'dist', 'mdq_ridetube');
+    if (!fs.existsSync(path.join(stage, 'source', 'javascript', 'app.js'))) { console.log('skip app frames (python3 kit/tools/build.py mdq_ridetube first)'); return; }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-app-'));
     const sock = path.join(dir, 'ctl.sock'), file = path.join(dir, 'stream.bin');
     const d = await fakeDaemon(sock);

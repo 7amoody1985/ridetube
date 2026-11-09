@@ -1,8 +1,8 @@
 'use strict';
 // SPDX-License-Identifier: GPL-3.0-or-later
-// jap-ridetube-d daemon (RideTube): plays a video on the MGU. Audio goes through BMW's
+// mdq-ridetube-d daemon (RideTube): plays a video on the MGU. Audio goes through BMW's
 // MediaPlayer over SOME/IP, video through
-// ytdec, paced by the MediaPlayer clock. The app talks to it on /run/jap-ridetube-d/ctl.sock (JSON
+// ytdec, paced by the MediaPlayer clock. The app talks to it on /run/mdq-ridetube-d/ctl.sock (JSON
 // lines; README.md has the protocol). Node 8: no ?. / ?? / catch without binding.
 // 0.1.6: feed{which, items, shelves:[{title, items}]}, items carry meta (the tile's second line).
 // The car fetches (ytfetch.py), searches (InnerTube) and makes thumbs (thumb.js) itself, all as the fetch uid; playback starts while the video is still being fetched.
@@ -28,14 +28,14 @@ function defaults() {
         someip: env.MGU_YT_SOMEIP || '/usr/lib/someip.node',
         srcGen: env.MGU_YT_SRCGEN || '/usr/lib/oap-mainapp/src-gen',
         ytdec: env.MGU_YT_YTDEC || path.join(here, 'ytdec'),
-        cacheDir: env.MGU_YT_CACHE || '/var/opt/jap-ridetube-d/cache',
-        logDir: env.MGU_YT_LOGDIR || '/var/opt/jap-ridetube-d/log',
-        sock: env.MGU_YT_SOCK || '/run/jap-ridetube-d/ctl.sock',
+        cacheDir: env.MGU_YT_CACHE || '/var/opt/mdq-ridetube-d/cache',
+        logDir: env.MGU_YT_LOGDIR || '/var/opt/mdq-ridetube-d/log',
+        sock: env.MGU_YT_SOCK || '/run/mdq-ridetube-d/ctl.sock',
         sockGid: 12202, // tm_oap_app
-        accountFile: env.MGU_YT_ACCOUNT || '/var/opt/jap-ridetube-d/state/account.json',
+        accountFile: env.MGU_YT_ACCOUNT || '/var/opt/mdq-ridetube-d/state/account.json',
         ytRequest: null,     // null: each request in a child as the fetch uid (fetchRequest)
         // the fetch uid's pick (pickFetchUid) and the helper it runs
-        stateDir: env.MGU_YT_STATE || '/var/opt/jap-ridetube-d/state',
+        stateDir: env.MGU_YT_STATE || '/var/opt/mdq-ridetube-d/state',
         etcDir: '/etc',
         oapRoot: '/var/opt/public/oap',
         toolRoot: '/var/opt',
@@ -61,15 +61,15 @@ function defaults() {
         // fork (2026-11-07): the playing video in RAM, not on the head unit's flash. The unit mounts a capped tmpfs
         // at ramDir; without it a folder on /dev/shm (also a tmpfs); without either, the cache on flash as before.
         // The video is fetched streamAheadMs past playback at most and punched streamBehindMs behind it.
-        ramDir: env.MGU_YT_RAM || '/run/jap-ridetube-media',
-        ramFallback: '/dev/shm/jap-ridetube-media',
+        ramDir: env.MGU_YT_RAM || '/run/mdq-ridetube-media',
+        ramFallback: '/dev/shm/mdq-ridetube-media',
         ramCheck: true,      // the folder must be on a tmpfs (/proc/mounts); tests turn it off
         streamAheadMs: 120000,
         streamBehindMs: 45000,
         ramBudget: 0,        // bytes a stream may plan for (0: what the tmpfs has free)
         posSaveMs: 60000,    // the resume point while playing (forced on pause and stop): 4 flash writes a minute before
         // the debug report: status.json (RAM, every statusMs while in use), one line a play in sessions.jsonl (flash)
-        statusFile: env.MGU_YT_STATUS || '/run/jap-ridetube-d/status.json',
+        statusFile: env.MGU_YT_STATUS || '/run/mdq-ridetube-d/status.json',
         statusMs: 10000,
         sessionsMax: 65536,
         watchdogMs: 5000,
@@ -168,11 +168,11 @@ function pruneCache(cacheDir, keep, protect, log) {
 
 // ---------------------------------------------------------------- the fetch uid
 // mgu-uplink lets out only the uids it lists, never root: every youtube.com request runs in a child
-// as our own "fetch" uid, which the uplink learns from uids.d/jap-ridetube-d (written here, and by the deploy
+// as our own "fetch" uid, which the uplink learns from uids.d/mdq-ridetube-d (written here, and by the deploy
 // tool from state/internet-uids). Picked as mgu-updater's js/uids.js picks its own: the lowest free
 // number above MainApp's app uid ranges, kept in state/uids.json while nothing else holds it.
-const SELF = 'jap-ridetube-d';
-const VERSION = '0.4.1';   // (fork: component.json's version)
+const SELF = 'mdq-ridetube-d';
+const VERSION = '0.4.2';   // (fork: component.json's version)
 const MAX_UID = 60000; // login.defs UID_MAX
 const MAINAPPS = [{ root: '/usr/lib/oap-mainapp', hmi: 'HmiMain3D' }, { root: '/usr/lib/oap-mainapp21', hmi: 'Hmi8' }];
 const lines = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n'); } catch (e) { return []; } };
@@ -901,7 +901,7 @@ Daemon.prototype.loadSegments = async function (c) {
         const pre = require('crypto').createHash('sha256').update(c.id).digest('hex').slice(0, 4);
         const url = this.opts.sponsorBlock + pre + '?categories=' + encodeURIComponent(JSON.stringify(this.opts.sbCategories)) + '&actionTypes=' + encodeURIComponent('["skip"]');
         let r;
-        try { r = await this.opts.ytRequest('GET', url, { 'User-Agent': 'jap-ridetube-d (BMW head unit)' }, null, 8000); } catch (e) { this.log('sponsorblock: ' + e.message); return; }
+        try { r = await this.opts.ytRequest('GET', url, { 'User-Agent': 'mdq-ridetube-d (BMW head unit)' }, null, 8000); } catch (e) { this.log('sponsorblock: ' + e.message); return; }
         segs = [];
         if (r.status === 200) {
             let all = [];

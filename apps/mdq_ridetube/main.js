@@ -1,6 +1,6 @@
 'use strict';
 /**
- * RideTube - search and play videos through the car daemon jap-ridetube-d (ytd.js, a root service), which
+ * RideTube - search and play videos through the car daemon mdq-ridetube-d (ytd.js, a root service), which
  * fetches them on the car itself, plays the sound through BMW's own media player (the car's audio source)
  * and decodes the picture (ytdec) into
  * /dev/shm/mgu-video-ridetube, which the renderer (mgu-render) draws in this app's layer (op 19).
@@ -110,9 +110,9 @@ mgu.run({
         ctl.on('down', () => { model.setConnected(false); changed(); });
         ctl.on('msg', (m) => {
             model.onMsg(m);
-            if (m.ev === 'error') log.warn('jap-ridetube-d: ' + m.msg);
-            if (m.ev === 'state') log.info('jap-ridetube-d: ' + m.state + (m.id ? ' ' + m.id : ''));
-            if (m.ev === 'auth') { log.info('jap-ridetube-d: account ' + m.state); if (m.state === 'signed_in') openFeed(); }
+            if (m.ev === 'error') log.warn('mdq-ridetube-d: ' + m.msg);
+            if (m.ev === 'state') log.info('mdq-ridetube-d: ' + m.state + (m.id ? ' ' + m.id : ''));
+            if (m.ev === 'auth') { log.info('mdq-ridetube-d: account ' + m.state); if (m.state === 'signed_in') openFeed(); }
             changed();
         });
         ctl.connect();
@@ -165,7 +165,7 @@ mgu.run({
 
         function info() {
             let s;
-            if (!model.connected) s = 'The RideTube service (jap-ridetube-d) is not running';
+            if (!model.connected) s = 'The RideTube service (mdq-ridetube-d) is not running';
             else if (model.searchError) s = 'Search: ' + model.searchError;
             else if (model.error) s = 'Error: ' + model.error;
             else if (model.active()) s = (model.state === 'preparing' ? 'Preparing ' + Math.round(model.pct) + ' %: ' : model.state === 'paused' ? 'Paused: ' : 'Playing: ') + model.title;
@@ -604,8 +604,8 @@ mgu.run({
             cv.text(fit(cv, msg, 34, 1360, LIT), browsing() ? MID : W / 2, 290, 34, '#ffffff', { literal: true, align: 'center' });
             if (sub) cv.text(fit(cv, sub, 24, 1360, LIT), browsing() ? MID : W / 2, 336, 24, C.dim, { literal: true, align: 'center' });
         }
-        const OFF = 'The RideTube service (jap-ridetube-d) is not running';
-        const OFF2 = 'Install the RideTube service (jap-ridetube-d) from the MGU Store';
+        const OFF = 'The RideTube service (mdq-ridetube-d) is not running';
+        const OFF2 = 'Install the RideTube service (mdq-ridetube-d) from the MGU Store';
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
             if (model.searching) return say(cv, 'Searching "' + model.q + '"...');
@@ -616,7 +616,7 @@ mgu.run({
         function drawFeed(cv, which) {
             const f = model.feeds[which], a = model.auth.state;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (a === 'unsupported') return say(cv, 'Signing in needs a newer jap-ridetube-d tool on the car');
+            if (a === 'unsupported') return say(cv, 'Signing in needs a newer mdq-ridetube-d tool on the car');
             if (a !== 'signed_in') return drawSignIn(cv);
             const chans = which === 'subs' && model.chans && model.chans.items.length;   // the channels show without the videos
             if ((!f || !f.items.length) && !chans) {
@@ -676,7 +676,7 @@ mgu.run({
                 if (it && it.channel) cv.text(fit(cv, it.channel, 22, BOX.w - 60, LIT), BOX.x + 30, BOX.y + 82, 22, '#cccccc', LIT);
             }
             let mid = null;
-            if (!model.connected) mid = 'The RideTube service (jap-ridetube-d) is not running';
+            if (!model.connected) mid = 'The RideTube service (mdq-ridetube-d) is not running';
             else if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy - 20, 54, '#00000099');

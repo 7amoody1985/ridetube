@@ -55,8 +55,8 @@ RideTube itself is GPL-3.0-or-later (LICENSE). The parts below come from others.
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 
-4. native/jap-ridetube-d/vendor/jpeg-js - jpeg-js 0.4.4 decoder (github.com/jpeg-js/jpeg-js), BSD-3-Clause
-   (also in that folder; shipped in the jap-ridetube-d tool kit):
+4. native/mdq-ridetube-d/vendor/jpeg-js - jpeg-js 0.4.4 decoder (github.com/jpeg-js/jpeg-js), BSD-3-Clause
+   (also in that folder; shipped in the mdq-ridetube-d tool kit):
 
     Copyright (c) 2014, Eugene Ware
     All rights reserved.
@@ -84,8 +84,8 @@ RideTube itself is GPL-3.0-or-later (LICENSE). The parts below come from others.
     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-5. ytdlp.pyz in the jap-ridetube-d tool kit - built at release time from the official yt-dlp zipapp
-   (github.com/yt-dlp/yt-dlp, release pinned with its sha256 in native/jap-ridetube-d/tools/build_pyz.sh);
+5. ytdlp.pyz in the mdq-ridetube-d tool kit - built at release time from the official yt-dlp zipapp
+   (github.com/yt-dlp/yt-dlp, release pinned with its sha256 in native/mdq-ridetube-d/tools/build_pyz.sh);
    no yt-dlp code is in this repository. yt-dlp is released under the Unlicense:
 
     This is free and unencumbered software released into the public domain.

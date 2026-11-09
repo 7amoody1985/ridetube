@@ -1,5 +1,5 @@
 #!/bin/sh
-# Packs dist/jap-ridetube-d@<version>.tgz: ytdlp.pyz from the pinned yt-dlp release (tools/build_pyz.sh),
+# Packs dist/mdq-ridetube-d@<version>.tgz: ytdlp.pyz from the pinned yt-dlp release (tools/build_pyz.sh),
 # the jpeg-js decoder (tools/vendor_jpeg.sh, if missing), the tests, ytdec, then the MGU Store's packer.
 # Usage: MGU_STORE=<a clone of the MGU Store> ./build.sh [path/to/ytdec]   (default ../ytdec/build/target/ytdec)
 # Needs curl, openssl, shasum or sha256sum, Node 22+, Python 3.12 (PYTHON=...), ffmpeg for the fetcher tests.

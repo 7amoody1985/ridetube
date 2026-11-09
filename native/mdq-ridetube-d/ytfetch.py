@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""jap-ridetube-d on-car fetcher: yt-dlp (from ytdlp.pyz) + a streaming fMP4 -> Annex-B/MGYI demuxer.
+"""mdq-ridetube-d on-car fetcher: yt-dlp (from ytdlp.pyz) + a streaming fMP4 -> Annex-B/MGYI demuxer.
 
   ytfetch.py fetch <id> <dir> --cache-dir <d> [--height 720] [--node P] [--lease P] [--pyz P]
   ytfetch.py extract <id> <info.json> --cache-dir <d> [...]
@@ -1128,7 +1128,7 @@ def check(a):
     if os.geteuid() == 0:
         uid = a.uid
         if uid is None:
-            with open('/var/opt/jap-ridetube-d/state/uids.json') as f:
+            with open('/var/opt/mdq-ridetube-d/state/uids.json') as f:
                 uid = int(json.load(f)['fetch'])
         os.makedirs(work, exist_ok=True)
         os.chown(work, uid, uid)

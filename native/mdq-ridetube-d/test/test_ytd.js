@@ -1034,7 +1034,7 @@ async function main() {
     const mkdirs = (dd) => { if (!fs.existsSync(dd)) { mkdirs(path.dirname(dd)); fs.mkdirSync(dd); } }; // (Node 8: no recursive)
     const put = (f, text) => { mkdirs(path.dirname(f)); fs.writeFileSync(f, text); };
     const rejects = (p, re) => p.then(() => { throw new Error('resolved, expected ' + re); }, (e) => assert.ok(re.test(e.message), e.message)); // (Node 8: no assert.rejects)
-    const uo = { stateDir: path.join(fsRoot, 'var/opt/jap-ridetube-d/state'), etcDir: path.join(fsRoot, 'etc'), oapRoot: path.join(fsRoot, 'oap'),
+    const uo = { stateDir: path.join(fsRoot, 'var/opt/mdq-ridetube-d/state'), etcDir: path.join(fsRoot, 'etc'), oapRoot: path.join(fsRoot, 'oap'),
         toolRoot: path.join(fsRoot, 'var/opt'), procDir: path.join(fsRoot, 'proc'), log: (m) => logs.push(m),
         mainapps: [{ root: path.join(fsRoot, 'mainapp'), hmi: 'HmiMain3D' }, { root: path.join(fsRoot, 'mainapp21'), hmi: 'Hmi8' }] };
 
@@ -1051,15 +1051,15 @@ async function main() {
         put(path.join(fsRoot, 'oap/oap_12201/security/uids.txt'), '12707=some.app\n');
         put(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/mgu-updater'), '12708\n');
         put(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/iteriodev-tailscale'), '3910 12709 # two\n');
-        put(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/jap-ridetube-d'), '12710\n');              // our own: not taken
+        put(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/mdq-ridetube-d'), '12710\n');              // our own: not taken
         mkdirs(path.join(fsRoot, 'var/opt/mgu-uplink/current'));
         put(path.join(fsRoot, 'var/opt/mgu-updater/state/uids.json'), JSON.stringify({ build: 12711, fetch: 12712, web: 12713 }));
         put(path.join(fsRoot, 'proc/77/status'), 'Name:\tx\nUid:\t12714\t12714\t12714\t12714\nGid:\t12715\t12715\t12715\t12715\n');
         assert.strictEqual(pickFetchUid(uo), 12710, 'every lower one is taken; our own drop-in is not');
         const rd = (f) => fs.readFileSync(path.join(fsRoot, f), 'utf8');
-        assert.strictEqual(rd('var/opt/jap-ridetube-d/state/internet-uids'), '12710\n');
-        assert.deepStrictEqual(JSON.parse(rd('var/opt/jap-ridetube-d/state/uids.json')), { fetch: 12710 });
-        assert.strictEqual(rd('var/opt/mgu-uplink/uids.d/jap-ridetube-d'), '12710\n');
+        assert.strictEqual(rd('var/opt/mdq-ridetube-d/state/internet-uids'), '12710\n');
+        assert.deepStrictEqual(JSON.parse(rd('var/opt/mdq-ridetube-d/state/uids.json')), { fetch: 12710 });
+        assert.strictEqual(rd('var/opt/mgu-uplink/uids.d/mdq-ridetube-d'), '12710\n');
         assert.strictEqual(fs.statSync(uo.stateDir).mode & 0o777, 0o700);
     });
 
@@ -1068,7 +1068,7 @@ async function main() {
         assert.strictEqual(pickFetchUid(uo), 12710, 'kept');
         fs.appendFileSync(path.join(fsRoot, 'etc/passwd'), 'new:x:12710:12710::/:/bin/false\n');
         assert.strictEqual(pickFetchUid(uo), 12716, 'taken: the next free (12714/15 run, 12710 in passwd)');
-        assert.strictEqual(fs.readFileSync(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/jap-ridetube-d'), 'utf8'), '12716\n');
+        assert.strictEqual(fs.readFileSync(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/mdq-ridetube-d'), 'utf8'), '12716\n');
         put(path.join(fsRoot, 'mainapp21/config/base.json'), JSON.stringify({ usableUidsAndGids: { min: 20000, max: 29999 } }));
         fs.unlinkSync(path.join(uo.stateDir, 'uids.json'));
         assert.strictEqual(pickFetchUid(uo), null, 'two configs, neither HMI running: unknown');

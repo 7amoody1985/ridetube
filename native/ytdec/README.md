@@ -1,7 +1,7 @@
 # ytdec
 
 The video half of RideTube (BMW iDrive 7 MGU, Apollo Lake,
-Intel HD 505). Reads what the car's fetcher (`jap-ridetube-d/ytfetch.py`) writes, decodes H.264
+Intel HD 505). Reads what the car's fetcher (`mdq-ridetube-d/ytfetch.py`) writes, decodes H.264
 on the GPU with the unit's Intel Media SDK, scales it with MSDK VPP and writes
 I420 frames to mgu-render's video file `/dev/shm/mgu-video-ridetube` (MGVF,
 mgu-render `PROTOCOL.md`, "Video"), paced by the audio clock that `ytd.js`

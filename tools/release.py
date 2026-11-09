@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Lays out the MGU Store catalog of this repository in dist/release/: catalog.json, the app's OAP package
 (without node_modules/oap-sdk: the head unit makes it from an app already on the car), the service's tool kit
-and the app icon. jap-node22 (required by jap-ridetube-d) comes from the JustAnotherPU/mgu-apps source. Upload every file of dist/release/ as an asset of a GitHub release tagged `catalog`.
+and the app icon. jap-node22 (required by mdq-ridetube-d) comes from the JustAnotherPU/mgu-apps source. Upload every file of dist/release/ as an asset of a GitHub release tagged `catalog`.
 
-Build first:  python3 kit/tools/build.py jap_ridetube                      (dist/jap_ridetube@<v>.tgz)
+Build first:  python3 kit/tools/build.py mdq_ridetube                      (dist/mdq_ridetube@<v>.tgz)
               (cd native/ytdec && make target)
-              (cd native/jap-ridetube-d && MGU_STORE=... ./build.sh)      (its dist/)
+              (cd native/mdq-ridetube-d && MGU_STORE=... ./build.sh)      (its dist/)
 Then:         python3 tools/release.py [--base URL]
 --base: where the car downloads the assets from; default the public release download of the `catalog`
 release. For a private repository, list the assets' API URLs instead (docs/PUBLISHING.md of the Store).
@@ -13,9 +13,9 @@ release. For a private repository, list the assets' API URLs instead (docs/PUBLI
 import argparse, gzip, hashlib, io, json, os, shutil, sys, tarfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO = 'JustAnotherPU/ridetube'
-APP = 'jap_ridetube'
-TOOLS = ('jap-ridetube-d',)
+REPO = '7amoody1985/ridetube'   # (fork; its packages are published through 7amoody1985/mgu-apps)
+APP = 'mdq_ridetube'
+TOOLS = ('mdq-ridetube-d',)
 
 
 def sha256(path):
@@ -80,7 +80,7 @@ def main():
     comps = [{
         'id': APP, 'kind': 'app', 'title': app['title'], 'description': app['description'], 'version': app['version'],
         'artifact': artifact(os.path.join(out, os.path.basename(pkg)), a.base),
-        'requires': {'jap-ridetube-d': tools['jap-ridetube-d']['version'], 'mgu-render': '0.6.11', 'mgu-inputgate': '1.0.0'},
+        'requires': {'mdq-ridetube-d': tools['mdq-ridetube-d']['version'], 'mgu-render': '0.6.11', 'mgu-inputgate': '1.0.0'},
         'uninstallable': True, 'mguHmi': ['ID7'], 'icon': icon, 'iconSha256': sha256(os.path.join(out, icon)),
     }]
     for t, c in tools.items():

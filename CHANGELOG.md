@@ -1,5 +1,19 @@
 # Changelog
 
+## App 0.4.0, service 0.4.2 (fork by 7amoody1985, 2026-11-09)
+
+- Own ids, at JustAnotherPU's request: the app is `mdq_ridetube` ("RideTube (fork)", logging id `OAB1`), the
+  service `mdq-ridetube-d` (`/var/opt/mdq-ridetube-d`, `/run/mdq-ridetube-d/ctl.sock` and `status.json`, the
+  RAM disk `/run/mdq-ridetube-media`, the unit `mdq-ridetube-d.service`, the uplink's `uids.d/mdq-ridetube-d`).
+  With `jap_ridetube` at a higher version than the original's, a Store with both sources installed the fork over
+  JustAnotherPU's RideTube. Now both install side by side (only one plays at a time: the media player's source
+  1046 and ytdec's `/dev/shm/mgu-video-ridetube` are shared).
+- `tools/build_app.sh`: the kit's own build without BMW's SDK (a placeholder, stripped from the package as
+  `tools/release.py` does); it reproduces the published app byte for byte. `tools/build_service.sh`: the MGU
+  Store's own packer, with ytdec and ytdlp.pyz from JustAnotherPU's published 0.3.8 service (checked against its
+  sha256 list); on the original code it reproduces that package exactly. They replace `tools/patch_package.py` and
+  `tools/patch_service.py`, which could not change an id.
+
 ## Service 0.4.1 (fork by 7amoody1985, 2026-11-08)
 
 - Streaming: the fetcher says how far it has fetched before it waits for room. Its progress events are throttled

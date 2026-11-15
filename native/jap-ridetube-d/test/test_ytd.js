@@ -1217,6 +1217,36 @@ async function main() {
             { id: 'PLdemo00000000000000000000000001', title: 'Road trip', count: null, meta: ['Unlisted'], thumb: 'DemoVideo01' }]);
     });
 
+    await t('playlists: the TV page; the Save to playlist list when the page refuses or lists none; its error only when both fail', async () => {
+        const { Account } = require('../ytd.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pl-')), file = path.join(dir, 'account.json');
+        fs.writeFileSync(file, JSON.stringify({ cid: 'c', sec: 's', access: 'tok', refresh: 'r', exp: Date.now() + 3600000 }));
+        const tvTile = { tileRenderer: { contentId: 'PLtv', contentType: 'TILE_CONTENT_TYPE_PLAYLIST', onSelectCommand: { browseEndpoint: { browseId: 'VLPLtv' } },
+            metadata: { tileMetadataRenderer: { title: { simpleText: 'From the page' } } } } };
+        const saveList = { contents: [{ addToPlaylistRenderer: { playlists: [{ playlistAddToOptionRenderer: { playlistId: 'PLsave', title: { simpleText: 'From the list' }, privacy: 'PRIVATE' } }] } }] };
+        const run = async (page, list) => {
+            const asked = [], evs = [], logs2 = [];
+            const yt = (method, url) => {
+                asked.push(/browse/.test(url) ? 'page' : 'list');
+                const a = /browse/.test(url) ? page : list;
+                return Promise.resolve({ status: a[0], body: JSON.stringify(a[1]) });
+            };
+            await new Account({ accountFile: file, ytRequest: yt, ytTimeoutMs: 1000, log: (m) => logs2.push(m) }, (e) => evs.push(e)).playlists();
+            return { asked, ev: evs[0], logs: logs2 };
+        };
+        let x = await run([200, { contents: tvTile }], [200, saveList]);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((p) => p.title)], [['page'], ['From the page']], 'the page lists some: the list not asked');
+        x = await run([404, {}], [200, saveList]);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((p) => p.title)], [['page', 'list'], ['From the list']], 'the page refuses: the list');
+        x = await run([200, { contents: { somethingNew: {} } }], [200, saveList]);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((p) => p.title)], [['page', 'list'], ['From the list']], 'the page answers, nothing we read: the list');
+        x = await run([200, { contents: {} }], [500, {}]);
+        assert.deepStrictEqual([x.ev.items, x.ev.error], [[], undefined], 'the page empty, the list failing: the page\'s empty answer');
+        assert.ok(x.logs.some((m) => /none on the page, save list 500/.test(m)), 'logged');
+        x = await run([404, {}], [500, {}]);
+        assert.deepStrictEqual([x.ev.items, x.ev.error], [undefined, 'feed offline'], 'both fail: offline');
+    });
+
     await t('LRU keeps 6 newest, never the playing one', async () => {
         const lru = path.join(tmp, 'lru');
         fs.mkdirSync(lru);

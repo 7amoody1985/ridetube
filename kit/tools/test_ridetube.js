@@ -700,6 +700,34 @@ async function appFrames() {
         for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'); k++) { await sleep(200); await hu.loopFn(); }
         assert.ok(d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'), 'the next one in the row plays');
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
+
+        // Playlists: a playlist plays on past its grid's row of four; members-only videos left out (the setting's default)
+        hu.handlers.BTN_PL();
+        await until(() => d.cmds('playlists').length, 2000, 'Playlists asked');
+        d.send({ ev: 'playlists', items: [{ id: 'PLtest000001', title: 'Six', count: 6, meta: ['Private'], thumb: 'plvideo0001' }] });
+        let pt = null;
+        for (let k = 0; k < 100 && !(pt = at(/^p:\d+:PLtest000001$/)); k++) { await sleep(20); await hu.loopFn(); }
+        assert.ok(pt, 'the playlist tile: ' + disp.pageTargets.map((x) => x.key).slice(0, 10));
+        pt.run();
+        await until(() => d.cmds('playlist').length, 2000, 'its videos asked');
+        assert.deepStrictEqual(d.cmds('playlist')[0], { cmd: 'playlist', id: 'PLtest000001' });
+        const six = Array.from({ length: 6 }, (_, i) => ({ id: 'plvideo000' + (i + 1), title: 'Part ' + (i + 1), channel: 'C', duration_s: 60 }));
+        six[1].members = true;
+        d.send({ ev: 'playlist', id: 'PLtest000001', title: 'Six', items: six });
+        let fifth = null;
+        for (let k = 0; k < 100 && !(fifth = at(/^l:\d+:plvideo0005$/)); k++) { await sleep(20); await hu.loopFn(); }
+        assert.ok(fifth, 'its videos: ' + disp.pageTargets.map((x) => x.key).slice(0, 10));
+        assert.ok(!at(/^l:\d+:plvideo0002$/), 'the members-only one left out');
+        await sleep(300); await drawn();   // (a frame redrawn: the app redraws a changed page, else every 250 ms)
+        assert.ok(texts.indexOf('5 videos · 1 hidden') >= 0, 'and said so: ' + texts.slice(0, 12).join('|'));
+        // shown: 1 3 4 5 | 6 - the 5th ends the first row; the 6th, on the next row, plays after it
+        fifth.run();
+        await until(() => (d.cmds('play').slice(-1)[0] || {}).id === 'plvideo0005', 2000, 'played');
+        d.send({ ev: 'state', state: 'playing', id: 'plvideo0005' });
+        d.send({ ev: 'state', state: 'ended', id: 'plvideo0005' });
+        for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'plvideo0006'); k++) { await sleep(200); await hu.loopFn(); }
+        assert.ok(d.cmds('play').some((x) => x.id === 'plvideo0006'), 'the next one in the playlist plays, on the next row');
+        console.log('ok   playlists: a playlist plays on past its row of four; members-only videos left out');
     }
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();

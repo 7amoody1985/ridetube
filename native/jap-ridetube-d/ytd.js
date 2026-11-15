@@ -720,7 +720,9 @@ Account.prototype.channel = function (id) {
     return this.browseEv({ ev: 'channel', id: id }, id, (j) => ({ items: feedItems(j).slice(0, FEED_MAX), shelves: feedShelves(j) }), 0);
 };
 // `playlists` -> playlists{items:[{id,title,count,meta,thumb}]} or playlists{error}, never kept. The TV Playlists page;
-// when it refuses (seen 2026-11: 404 for an account a while, then 200), the Save to playlist list (no counts).
+// when it refuses (seen 2026-11: 404 for an account a while, then 200) or lists none (a page we no longer read:
+// every account has Liked videos at least), the Save to playlist list (no counts). That one failing after the
+// page's 200: the page's (empty) answer.
 // `playlist` {id} -> playlist{id, title, items} (its videos, at most 50) or playlist{id, error}
 const ANY_VIDEO = 'jNQXAC9IVRw';   // get_add_to_playlist lists the playlists for a video; any public one does
 Account.prototype.playlists = async function () {
@@ -733,11 +735,12 @@ Account.prototype.playlists = async function () {
     try {
         const r = await call((tok) => this.browse('FEplaylist_aggregation', tok));
         let items = r.status === 200 && r.j ? playlistTiles(r.j) : null;
-        if (!items) {
+        if (!items || !items.length) {
             const q = await call((tok) => this.json('POST', YT + '/youtubei/v1/playlist/get_add_to_playlist',
                 { context: { client: TV_CLIENT }, videoIds: [ANY_VIDEO] }, { Authorization: 'Bearer ' + tok }));
-            if (q.status !== 200 || !q.j) throw new Error('playlists ' + r.status + ', save list ' + q.status);
-            items = addToPlaylistItems(q.j);
+            if (q.status === 200 && q.j) items = addToPlaylistItems(q.j);
+            else if (!items) throw new Error('playlists ' + r.status + ', save list ' + q.status);
+            else this.log('playlists: none on the page, save list ' + q.status);
         }
         this.emit({ ev: 'playlists', items: items });
     } catch (e) {

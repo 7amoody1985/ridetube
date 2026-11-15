@@ -355,6 +355,36 @@ class NoCaptions(unittest.TestCase):
         ytfetch.no_captions(types.SimpleNamespace(extractor=types.SimpleNamespace()))  # layout changed: no-op
 
 
+def vfmt(fid, proto, h):
+    return {'format_id': fid, 'url': 'https://example.invalid/' + fid, 'protocol': proto, 'vcodec': 'avc1.4d401f',
+            'acodec': 'none', 'height': h, 'fps': 30, 'ext': 'mp4'}
+
+
+class Playable(unittest.TestCase):
+    def test_live_and_hls_only_get_a_plain_reason(self):
+        https, hls = vfmt('v', 'https', 720), vfmt('h', 'm3u8_native', 720)
+        self.assertIsNone(ytfetch.unplayable({'formats': [https, hls]}))
+        for live in ('is_live', 'is_upcoming', 'post_live'):
+            self.assertEqual(ytfetch.unplayable({'live_status': live, 'formats': [https]}),
+                             "Live videos can't be played yet")
+        self.assertIn("can't play", ytfetch.unplayable({'formats': [hls]}))
+        self.assertEqual(ytfetch.unplayable({'formats': [dict(https, vcodec='vp09')]}), 'no avc1 video')
+
+    @unittest.skipUnless(os.path.isfile(PYZ), 'no build/ytdlp.pyz')
+    def test_video_pick_is_never_hls(self):
+        import types
+        # as on the car (load_ytdlp): a stub certifi, so a broken one on this computer can't break the import
+        sys.modules.setdefault('certifi', types.SimpleNamespace(where=lambda: os.devnull, contents=lambda: ''))
+        sys.path.insert(0, PYZ)
+        import yt_dlp
+        ydl = yt_dlp.YoutubeDL({'format': ytfetch.video_fmt(720), 'quiet': True, 'no_warnings': True})
+        info = {'id': 'x', 'title': 't', 'extractor': 'test', 'extractor_key': 'Test',
+                'webpage_url': 'https://example.invalid/x',
+                'formats': [vfmt('h720', 'm3u8_native', 720), vfmt('v480', 'https', 480)]}
+        r = ydl.process_ie_result(info, download=False)
+        self.assertEqual(r['format_id'], 'v480', 'an https 480p over an HLS 720p')
+
+
 def online():
     try:
         socket.create_connection(('www.youtube.com', 443), 3).close()

@@ -8,6 +8,13 @@
   "Đorđe / Ђорђе") keep their accents. It covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian
   and Kazakh. Latin-only text draws as before. The app grows by about 1 MiB (the companion fonts).
 
+## Service 0.3.10
+
+- A live video (or a premiere, or a live that just ended) now fails at once with "Live videos can't be played yet",
+  with no retries. Before, it failed after two retries with yt-dlp's "m3u8 download detected but ffmpeg could not be found" (#2). YouTube offers those only as
+  HLS, which needs ffmpeg, and the head unit has none.
+- The video is picked from the plain https formats only, so an HLS format is never chosen for a normal video.
+
 ## Service 0.3.9
 
 - Videos play again: each video's folder was 0700, so BMW's media engine (its own uid) could not open the audio

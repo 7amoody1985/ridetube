@@ -211,13 +211,43 @@ async function clientAndModel() {
     d.send({ ev: 'feed', which: 'wl', error: 'feed offline' });
     await until(() => m.feeds.wl.error === 'feed offline', 2000, 'feed error');
     assert.strictEqual(m.error, null, 'a feed error is not a playback error');
+
+    // playlists: asked once at a time; bad ids dropped; a count only when a number; the tile's picture (a video id)
+    // is asked like a video's; a playlist's videos, and another playlist's late answer ignored
+    assert.ok(m.loadPlaylists() && !m.loadPlaylists() && m.pls.loading, 'one playlists request at a time');
+    await lastIs(d, { cmd: 'playlists' });
+    d.send({ ev: 'playlists', items: [{ id: 'PLaaaaaaaaaa', title: 'Drives', count: 3, meta: ['Private', 7], thumb: 'plthumb0001' },
+        { id: 'LL', title: 'Liked videos', count: null, thumb: 'bad' }, { id: 'no spaces', title: 'Bad' }, { title: 'No id' }] });
+    await until(() => m.pls.items.length, 2000, 'playlists');
+    assert.deepStrictEqual(m.pls.items, [{ id: 'PLaaaaaaaaaa', title: 'Drives', count: 3, meta: ['Private'], thumb: 'plthumb0001' },
+        { id: 'LL', title: 'Liked videos', count: null, meta: [], thumb: null }], 'checked');
+    assert.ok(m.wantThumb('plthumb0001'), "a playlist's picture is asked as its video's");
+    d.send({ ev: 'thumb', id: 'plthumb0001', w: 320, h: 180, rgba: Buffer.alloc(320 * 180 * 4, 3).toString('base64') });
+    await until(() => m.thumbs.plthumb0001, 2000, 'playlist picture kept');
+    assert.ok(m.openPlaylist('PLaaaaaaaaaa', 'Drives') && m.plist.loading && m.plist.title === 'Drives', 'its name until it loads');
+    await lastIs(d, { cmd: 'playlist', id: 'PLaaaaaaaaaa' });
+    assert.strictEqual(m.openPlaylist('bad id'), false, 'a bad id is not sent');
+    d.send({ ev: 'playlist', id: 'PLbbbbbbbbbb', items: [{ id: 'other000001' }] });
+    d.send({ ev: 'playlist', id: 'PLaaaaaaaaaa', title: 'Drives (renamed)', items: [{ id: 'plvid000001', title: 'One' }, { id: 'plvid000002', title: 'Two' }, { bad: 1 }] });
+    await until(() => m.plist.items.length, 2000, 'playlist videos');
+    assert.deepStrictEqual([m.plist.title, m.plist.items.map((x) => x.id)], ['Drives (renamed)', ['plvid000001', 'plvid000002']], 'its videos, not the other one');
+    assert.ok(m.item('plvid000002') && m.wantThumb('plvid000002'), 'its videos are known (play, thumbs)');
+    m.openPlaylist('PLaaaaaaaaaa');
+    assert.ok(!m.checkFeeds(Date.now(), 15000) && m.checkFeeds(Date.now() + 16000, 15000) && /No answer/.test(m.plist.error), 'no answer in 15 s: an error');
+    assert.strictEqual(m.plist.items.length, 2, 'what it held stays shown');
+    // a daemon older than playlists: the page says so, not a playback error
+    m.pls.loading = false; m.loadPlaylists();
+    d.send({ ev: 'error', msg: 'unknown cmd playlists' });
+    await until(() => m.pls.error === 'unknown cmd playlists', 2000, 'older daemon');
+    assert.ok(!m.pls.loading && m.error === null, 'not a playback error');
     d.got.length = 0;
     assert.ok(m.signOut());
     await lastIs(d, { cmd: 'sign_out' });
     d.send({ ev: 'auth', state: 'signed_out' });
     await until(() => m.auth.state === 'signed_out', 2000, 'signed out again');
     assert.deepStrictEqual(m.feeds, {}, 'signed out: the feeds are gone');
-    assert.ok(!m.thumbs.sub3, 'and their thumbs');
+    assert.ok(!m.thumbs.sub3 && !m.thumbs.plthumb0001, 'and their thumbs');
+    assert.ok(m.pls === null && m.plist === null, 'and the playlists');
     // an older daemon: no sign-in, and nothing shown as an error
     d.send({ ev: 'error', msg: 'unknown cmd auth_status' });
     await until(() => m.auth.state === 'unsupported', 2000, 'unsupported');

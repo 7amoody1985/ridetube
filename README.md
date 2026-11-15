@@ -17,8 +17,8 @@ Rendered on a computer with demo data (Blender open movie titles), not photograp
 RideTube plays videos on the BMW iDrive 7 head unit (MGU), installed from the MGU Store. Everything runs on
 the car, over the car's own internet connection:
 
-- **Home**, **Subscriptions** and **Watch later**, once you sign in on the car with the TV device sign-in (a
-  code to enter on your phone; RideTube never sees your password).
+- **Home**, **Subscriptions**, **Watch later** and your **Playlists**, once you sign in on the car with the TV
+  device sign-in (a code to enter on your phone; RideTube never sees your password).
 - Search, channel pages, chapters, the video quality and fill or fit for the picture.
 - Skip segments from [SponsorBlock](https://sponsor.ajay.app) (sponsors, self-promotion, intros and similar).
 - The sound plays through the car's own media player.

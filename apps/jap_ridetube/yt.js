@@ -4,7 +4,7 @@
  *
  *   Ctl    the control socket /run/jap-ridetube-d/ctl.sock: JSON lines, reconnects every 2 s.
  *          App -> daemon: search{q} thumb{id} play{id,rect:"WxH",fill} pause resume seek{ms} stop quality{quality} fill{on} video{on} status
- *                         auth_status auth sign_out feed{which:home|subs|wl} channels channel{id}
+ *                         auth_status auth sign_out feed{which:home|subs|wl} channels channel{id} playlists playlist{id}
  *          Daemon -> app: (a played video is deleted from the car once stopped; nothing is kept for offline)
  *                         results{q,items:[{id,title,channel,duration_s,meta?}]} thumb{id,w,h,rgba(base64)}: 160x90 or 320x180
  *                         state{state:idle|preparing|playing|paused|ended|error,pct,id,title} time{elapsed,total} error{msg}
@@ -13,6 +13,8 @@
  *                         absent or [] = none); meta: ["125K views","1 day ago"] as the service words them
  *                         channels{items:[{id,title,handle}]|error}: every subscription, A-Z
  *                         channel{id,items,shelves|error}: a channel's page
+ *                         playlists{items:[{id,title,count,meta,thumb}]|error}: the account's playlists (thumb: a video id)
+ *                         playlist{id,title?,items|error}: a playlist's videos
  *          Thumbs are asked lazily (Model.wantThumb, from the screens' draw path): only for the tiles drawn.
  *          The daemon signs in itself (TV device sign-in) and keeps the tokens; none come here.
  *          The daemon stops playback within 1 s of this socket closing, so the app keeps it open hidden too.
@@ -26,6 +28,9 @@ const FEEDS = ['home', 'subs', 'wl'];
 const FEED_MAX = 20;                 // a feed's flat list (its pictures: as many as drawn, main.js's pool)
 const SHELVES = 8, SHELF_MAX = 12;   // a feed's shelves, the videos in each
 const SIZES = ['160x90', '320x180']; // the thumb sizes the daemon sends
+const PL_RE = /^[\w-]{2,64}$/, VID_RE = /^[\w-]{11}$/;   // a playlist id (PL..., LL, OLAK5uy_...), a video id
+const isPl = (x) => typeof x === 'string' && PL_RE.test(x), isVid = (x) => typeof x === 'string' && VID_RE.test(x);
+const PL_MAX = 60, PL_ITEMS = 50;    // the playlists shown, the videos of one
 
 class Ctl {
     constructor(path, log) {
@@ -107,6 +112,8 @@ class Model {
         this.toast = null;           // {text, until}: a skipped sponsor
         this.chans = null;           // the subscribed channels: {items:[{id,title,handle}], loading, error, t}
         this.chan = null;            // the channel page shown: {id, title, items, shelves, loading, error, t}
+        this.pls = null;             // the account's playlists: {items:[{id,title,count,meta,thumb}], loading, error, t}
+        this.plist = null;           // the playlist shown: {id, title, items, loading, error, t}
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
@@ -150,7 +157,7 @@ class Model {
             if (this.state === 'playing' && was !== 'playing' && was !== 'paused') { this.videoOn = null; this._video(); }
         } else if (m.ev === 'auth') {
             this.auth = { state: String(m.state || 'signed_out'), code: m.code ? String(m.code) : null, url: typeof m.url === 'string' ? m.url : null, msg: m.msg ? String(m.msg) : null };
-            if (this.auth.state !== 'signed_in') { this.feeds = {}; this.chans = null; this.chan = null; this._prune(); }   // signed out: nobody's feed left on screen
+            if (this.auth.state !== 'signed_in') { this.feeds = {}; this.chans = null; this.chan = null; this.pls = null; this.plist = null; this._prune(); }   // signed out: nobody's feed left on screen
         } else if (m.ev === 'channels') {
             if (!this.chans) return;
             this.chans.loading = false;
@@ -167,6 +174,25 @@ class Model {
                 c.error = null; c.items = valid(m.items, FEED_MAX);
                 c.shelves = (Array.isArray(m.shelves) ? m.shelves : []).filter((x) => x && typeof x === 'object')
                     .map((x) => ({ title: String(x.title || ''), items: valid(x.items, SHELF_MAX) })).filter((x) => x.items.length).slice(0, SHELVES);
+                this._prune();
+            }
+        } else if (m.ev === 'playlists') {
+            if (!this.pls) return;
+            this.pls.loading = false;
+            if (m.error) this.pls.error = String(m.error); else {
+                this.pls.error = null;
+                this.pls.items = (Array.isArray(m.items) ? m.items : []).filter((p) => p && isPl(p.id)).slice(0, PL_MAX)
+                    .map((p) => ({ id: p.id, title: String(p.title || p.id), count: typeof p.count === 'number' && p.count >= 0 ? p.count : null,
+                        meta: (Array.isArray(p.meta) ? p.meta : []).filter((x) => typeof x === 'string' && x), thumb: isVid(p.thumb) ? p.thumb : null }));
+                this._prune();
+            }
+        } else if (m.ev === 'playlist') {
+            const p = this.plist;
+            if (!p || m.id !== p.id) return;                                          // another playlist's late answer
+            p.loading = false;
+            if (m.error) p.error = String(m.error); else {
+                p.error = null; p.items = valid(m.items, PL_ITEMS);
+                if (m.title) p.title = String(m.title);
                 this._prune();
             }
         } else if (m.ev === 'feed') {
@@ -200,6 +226,11 @@ class Model {
         } else if (m.ev === 'error') {
             // a daemon older than the account commands: no sign-in, nothing wrong with playback
             if (/^unknown cmd (auth|auth_status|sign_out|feed)$/.test(m.msg)) { this.auth = { state: 'unsupported', code: null, url: null, msg: null }; this._changed(); return; }
+            // a daemon older than playlists: the Playlists page says so, nothing wrong with playback
+            if (/^unknown cmd playlists?$/.test(m.msg)) {
+                [this.pls, this.plist].forEach((p) => { if (p && p.loading) { p.loading = false; p.error = 'unknown cmd playlists'; } });
+                this._changed(); return;
+            }
             this.error = String(m.msg || 'error');
             if (this.searching) { this.searching = false; this.searchError = this.error; }
         } else return;
@@ -209,14 +240,17 @@ class Model {
     _items() {
         const f = FEEDS.map((w) => this.feeds[w]).filter(Boolean);
         if (this.chan) f.push(this.chan);
+        if (this.plist) f.push(this.plist);
         return this.results.concat(this.resume, ...f.map((x) => x.items || []), ...f.map((x) => [].concat(...(x.shelves || []).map((s) => s.items))));
     }
-    _known(id) { return this._items().some((r) => r.id === id); }
+    /** the videos whose pictures the playlist tiles show */
+    _plThumbs() { return ((this.pls && this.pls.items) || []).map((p) => p.thumb).filter(Boolean); }
+    _known(id) { return this._items().some((r) => r.id === id) || this._plThumbs().indexOf(id) >= 0; }
     /** an item by its id (the first list that has it), or null */
     item(id) { return this._items().find((r) => r.id === id) || null; }
     /** drop the thumbs (and the requests) of ids no list shows any more */
     _prune() {
-        const ids = new Set(this._items().map((r) => r.id));
+        const ids = new Set(this._items().map((r) => r.id).concat(this._plThumbs()));
         Object.keys(this.thumbs).forEach((id) => { if (!ids.has(id)) delete this.thumbs[id]; });
         this.pending.forEach((id) => { if (!ids.has(id)) this.pending.delete(id); });
     }
@@ -300,7 +334,7 @@ class Model {
     /** a feed with no answer after ms: an error, as for searches */
     checkFeeds(now, ms) {
         let any = false;
-        FEEDS.map((w) => this.feeds[w]).concat([this.chans, this.chan])
+        FEEDS.map((w) => this.feeds[w]).concat([this.chans, this.chan, this.pls, this.plist])
             .forEach((f) => { if (f && f.loading && now - f.t >= ms) { f.loading = false; f.error = 'No answer from the RideTube service'; any = true; } });
         if (any) this._changed();
         return any;
@@ -337,6 +371,28 @@ class Model {
         this._changed();
         if (this.send({ cmd: 'channel', id })) return true;
         c.loading = false; c.error = 'The RideTube service (jap-ridetube-d) is not running';
+        return false;
+    }
+    /** (re)load the account's playlists; the ones held stay shown meanwhile */
+    loadPlaylists() {
+        const p = this.pls = this.pls || { items: [] };
+        if (p.loading || this.auth.state !== 'signed_in') return false;
+        p.loading = true; p.error = null; p.t = Date.now();
+        this._changed();
+        if (this.send({ cmd: 'playlists' })) return true;
+        p.loading = false; p.error = 'The RideTube service (jap-ridetube-d) is not running';
+        return false;
+    }
+    /** show playlist id's videos (title: its name, until it loads) */
+    openPlaylist(id, title) {
+        if (!isPl(id)) return false;
+        if (!this.plist || this.plist.id !== id) { this.plist = { id, title: String(title || ''), items: [] }; this._prune(); }
+        const p = this.plist;
+        if (p.loading) return false;
+        p.loading = true; p.error = null; p.t = Date.now();
+        this._changed();
+        if (this.send({ cmd: 'playlist', id })) return true;
+        p.loading = false; p.error = 'The RideTube service (jap-ridetube-d) is not running';
         return false;
     }
     /** video wanted (player on screen and the car parked): tells the daemon when that changes */

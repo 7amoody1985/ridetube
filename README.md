@@ -42,10 +42,12 @@ the car, over the car's own internet connection:
 In the MGU Store, add the source
 
 ```
-JustAnotherPU/ridetube:releases
+JustAnotherPU/ridetube
 ```
 
-Add `JustAnotherPU/mgu-apps:releases` too (it is a default source once accepted): it has `jap-node22`, the
+and pick **Releases** when the Store asks what to follow. Type only `owner/repo`: the Store refuses a `:releases` at the end.
+
+Add `JustAnotherPU/mgu-apps` on Releases too (it is a default source once accepted): it has `jap-node22`, the
 Node.js 22 that RideTube's service runs on. Then install RideTube. The Store installs its service
 (`jap-ridetube-d`, the player, the yt-dlp fetcher and the video decoder) and, from mgu-apps, `jap-node22` with it.
 

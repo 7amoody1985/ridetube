@@ -780,12 +780,12 @@ mgu.run({
                 });
                 big('ov:ff', mid + 100, 58, false, () => model.skip(10000), num('+10', mid + 100));
             }
+            else if (model.state === 'error' && model.id) big('ov:play', mid - 100, 72, true, again, (c) => retryGlyph(cv, mid - 100, cy, 30, c));
             if (model.active()) {
                 // Close, after the other controls (Next takes mid + 300 when something plays next)
                 const kx = mid + (queue.length ? 500 : 300);
                 big('ov:close', kx, 58, false, closeVideo, (c) => xGlyph(cv, kx, cy, 20, c));
             }
-            else if (model.state === 'error' && model.id) big('ov:play', mid - 100, 72, true, again, (c) => retryGlyph(cv, mid - 100, cy, 30, c));
             if (queue.length) {
                 const nx = mid + 300;
                 big('ov:next', nx, 58, false, () => { const r = queue.shift(); play(r.id, r); }, (c) => {

@@ -46,9 +46,25 @@ HEAD_MIN_MS = 60000  # audio.head.m4a covers at least this, and 1.5x the rest's 
 
 
 def video_fmt(h):
+    # https only: an HLS (m3u8) pick needs ffmpeg, which the head unit doesn't have
     lo = h * 9 // 10
-    return (f'bv[vcodec^=avc1][height<={h}][height>={lo}][fps<=30]'
-            f'/bv[vcodec^=avc1][height<={h}][fps<=30]/bv[vcodec^=avc1][height<={h}]')
+    v = 'bv[vcodec^=avc1][protocol=https]'
+    return f'{v}[height<={h}][height>={lo}][fps<=30]/{v}[height<={h}][fps<=30]/{v}[height<={h}]'
+
+
+LIVE = ('is_live', 'is_upcoming', 'post_live')  # YouTube offers these as HLS only, until the live is processed
+
+
+def unplayable(info):
+    """Why this video can't be played, shown to the user as is; None when it can."""
+    if info.get('is_live') or info.get('live_status') in LIVE:
+        return "Live videos can't be played yet"
+    fs = info.get('formats') or []
+    if not any((f.get('vcodec') or '').startswith('avc1') for f in fs):
+        return 'no avc1 video'
+    if not any((f.get('vcodec') or '').startswith('avc1') and f.get('protocol') in (None, 'https') for f in fs):
+        return "This video is only offered as a stream RideTube can't play yet"
+    return None
 
 
 # ---------------------------------------------------------------- events
@@ -809,8 +825,9 @@ def fetch(a):
         json.dump(meta, f)
     os.replace(os.path.join(a.dir, 'meta.json.tmp'), os.path.join(a.dir, 'meta.json'))
     emit(ev='meta', title=meta['title'], duration_s=meta['duration_s'], chapters=meta['chapters'])
-    if not any((x.get('vcodec') or '').startswith('avc1') for x in info.get('formats') or []):
-        fail('no avc1 video')
+    why = unplayable(info)
+    if why:
+        fail(why)
 
     def audio():
         try:

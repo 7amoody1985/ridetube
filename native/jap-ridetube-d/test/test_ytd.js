@@ -1170,6 +1170,83 @@ async function main() {
             { id: 'UCdemo000000000000000002', title: 'Seven Demo', handle: '' }]);
     });
 
+    await t('playlists: the TV Playlists page tiles -> id, name, count, meta, the picture\'s video; Watch later, videos and repeats skipped', async () => {
+        const { playlistTiles, playlistTitle, addToPlaylistItems } = require('../ytd.js');
+        // as FEplaylist_aggregation answers (TVHTML5, 2026-11): a gridRenderer of tiles, the count on the thumbnail's
+        // overlay ("No videos", "1 video", "12 videos"), one lineRenderer a text, no_thumbnail.jpg when empty
+        const line = (...txt) => ({ lineRenderer: { items: txt.map((x) => ({ lineItemRenderer: { text: { simpleText: x } } })) } });
+        const tile = (id, type, title, lines, count, pic, o) => ({ tileRenderer: Object.assign({ style: 'TILE_STYLE_YTLR_DEFAULT', contentId: id, contentType: type,
+            onSelectCommand: { browseEndpoint: { browseId: 'VL' + id } },
+            header: { tileHeaderRenderer: { thumbnail: { thumbnails: [{ url: pic ? 'https://i.ytimg.com/vi/' + pic + '/hqdefault.jpg' : 'https://i.ytimg.com/img/no_thumbnail.jpg', width: 480, height: 360 }] },
+                thumbnailOverlays: [{ thumbnailOverlayTimeStatusRenderer: { text: { runs: [{ text: count }] }, style: 'DEFAULT', icon: { iconType: 'PLAYLISTS' } } },
+                    { thumbnailOverlayStackingEffectRenderer: {} }] } },
+            metadata: { tileMetadataRenderer: { title: { simpleText: title }, lines: lines } } }, o || {}) });
+        const page = { contents: { tvBrowseRenderer: { content: { tvSurfaceContentRenderer: { content: { gridRenderer: { items: [
+            tile('WL', 'TILE_CONTENT_TYPE_PLAYLIST', 'Watch later', [line('Private'), line('Updated today')], 'No videos'),
+            tile('PLdemo00000000000000000000000001', 'TILE_CONTENT_TYPE_PLAYLIST', 'Road trip', [line('Private'), line('Updated today')], '12 videos', 'DemoVideo01'),
+            tile('DemoVideo01', 'TILE_CONTENT_TYPE_VIDEO', 'a video', [], '1:00'),
+            tile('LL', 'TILE_CONTENT_TYPE_PLAYLIST', 'Liked videos', [line('Private')], 'No videos'),
+            tile('PLdemo00000000000000000000000003', 'TILE_CONTENT_TYPE_PLAYLIST', 'One', [line('Public', '•', 'Updated 3 days ago')], '1 video', null,
+                { onSelectCommand: { watchEndpoint: { videoId: 'DemoVideo04', playlistId: 'PLdemo00000000000000000000000003' } } }),
+            tile('PLdemo00000000000000000000000001', 'TILE_CONTENT_TYPE_PLAYLIST', 'Road trip', [], '12 videos')] } } } } } },
+            // lockups (the web's newer format; not seen from TVHTML5 yet): the playlist id in the tap command, the count on a badge
+            more: { lockupViewModel: { contentId: 'PLdemo00000000000000000000000002', contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST',
+                contentImage: { collectionThumbnailViewModel: { primaryThumbnail: { thumbnailViewModel: {
+                    image: { sources: [{ url: 'https://i.ytimg.com/vi/DemoVideo03/hqdefault.jpg' }] },
+                    overlays: [{ thumbnailOverlayBadgeViewModel: { thumbnailBadges: [{ thumbnailBadgeViewModel: { text: '1,204 videos' } }] } }] } } } },
+                metadata: { lockupMetadataViewModel: { title: { content: 'Everything' } } },
+                rendererContext: { commandContext: { onTap: { innertubeCommand: { browseEndpoint: { browseId: 'VLPLdemo00000000000000000000000002' } } } } } } } };
+        assert.deepStrictEqual(playlistTiles(page), [
+            { id: 'PLdemo00000000000000000000000001', title: 'Road trip', count: 12, meta: ['Private', 'Updated today'], thumb: 'DemoVideo01' },
+            { id: 'LL', title: 'Liked videos', count: 0, meta: ['Private'], thumb: null },
+            { id: 'PLdemo00000000000000000000000003', title: 'One', count: 1, meta: ['Public', 'Updated 3 days ago'], thumb: 'DemoVideo04' },
+            { id: 'PLdemo00000000000000000000000002', title: 'Everything', count: 1204, meta: [], thumb: 'DemoVideo03' }]);
+        assert.deepStrictEqual(playlistTiles({ tileRenderer: { contentType: 'TILE_CONTENT_TYPE_PLAYLIST' } }), [], 'no id: skipped');
+        // a playlist's page (VL + id): its name in the TV header, else the web's
+        const entity = { contents: { tvBrowseRenderer: { content: { tvSurfaceContentRenderer: { content: { twoColumnRenderer: {
+            leftColumn: { entityMetadataRenderer: { title: { simpleText: 'Liked videos' }, bylines: [line('Private', '•', 'No videos')] } },
+            rightColumn: { genericPromoRenderer: { bodyText: { simpleText: 'No videos in this playlist yet' } } } } } } } } } };
+        assert.strictEqual(playlistTitle(entity), 'Liked videos');
+        assert.strictEqual(playlistTitle({ header: { playlistHeaderRenderer: { title: { runs: [{ text: 'Road ' }, { text: 'trip' }] } } } }), 'Road trip');
+        assert.strictEqual(playlistTitle({}), '');
+        // the Save to playlist list (the fallback): ids, names, privacy; Watch later skipped
+        const opt = (id, title, privacy, pic) => ({ playlistAddToOptionRenderer: { playlistId: id, title: { simpleText: title }, privacy: privacy, containsSelectedVideos: 'NONE',
+            thumbnailRenderer: pic ? { playlistVideoThumbnailRenderer: { thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/' + pic + '/default.jpg' }] } } } : {} } });
+        assert.deepStrictEqual(addToPlaylistItems({ contents: [{ addToPlaylistRenderer: { playlists: [opt('WL', 'Watch later', 'PRIVATE'),
+            opt('PLdemo00000000000000000000000001', 'Road trip', 'UNLISTED', 'DemoVideo01'), opt('bad id', 'Bad', 'PUBLIC')] } }] }), [
+            { id: 'PLdemo00000000000000000000000001', title: 'Road trip', count: null, meta: ['Unlisted'], thumb: 'DemoVideo01' }]);
+    });
+
+    await t('playlists: the TV page; the Save to playlist list when the page refuses or lists none; its error only when both fail', async () => {
+        const { Account } = require('../ytd.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pl-')), file = path.join(dir, 'account.json');
+        fs.writeFileSync(file, JSON.stringify({ cid: 'c', sec: 's', access: 'tok', refresh: 'r', exp: Date.now() + 3600000 }));
+        const tvTile = { tileRenderer: { contentId: 'PLtv', contentType: 'TILE_CONTENT_TYPE_PLAYLIST', onSelectCommand: { browseEndpoint: { browseId: 'VLPLtv' } },
+            metadata: { tileMetadataRenderer: { title: { simpleText: 'From the page' } } } } };
+        const saveList = { contents: [{ addToPlaylistRenderer: { playlists: [{ playlistAddToOptionRenderer: { playlistId: 'PLsave', title: { simpleText: 'From the list' }, privacy: 'PRIVATE' } }] } }] };
+        const run = async (page, list) => {
+            const asked = [], evs = [], logs2 = [];
+            const yt = (method, url) => {
+                asked.push(/browse/.test(url) ? 'page' : 'list');
+                const a = /browse/.test(url) ? page : list;
+                return Promise.resolve({ status: a[0], body: JSON.stringify(a[1]) });
+            };
+            await new Account({ accountFile: file, ytRequest: yt, ytTimeoutMs: 1000, log: (m) => logs2.push(m) }, (e) => evs.push(e)).playlists();
+            return { asked, ev: evs[0], logs: logs2 };
+        };
+        let x = await run([200, { contents: tvTile }], [200, saveList]);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((p) => p.title)], [['page'], ['From the page']], 'the page lists some: the list not asked');
+        x = await run([404, {}], [200, saveList]);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((p) => p.title)], [['page', 'list'], ['From the list']], 'the page refuses: the list');
+        x = await run([200, { contents: { somethingNew: {} } }], [200, saveList]);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((p) => p.title)], [['page', 'list'], ['From the list']], 'the page answers, nothing we read: the list');
+        x = await run([200, { contents: {} }], [500, {}]);
+        assert.deepStrictEqual([x.ev.items, x.ev.error], [[], undefined], 'the page empty, the list failing: the page\'s empty answer');
+        assert.ok(x.logs.some((m) => /none on the page, save list 500/.test(m)), 'logged');
+        x = await run([404, {}], [500, {}]);
+        assert.deepStrictEqual([x.ev.items, x.ev.error], [undefined, 'feed offline'], 'both fail: offline');
+    });
+
     await t('LRU keeps 6 newest, never the playing one', async () => {
         const lru = path.join(tmp, 'lru');
         fs.mkdirSync(lru);

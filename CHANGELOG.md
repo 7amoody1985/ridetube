@@ -1,5 +1,14 @@
 # Changelog
 
+## App 0.3.10
+
+- Playlists: a new page on the rail and in the Search menu with your playlists (Liked videos and the ones you
+  made or saved), each with its first video's picture and its video count. A playlist opens as its videos; one
+  played goes on through the rest of the playlist. Members-only videos are left out unless the setting is on, as
+  in Watch later. Needs service 0.3.10: an older one says so on the page.
+- A video played from a grid (Watch later, search results, a playlist) goes on through the whole grid, not just
+  the rest of its row of four.
+
 ## App 0.3.9
 
 - Close: the player's overlay (middle left), the podcast view while driving (after the controls) and the HMI menu
@@ -8,6 +17,8 @@
 
 ## Service 0.3.10
 
+- Playlists: `playlists` lists the account's playlists from the TV app's Playlists page, or from the Save to
+  playlist list when that page refuses or lists none; `playlist` gives one playlist's videos.
 - A live video (or a premiere, or a live that just ended) now fails at once with "Live videos can't be played
   yet", with no retries. Before, it failed after two retries with yt-dlp's "m3u8 download detected but ffmpeg
   could not be found" (#2). YouTube offers those only as HLS, which needs ffmpeg, and the head unit has none.

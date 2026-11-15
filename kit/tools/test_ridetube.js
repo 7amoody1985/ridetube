@@ -211,13 +211,43 @@ async function clientAndModel() {
     d.send({ ev: 'feed', which: 'wl', error: 'feed offline' });
     await until(() => m.feeds.wl.error === 'feed offline', 2000, 'feed error');
     assert.strictEqual(m.error, null, 'a feed error is not a playback error');
+
+    // playlists: asked once at a time; bad ids dropped; a count only when a number; the tile's picture (a video id)
+    // is asked like a video's; a playlist's videos, and another playlist's late answer ignored
+    assert.ok(m.loadPlaylists() && !m.loadPlaylists() && m.pls.loading, 'one playlists request at a time');
+    await lastIs(d, { cmd: 'playlists' });
+    d.send({ ev: 'playlists', items: [{ id: 'PLaaaaaaaaaa', title: 'Drives', count: 3, meta: ['Private', 7], thumb: 'plthumb0001' },
+        { id: 'LL', title: 'Liked videos', count: null, thumb: 'bad' }, { id: 'no spaces', title: 'Bad' }, { title: 'No id' }] });
+    await until(() => m.pls.items.length, 2000, 'playlists');
+    assert.deepStrictEqual(m.pls.items, [{ id: 'PLaaaaaaaaaa', title: 'Drives', count: 3, meta: ['Private'], thumb: 'plthumb0001' },
+        { id: 'LL', title: 'Liked videos', count: null, meta: [], thumb: null }], 'checked');
+    assert.ok(m.wantThumb('plthumb0001'), "a playlist's picture is asked as its video's");
+    d.send({ ev: 'thumb', id: 'plthumb0001', w: 320, h: 180, rgba: Buffer.alloc(320 * 180 * 4, 3).toString('base64') });
+    await until(() => m.thumbs.plthumb0001, 2000, 'playlist picture kept');
+    assert.ok(m.openPlaylist('PLaaaaaaaaaa', 'Drives') && m.plist.loading && m.plist.title === 'Drives', 'its name until it loads');
+    await lastIs(d, { cmd: 'playlist', id: 'PLaaaaaaaaaa' });
+    assert.strictEqual(m.openPlaylist('bad id'), false, 'a bad id is not sent');
+    d.send({ ev: 'playlist', id: 'PLbbbbbbbbbb', items: [{ id: 'other000001' }] });
+    d.send({ ev: 'playlist', id: 'PLaaaaaaaaaa', title: 'Drives (renamed)', items: [{ id: 'plvid000001', title: 'One' }, { id: 'plvid000002', title: 'Two' }, { bad: 1 }] });
+    await until(() => m.plist.items.length, 2000, 'playlist videos');
+    assert.deepStrictEqual([m.plist.title, m.plist.items.map((x) => x.id)], ['Drives (renamed)', ['plvid000001', 'plvid000002']], 'its videos, not the other one');
+    assert.ok(m.item('plvid000002') && m.wantThumb('plvid000002'), 'its videos are known (play, thumbs)');
+    m.openPlaylist('PLaaaaaaaaaa');
+    assert.ok(!m.checkFeeds(Date.now(), 15000) && m.checkFeeds(Date.now() + 16000, 15000) && /No answer/.test(m.plist.error), 'no answer in 15 s: an error');
+    assert.strictEqual(m.plist.items.length, 2, 'what it held stays shown');
+    // a daemon older than playlists: the page says so, not a playback error
+    m.pls.loading = false; m.loadPlaylists();
+    d.send({ ev: 'error', msg: 'unknown cmd playlists' });
+    await until(() => m.pls.error === 'unknown cmd playlists', 2000, 'older daemon');
+    assert.ok(!m.pls.loading && m.error === null, 'not a playback error');
     d.got.length = 0;
     assert.ok(m.signOut());
     await lastIs(d, { cmd: 'sign_out' });
     d.send({ ev: 'auth', state: 'signed_out' });
     await until(() => m.auth.state === 'signed_out', 2000, 'signed out again');
     assert.deepStrictEqual(m.feeds, {}, 'signed out: the feeds are gone');
-    assert.ok(!m.thumbs.sub3, 'and their thumbs');
+    assert.ok(!m.thumbs.sub3 && !m.thumbs.plthumb0001, 'and their thumbs');
+    assert.ok(m.pls === null && m.plist === null, 'and the playlists');
     // an older daemon: no sign-in, and nothing shown as an error
     d.send({ ev: 'error', msg: 'unknown cmd auth_status' });
     await until(() => m.auth.state === 'unsupported', 2000, 'unsupported');
@@ -693,6 +723,34 @@ async function appFrames() {
         for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'); k++) { await sleep(200); await hu.loopFn(); }
         assert.ok(d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'), 'the next one in the row plays');
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
+
+        // Playlists: a playlist plays on past its grid's row of four; members-only videos left out (the setting's default)
+        hu.handlers.BTN_PL();
+        await until(() => d.cmds('playlists').length, 2000, 'Playlists asked');
+        d.send({ ev: 'playlists', items: [{ id: 'PLtest000001', title: 'Six', count: 6, meta: ['Private'], thumb: 'plvideo0001' }] });
+        let pt = null;
+        for (let k = 0; k < 100 && !(pt = at(/^p:\d+:PLtest000001$/)); k++) { await sleep(20); await hu.loopFn(); }
+        assert.ok(pt, 'the playlist tile: ' + disp.pageTargets.map((x) => x.key).slice(0, 10));
+        pt.run();
+        await until(() => d.cmds('playlist').length, 2000, 'its videos asked');
+        assert.deepStrictEqual(d.cmds('playlist')[0], { cmd: 'playlist', id: 'PLtest000001' });
+        const six = Array.from({ length: 6 }, (_, i) => ({ id: 'plvideo000' + (i + 1), title: 'Part ' + (i + 1), channel: 'C', duration_s: 60 }));
+        six[1].members = true;
+        d.send({ ev: 'playlist', id: 'PLtest000001', title: 'Six', items: six });
+        let fifth = null;
+        for (let k = 0; k < 100 && !(fifth = at(/^l:\d+:plvideo0005$/)); k++) { await sleep(20); await hu.loopFn(); }
+        assert.ok(fifth, 'its videos: ' + disp.pageTargets.map((x) => x.key).slice(0, 10));
+        assert.ok(!at(/^l:\d+:plvideo0002$/), 'the members-only one left out');
+        await sleep(300); await drawn();   // (a frame redrawn: the app redraws a changed page, else every 250 ms)
+        assert.ok(texts.indexOf('5 videos · 1 hidden') >= 0, 'and said so: ' + texts.slice(0, 12).join('|'));
+        // shown: 1 3 4 5 | 6 - the 5th ends the first row; the 6th, on the next row, plays after it
+        fifth.run();
+        await until(() => (d.cmds('play').slice(-1)[0] || {}).id === 'plvideo0005', 2000, 'played');
+        d.send({ ev: 'state', state: 'playing', id: 'plvideo0005' });
+        d.send({ ev: 'state', state: 'ended', id: 'plvideo0005' });
+        for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'plvideo0006'); k++) { await sleep(200); await hu.loopFn(); }
+        assert.ok(d.cmds('play').some((x) => x.id === 'plvideo0006'), 'the next one in the playlist plays, on the next row');
+        console.log('ok   playlists: a playlist plays on past its row of four; members-only videos left out');
     }
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();

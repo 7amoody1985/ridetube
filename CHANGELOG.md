@@ -2,8 +2,8 @@
 
 ## Service 0.3.10
 
-- A live video (or a premiere, or a live that just ended) now says "Live videos can't be played yet". Before, it
-  failed with yt-dlp's "m3u8 download detected but ffmpeg could not be found" (#2). YouTube offers those only as
+- A live video (or a premiere, or a live that just ended) now fails at once with "Live videos can't be played yet",
+  with no retries. Before, it failed after two retries with yt-dlp's "m3u8 download detected but ffmpeg could not be found" (#2). YouTube offers those only as
   HLS, which needs ffmpeg, and the head unit has none.
 - The video is picked from the plain https formats only, so an HLS format is never chosen for a normal video.
 

@@ -13,9 +13,10 @@ Ubuntu[wdth,wght].ttf. Without them on this machine, the same environment in Doc
   python3 kit/tools/bake_fonts.py --cyrillic   # only the Cyrillic companions (<family>_cyr.json), below
 
 Cyrillic companions: fonts.js draws a string holding Cyrillic (video titles, channel names) with <family>_cyr,
-the same weight and sizes as its family, with ASCII, the punctuation and the Cyrillic letters. They are baked on
-their own so the main atlases stay as they are: atlases are shared between apps by family and size, and a rebake
-with another Pillow or FreeType moves every glyph by a pixel or two. Each has a cacheKey (its own content's hash).
+the same weight, sizes and characters as its family (all of TEXT: a mixed title keeps its é, đ, ł), plus the
+Cyrillic letters. They are baked on their own so the main atlases stay as they are: atlases are shared between apps
+by family and size, and a rebake with another Pillow or FreeType moves every glyph by a pixel or two. Each has a
+cacheKey (its own content's hash).
 """
 import base64, hashlib, json, os, sys, zlib
 from PIL import Image, ImageDraw, ImageFont
@@ -40,17 +41,12 @@ FAMILIES = {
 }
 
 # Cyrillic: Russian, Ukrainian, Belarusian, Bulgarian, Serbian and Macedonian (U+0400-U+045F), Ґ ґ, and the
-# letters Kazakh, Uzbek, Tatar, Bashkir, Kyrgyz and Mongolian add. With ASCII, the punctuation of TEXT and the
-# signs Cyrillic text uses (« » №), so a whole mixed title draws from one atlas.
-CYR_LETTERS = ''.join(chr(c) for c in list(range(0x400, 0x460)) + [0x490, 0x491, 0x492, 0x493, 0x496, 0x497, 0x49a, 0x49b,
+# letters Kazakh, Uzbek, Tatar, Bashkir, Kyrgyz and Mongolian add, and № (« » are in TEXT). A companion is its
+# family's sizes, each with that size's characters plus these, so a whole mixed title draws from one atlas
+# ("Café — Кофе", "Đorđe / Ђорђе") at the size asked: the digit-only sizes (num 64-150, light 110) too (units: км/ч).
+CYR_LETTERS = '№' + ''.join(chr(c) for c in list(range(0x400, 0x460)) + [0x490, 0x491, 0x492, 0x493, 0x496, 0x497, 0x49a, 0x49b,
     0x4a2, 0x4a3, 0x4ae, 0x4af, 0x4b0, 0x4b1, 0x4b2, 0x4b3, 0x4b6, 0x4b7, 0x4ba, 0x4bb, 0x4d8, 0x4d9, 0x4e8, 0x4e9])
-CYR_TEXT = ''.join(chr(c) for c in range(32, 127)) + ' «»№°·×' + '‘’‚“”„‹›–—…•€│↑↓→←✓✕' + CYR_LETTERS
-CYRILLIC = {
-    # companion: (the family it matches, its sizes)
-    'label_cyr': ('label', [18, 24, 32, 44]),
-    'bold_cyr':  ('bold', [24, 32, 44, 64]),
-    'num_cyr':   ('num', [40]),
-}
+CYRILLIC = ['label', 'bold', 'num', 'light']     # the families with a <family>_cyr companion (not gear: digits only)
 
 
 def load(fname, var, size):
@@ -105,9 +101,10 @@ def bake(fname, var, size, charset):
 
 
 def bake_cyrillic():
-    for name, (base, sizes) in CYRILLIC.items():
-        fname, var, _ = FAMILIES[base]
-        baked = [bake(fname, var, s, CYR_TEXT) for s in sizes]
+    for base in CYRILLIC:
+        name, (fname, var, sizes) = base + '_cyr', FAMILIES[base]
+        baked = [bake(fname, var, s, cs + CYR_LETTERS) for s, cs in sizes]
+        sizes = [s for s, _ in sizes]
         tall = [b['size'] for b in baked if b['atlasH'] > 2048]
         if tall:
             raise SystemExit(f'{name}: the {tall} px atlas is over 2048 px tall')

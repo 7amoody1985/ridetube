@@ -249,18 +249,27 @@ test('a new scale keeps the uploads (the renderer keeps them), a new size sends 
     } finally { t.end(); }
 });
 
-test('Cyrillic titles: every letter drawn, in the weight asked; Latin-only text keeps the main atlases', () => {
+test('Cyrillic titles: every letter drawn (accented Latin too), in the weight and size asked; Latin-only text keeps the main atlases', () => {
     const fonts = require('../runtime/fonts');
-    const title = 'Поправка a B58 — їжак, Ґанок, ўсё, Љубљана, Қазақ «№1»';
-    [['label', 18], ['label', 44], ['bold', 24], ['bold', 64], ['num', 40], ['light', 32]].forEach(([fam, size]) => {
-        const f = fonts.get(fam, size, title);
+    // mixed titles: the Cyrillic and the Latin with accents, all from the one companion atlas
+    const titles = ['Поправка a B58 — їжак, Ґанок, ўсё, Љубљана, Қазақ «№1»', 'Café — Кофе', 'Đorđe / Ђорђе', 'Łódź, Ærøskøbing · Straße · Москва'];
+    [['label', 18], ['label', 44], ['bold', 24], ['bold', 64], ['num', 40], ['light', 32], ['light', 64]].forEach(([fam, size]) => {
+        const f = fonts.get(fam, size, titles[0]);
         assert.ok(f, fam + ' ' + size);
-        assert.strictEqual(f.family, fam === 'light' ? 'label_cyr' : fam + '_cyr', fam + ': its own weight');
+        assert.deepStrictEqual([f.family, f.size], [fam + '_cyr', size], fam + ' ' + size + ': its own weight, at the size asked (not scaled up)');
         assert.ok(f.cacheKey, fam + ': a cache key (atlases are shared between apps by family and size)');
-        const missing = Array.from(title).filter((ch) => !f.glyphs[ch.codePointAt(0)]);
-        assert.deepStrictEqual(missing, [], fam + ' ' + size + ': no letter dropped');
+        // every character the family's own atlas has at this size, plus the Cyrillic letters
+        const main = fonts.get(fam, size, 'Latin'), lost = Object.keys(main.glyphs).filter((c) => !f.glyphs[c]);
+        assert.deepStrictEqual(lost, [], fam + ' ' + size + ': all of the main atlas\'s characters');
+        titles.forEach((t) => assert.deepStrictEqual(Array.from(t).filter((ch) => !f.glyphs[ch.codePointAt(0)]), [], fam + ' ' + size + ': nothing dropped from ' + t));
     });
-    ['label', 'bold', 'num'].forEach((fam) => assert.strictEqual(fonts.get(fam, 32, 'Rebuilding a B58').family, fam, fam + ': Latin as before'));
+    // the digit-only sizes (gauges): digits, units and Cyrillic units at the size asked
+    [['num', 64], ['num', 96], ['num', 150], ['light', 110]].forEach(([fam, size]) => {
+        const f = fonts.get(fam, size, '120 км/ч');
+        assert.deepStrictEqual([f.family, f.size], [fam + '_cyr', size], fam + ' ' + size + ': at its own size');
+        assert.deepStrictEqual(Array.from('120 км/ч 3,5 bar').filter((ch) => !f.glyphs[ch.codePointAt(0)]), [], fam + ' ' + size + ': the digits and units');
+    });
+    ['label', 'bold', 'num', 'light'].forEach((fam) => assert.strictEqual(fonts.get(fam, 32, 'Rebuilding a B58 · Café').family, fam, fam + ': Latin as before'));
 });
 
 (async () => {

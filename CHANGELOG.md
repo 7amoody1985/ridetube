@@ -1,5 +1,13 @@
 # Changelog
 
+## App (unreleased)
+
+- Cyrillic titles and channel names show every letter. The fonts the app draws with had only Latin letters, so
+  "Поправка a B58" lost all its Cyrillic. Text with Cyrillic now draws from a companion font of the same weight
+  and size, which also has every Latin letter the main fonts have, so mixed titles ("Café — Кофе",
+  "Đorđe / Ђорђе") keep their accents. It covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian
+  and Kazakh. Latin-only text draws as before. The app grows by about 1 MiB (the companion fonts).
+
 ## Service 0.3.9
 
 - Videos play again: each video's folder was 0700, so BMW's media engine (its own uid) could not open the audio

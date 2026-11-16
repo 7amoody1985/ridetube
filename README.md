@@ -23,9 +23,11 @@
 > - `tools/build_app.sh` and `tools/build_service.sh` build both packages without BMW's SDK or Docker (the kit's
 >   own build and the MGU Store's own packer; ytdec and yt-dlp from JustAnotherPU's published 0.3.8 service).
 >
-> **Install:** add `7amoody1985/mgu-apps:releases` in the Store and install **RideTube (fork)**; it brings
-> `mdq-ridetube-d`. Keep `JustAnotherPU/mgu-apps:releases`: Node.js 22 (`jap-node22`) comes from it.
-> JustAnotherPU's RideTube can stay installed beside it.
+> **Install:** this fork is a personal experiment and is not offered in a public Store source (until 2026-11-17
+> it was in `7amoody1985/mgu-apps`). To try it, build the packages with `tools/build_app.sh` and
+> `tools/build_service.sh` and install them from a USB stick or a source of your own. Keep
+> `JustAnotherPU/mgu-apps:releases`: Node.js 22 (`jap-node22`) comes from it. JustAnotherPU's RideTube can stay
+> installed beside it.
 
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
 > endorsed by or sponsored by Google or YouTube. Use it at your own risk. You are responsible for following
@@ -76,8 +78,8 @@ Add `JustAnotherPU/mgu-apps:releases` too (it is a default source once accepted)
 Node.js 22 that RideTube's service runs on. Then install RideTube. The Store installs its service
 (`jap-ridetube-d`, the player, the yt-dlp fetcher and the video decoder) and, from mgu-apps, `jap-node22` with it.
 
-(That is the original. This fork installs from `7amoody1985/mgu-apps:releases` as `mdq_ridetube` and
-`mdq-ridetube-d`: see the note at the top.)
+(That is the original. This fork installs as `mdq_ridetube` and `mdq-ridetube-d`, beside it: see the note at
+the top.)
 
 ## Settings
 

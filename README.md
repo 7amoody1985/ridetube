@@ -24,8 +24,8 @@ Rendered on a computer with demo data (Blender open movie titles), not photograp
 RideTube plays videos on the BMW iDrive 7 head unit (MGU), installed from the MGU Store. Everything runs on
 the car, over the car's own internet connection:
 
-- **Home**, **Subscriptions** and **Watch later**, once you sign in on the car with the TV device sign-in (a
-  code to enter on your phone; RideTube never sees your password).
+- **Home**, **Subscriptions**, **Watch later** and your **Playlists**, once you sign in on the car with the TV
+  device sign-in (a code to enter on your phone; RideTube never sees your password).
 - Search, channel pages, chapters, the video quality and fill or fit for the picture.
 - Skip segments from [SponsorBlock](https://sponsor.ajay.app) (sponsors, self-promotion, intros and similar).
 - The sound plays through the car's own media player.
@@ -49,10 +49,12 @@ the car, over the car's own internet connection:
 In the MGU Store, add the source
 
 ```
-JustAnotherPU/ridetube:releases
+JustAnotherPU/ridetube
 ```
 
-Add `JustAnotherPU/mgu-apps:releases` too (it is a default source once accepted): it has `jap-node22`, the
+and pick **Releases** when the Store asks what to follow. Type only `owner/repo`: the Store refuses a `:releases` at the end.
+
+Add `JustAnotherPU/mgu-apps` on Releases too (it is a default source once accepted): it has `jap-node22`, the
 Node.js 22 that RideTube's service runs on. Then install RideTube. The Store installs its service
 (`jap-ridetube-d`, the player, the yt-dlp fetcher and the video decoder) and, from mgu-apps, `jap-node22` with it.
 

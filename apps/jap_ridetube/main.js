@@ -7,12 +7,14 @@
  *
  * Screens (a TV-style dark look: navy, neon pink and cyan, big 16:9 tiles):
  *   VIEW  (first) drawn page. Browsing: an icon rail on the left (Search = the HMI menu, Home, Subscriptions,
- *         Watch later; the page shown lit, a pink mark) and, right of it, rows of tiles: a 320 x 180
+ *         Watch later, Playlists; the page shown lit, a pink mark) and, right of it, rows of tiles: a 320 x 180
  *         thumb (its length in a pill), the title in up to two lines, "channel · 125K views · 1 day ago".
  *           home     shelves, each titled, turned sideways on their own: Continue watching, the account's
  *                    Home shelves (daemon `feed` shelves; an older daemon: its flat list as a grid), Watch later
  *           subs     the account's Subscriptions shelves (or the flat list as a grid)
  *           wl / results   a grid, four a row: Watch later, a search's results
+ *           pl       the account's playlists, a grid (the first video's picture, the video count); one opens as
+ *           list     its videos, a grid (the controller pushed left at the rail: back to Playlists)
  *           Not signed in, on a feed page: the sign-in card, a QR code for google.com/device and the code to
  *           enter there (the daemon's TV device sign-in: it keeps the account, the app never sees a token).
  *           The page scrolls (a finger, the controller turned on the page); the controller pushed or turned onto
@@ -28,7 +30,7 @@
  *         bar: none where the kit runs the screen (the rail and the overlay have its jobs; a "Playing" rail entry
  *         while something plays), so the pages reach the screen's bottom. Where the HMI runs the screen: all five
  *         (Play/Pause, -10 s, +10 s, the list / Now playing, Search), and the header has the page tabs (G.frame).
- *   MAIN  HMI menu (Search): the HMI's speller, Now playing, Results, Home, Subscriptions, Watch later, recent
+ *   MAIN  HMI menu (Search): the HMI's speller, Now playing, Results, Home, Subscriptions, Watch later, Playlists, recent
  *         searches / suggestions, then Sign in / Sign out (pressed twice).
  *
  * Video only while parked (kit parked.js), unless the "Video while driving" setting is on (for a car coded
@@ -65,8 +67,8 @@ const OVERLAY_MS = 4000;                                 // the player's control
 const SEARCH_MS = 8000;                                  // a search with no answer by then is an error on screen
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'];
 const SLOTS = ['BTN_S1', 'BTN_S2', 'BTN_S3', 'BTN_S4', 'BTN_S5', 'BTN_S6'];
-const TABS = ['home', 'subs', 'wl'];
-const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', results: 'Results' };
+const TABS = ['home', 'subs', 'wl', 'pl'];
+const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Playlists', list: 'Playlist', results: 'Results' };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 
@@ -91,11 +93,12 @@ mgu.run({
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
         const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); };
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
-        // a feed tab: signed in, (re)load it; signed out, ask for a sign-in code (the daemon says the one shown again).
-        // A new device flow starts only from here (show), the account button or the page's "tap" - never on its own
+        // a feed tab (or Playlists): signed in, (re)load it; signed out, ask for a sign-in code (the daemon says the one
+        // shown again). A new device flow starts only from here (show), the account button or the page's "tap" - never on its own
         const openFeed = () => {
-            if (!isFeed(mode)) return;
+            if (!isFeed(mode) && mode !== 'pl') return;
             if (model.auth.state !== 'signed_in') { model.authStart(); return; }
+            if (mode === 'pl') { model.loadPlaylists(); return; }
             model.feed(mode);
             if (mode === 'home') model.feed('wl');
             if (mode === 'subs') model.loadChannels();                    // Home's last shelf (one request at a time: idempotent)
@@ -156,8 +159,9 @@ mgu.run({
             .catch((e) => { log.error('speller', e); ui.text('MAIN_INFO', translate('The keyboard did not open: ') + (e.message || e), 0, 'Text', { literal: true }); }));
         SLOTS.forEach((b, i) => ui.onClick(b, () => search(slots()[i])));
         ui.onClick('BTN_NOW', () => { show('player'); ui.open('VIEW'); });
+        ui.onClick('BTN_CLOSE', () => { closeVideo(); info(); });
         ui.onClick('BTN_RESULTS', () => { show('results'); ui.open('VIEW'); });
-        [['BTN_HOME', 'home'], ['BTN_SUBS', 'subs'], ['BTN_WL', 'wl']].forEach(([b, m]) => ui.onClick(b, () => { show(m); ui.open('VIEW'); }));
+        [['BTN_HOME', 'home'], ['BTN_SUBS', 'subs'], ['BTN_WL', 'wl'], ['BTN_PL', 'pl']].forEach(([b, m]) => ui.onClick(b, () => { show(m); ui.open('VIEW'); }));
         // Sign in: the Home tab shows how (after a failed try, asks again). Sign out: pressed twice within 5 s
         let signOutArmed = null;
         ui.onClick('BTN_ACCOUNT', () => {
@@ -193,7 +197,7 @@ mgu.run({
             return even(BOX.w * s, 1920) + 'x' + even(BOX.h * s, 720);
         }
         // it: the tile tapped (its title and channel show while the video is prepared)
-        // list: the row it was picked from; the videos after it play next when one ends (autoplay)
+        // list: the shelf, or the whole grid, it was picked from; the videos after it play next when one ends (autoplay)
         const QUALITIES = ['auto', '720', '480', '360'];   // app.json's Video quality values, in the button's order
         let queue = [], nextAt = 0;
         function play(id, it, list) {
@@ -203,6 +207,16 @@ mgu.run({
             if (model.id === id && model.active()) return;
             model.play(id, rect(), settings.get('fill') !== false, it, { quality: settings.get('quality'), skip: sbSkip() });
         }
+        // Close: the video ends here and now (the daemon stops the sound, gives the speakers back and ends the decoder),
+        // nothing plays next, and the list it came from shows again
+        function closeVideo() {
+            if (!model.active() && model.state !== 'ended' && model.state !== 'error') return;
+            queue = []; nextAt = 0;
+            model.stop();
+            goBack(browse);
+        }
+        // an X: the Close control's glyph
+        const xGlyph = (cv, x, y, r, c) => { cv.line(x - r, y - r, x + r, y + r, 6, c); cv.line(x - r, y + r, x + r, y - r, 6, c); };
         // from render: ended with a next one -> 5 s to see what comes, then it plays (back to the list cancels)
         function autoNext() {
             if (model.state !== 'ended' || !queue.length || mode !== 'player') { nextAt = 0; return null; }
@@ -289,10 +303,11 @@ mgu.run({
         // a tap beside the controls (no target): hides them
         if (ctx.onTap) ctx.onTap(() => { if (mode === 'player' && !pinned() && overlay()) { ovUntil = 0; dirty = true; } });
         // the controller pushed left in the player: back to the list it came from; pushed left at a channel's
-        // edge (the rail): back to Subscriptions. Both put the controller back on the tile it left from
+        // edge (the rail): back to Subscriptions (a playlist's: to Playlists). Both put the controller back on the tile it left from
         if (ctx.onBack) ctx.onBack((edge) => {
             if (mode === 'player') { goBack(browse); return true; }
             if (mode === 'channel' && edge) { goBack(chanFrom); return true; }
+            if (mode === 'list' && edge) { goBack('pl'); return true; }
             return false;
         });
 
@@ -382,7 +397,13 @@ mgu.run({
         // RideTube's mark: a cyan screen outline with the pink play mark in it
         const logo = (cv, cx, cy, w) => { cv.strokeRoundRect(cx - w / 2, cy - w * 0.33, w, w * 0.66, w * 0.16, Math.max(3, Math.round(w * 0.06)), C.cyan); tri(cv, cx + w * 0.04, cy, w * 0.32, C.red); };
 
-        /* the left rail: Search, Home, Subscriptions, Watch later */
+        // a playlist: three lines and a play mark (the rail's icon, a playlist tile's count)
+        const listGlyph = (cv, x, y, s, c) => {
+            const k = s / 36;
+            [0, 1, 2].forEach((i) => cv.roundRect(x - 18 * k, y + (i * 10 - 15) * k, (i === 2 ? 15 : 27) * k, 4 * k, 2 * k, c));
+            tri(cv, x + 9 * k, y + 8 * k, 16 * k, c);
+        };
+        /* the left rail: Search, Home, Subscriptions, Watch later, Playlists */
         const RAIL = [
             ['search', 'Search', (cv, x, y, c) => { cv.arc(x - 4, y - 4, 9, 12.5, 0, 360, c); cv.line(x + 4.5, y + 4.5, x + 14, y + 14, 4.5, c); }],
             ['home', 'Home', (cv, x, y, c, bg) => {
@@ -394,11 +415,12 @@ mgu.run({
                 cv.roundRect(x - 18, y - 6, 36, 24, 5, c); tri(cv, x + 1, y + 6, 12, bg);
             }],
             ['wl', 'Watch later', (cv, x, y, c) => { cv.arc(x, y, 14, 17.5, 0, 360, c); cv.line(x, y + 1, x, y - 9, 3.5, c); cv.line(x, y, x + 7, y + 5, 3.5, c); }],
+            ['pl', 'Playlists', (cv, x, y, c) => listGlyph(cv, x, y, 36, c)],
         ];
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
         const PLAYING = ['player', 'Playing', (cv, x, y, c) => { [10, 20, 14].forEach((h, k) => cv.roundRect(x - 15 + k * 11, y + 8 - h, 8, h + 8, 2, c)); }];
         function drawRail(cv) {
-            const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode, bottom = H + (cv.own ? cv.extra : 0);
+            const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode === 'list' ? 'pl' : mode, bottom = H + (cv.own ? cv.extra : 0);
             const items = cv.own && model.active() ? RAIL.concat([PLAYING]) : RAIL;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
             items.forEach(([m, name, glyph], i) => {
@@ -442,6 +464,27 @@ mgu.run({
             const my = y + TH + 32 + lines.length * 30 - 2;
             const meta = [r.channel].concat(Array.isArray(r.meta) ? r.meta : []).filter((m) => typeof m === 'string' && m).join(' · ');
             if (meta) cv.text(fit(cv, meta, 20, TW, LIT), x, my, 20, C.dim, LIT);
+        }
+
+        /* a playlist: its first video's picture (two edges behind it: a stack), the video count, its name, its meta */
+        function drawPlTile(cv, r, x, y, key) {
+            if (key === focusKey) cv.roundRect(x - 10, y - 10, TW + 20, TILE_H + 16, 18, C.card);
+            cv.roundRect(x + 28, y - 8, TW - 56, 12, 6, '#ffffff26');
+            cv.roundRect(x + 14, y - 4, TW - 28, 12, 6, '#ffffff4d');
+            const th = r.thumb ? model.thumbs[r.thumb] : null;
+            if (r.thumb && !th) model.wantThumb(r.thumb);
+            const pid = th && cv.place ? slot(r.thumb, th) : null;
+            if (pid) cv.picture(pid, x, y, TW, TH, 12);
+            else { cv.roundRect(x, y, TW, TH, 12, C.ph); listGlyph(cv, x + TW / 2, y + TH / 2, 60, '#ffffff38'); }
+            const n = r.count === null || r.count === undefined ? translate('Playlist') : r.count === 0 ? translate('No videos') : message(r.count === 1 ? '{count} video' : '{count} videos', { count: r.count });
+            const nw = cv.textWidth(n, 20, LITB) + 52;
+            cv.roundRect(x + TW - 8 - nw, y + TH - 36, nw, 28, 6, '#000000cc');
+            listGlyph(cv, x + TW - nw + 12, y + TH - 22, 18, '#ffffff');
+            cv.text(n, x + TW - 16, y + TH - 15, 20, '#ffffff', { literal: true, font: 'bold', align: 'right' });
+            const lines = wrap(cv, String(r.title || r.id));
+            lines.forEach((l, k) => cv.text(l, x, y + TH + 32 + k * 30, 24, C.text, LITB));
+            const meta = (Array.isArray(r.meta) ? r.meta : []).join(' · ');
+            if (meta) cv.text(fit(cv, meta, 20, TW, LIT), x, y + TH + 32 + lines.length * 30 - 2, 20, C.dim, LIT);
         }
 
         /* a channel: a round mark with its initial, its name, its @handle; or an action (r.act: Search channels, All) */
@@ -531,7 +574,8 @@ mgu.run({
                 if (sc.grid) for (let i = 0; i < sc.items.length; i += PER_ROW) chunks.push(sc.items.slice(i, i + PER_ROW));
                 chunks.forEach((items, k) => {
                     const title = k === 0 ? sc.title : null, h = (title ? HEAD_H : 0) + TILE_H + (sc.grid && k < chunks.length - 1 ? GRID_GAP : SHELF_GAP);
-                    rows.push({ title, sub: k === 0 ? sc.sub : null, items, y, h, hs: !sc.grid && items.length > PER_ROW, chan: !!sc.chan });
+                    // all: what a tile played goes on with (autoplay): a grid's whole list, not its row of four
+                    rows.push({ title, sub: k === 0 ? sc.sub : null, items, all: sc.items, y, h, hs: !sc.grid && items.length > PER_ROW, chan: !!sc.chan, pl: !!sc.pl });
                     y += h;
                 });
             });
@@ -565,8 +609,8 @@ mgu.run({
                 }
                 for (let i = Math.max(0, off - 1); i <= Math.min(n - 1, off + PER_ROW); i++) {
                     const r = row.items[i], x = X0 + (i - off) * PITCH, key = letter + ':' + ri + ':' + r.id;
-                    if (shown && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : drawTile)(cv, r, x, ty, key);
-                    const run = r.act ? () => r.act() : row.chan ? () => openChannel(r) : () => play(r.id, r, row.items);
+                    if (shown && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : row.pl ? drawPlTile : drawTile)(cv, r, x, ty, key);
+                    const run = r.act ? () => r.act() : row.chan ? () => openChannel(r) : row.pl ? () => openPlaylist(r) : () => play(r.id, r, row.all);
                     if (cv.own) { cv.target(x - 10, ty - 10, TW + 20, TILE_H + 16, run, key, 18); where[key] = { ri, i }; }
                 }
             });
@@ -639,6 +683,32 @@ mgu.run({
             if (which === 'subs') secs = chanSections().concat(chanQ || !f || !f.items.length ? [] : secs);
             drawPage(cv, secs.map((sc) => (sc.chan ? sc : Object.assign({}, sc, { items: shown(sc.items) }))).filter((sc) => sc.chan || sc.items.length));
         }
+        // the account's playlists, a grid; one opens as its videos (the Playlists page stays lit on the rail)
+        function openPlaylist(p) { model.openPlaylist(p.id, p.title); show('list'); vs('list').sy = 0; vs('list').off = {}; }
+        const OFFLINE = translate('The video service is not reachable - check the car\'s internet connection');
+        function drawPlaylists(cv) {
+            const p = model.pls, a = model.auth.state;
+            if (!model.connected) return say(cv, OFF, OFF2);
+            if (a === 'unsupported') return say(cv, translate('Signing in needs a newer jap-ridetube-d tool on the car'));
+            if (a !== 'signed_in') return drawSignIn(cv);
+            if (!p || !p.items.length) {
+                if (p && p.error === 'unknown cmd playlists') return say(cv, translate('Playlists need a newer jap-ridetube-d tool on the car'), translate('Update the RideTube service in the MGU Store'));
+                return say(cv, !p || p.loading ? message('Loading {name}...', { name: translate('Playlists') }) : p.error === 'feed offline' ? OFFLINE : p.error ? translate('Playlists') + ': ' + p.error : translate('No playlists yet'),
+                    p && !p.loading && !p.error ? translate('Playlists you make or save on YouTube show here') : null);
+            }
+            drawPage(cv, [{ title: translate('Playlists'), sub: message(p.items.length === 1 ? '{count} playlist' : '{count} playlists', { count: p.items.length }), items: p.items, grid: true, pl: true }]);
+        }
+        function drawPlaylist(cv) {
+            const p = model.plist;
+            if (!model.connected) return say(cv, OFF, OFF2);
+            if (!p) return say(cv, translate('Pick a playlist in Playlists'));
+            if (!p.items.length) return say(cv, p.loading ? message('Loading {name}...', { name: p.title || translate('the playlist') }) : p.error === 'feed offline' ? OFFLINE
+                : p.error === 'unknown cmd playlists' ? translate('Playlists need a newer jap-ridetube-d tool on the car') : p.error || translate('This playlist is empty'), p.title || null);
+            // as Watch later: members-only videos (the setting off) and hidden channels left out, and said so
+            const vids = shown(p.items), off = p.items.length - vids.length;
+            if (!vids.length) return say(cv, message('Nothing to show in {name}', { name: p.title || translate('this playlist') }), message(off === 1 ? '{count} video hidden: members-only (Settings) or a hidden channel' : '{count} videos hidden: members-only (Settings) or a hidden channel', { count: off }));
+            drawPage(cv, [{ title: p.title || translate('Playlist'), sub: message(vids.length === 1 ? '{count} video' : '{count} videos', { count: vids.length }) + (off ? ' · ' + message('{count} hidden', { count: off }) : ''), items: vids, grid: true }]);
+        }
         // not signed in: a QR code for the sign-in page, the code to enter there in big letters, on a card
         function drawSignIn(cv) {
             const a = model.auth;
@@ -646,7 +716,7 @@ mgu.run({
             if (a.state === 'error' || a.state === 'signed_out') {
                 say(cv, a.state === 'error' ? message('Sign-in is not available ({error}) - tap to try again', { error: a.msg || translate('error') })
                     : cv.own ? translate('Tap here to get a sign-in code') : translate('Sign in (menu) to get a sign-in code'),
-                translate('Your Home, Subscriptions and Watch later, on the car'));
+                translate('Your Home, Subscriptions, Watch later and playlists, on the car'));
                 if (cv.own) cv.target(MID - 520, 160, 1040, 200, () => model.authStart(true), 'signin', 16);
                 return;
             }
@@ -717,7 +787,7 @@ mgu.run({
          * the page's px (dx, dy). Hidden, the same keys cover the whole screen and only show it again (the
          * controller stays on its key, so a turn or a press wakes it; a tap anywhere too).
          */
-        const OVK = ['ov:back', 'ov:qr', 'ov:rw', 'ov:play', 'ov:ff', 'ov:q', 'ov:zoom', 'ov:bar'];
+        const OVK = ['ov:back', 'ov:qr', 'ov:close', 'ov:rw', 'ov:play', 'ov:ff', 'ov:q', 'ov:zoom', 'ov:bar'];
         // podcast mode (driving): artwork, title, chapter, the bar with chapter ticks and skipped segments, controls
         // a glove can hit (-10 s, play/pause, +10 s, next in the row), the next video, a skipped-sponsor notice
         function drawPodcast(cv, SW, SH, LX, tg, run, live) {
@@ -776,6 +846,11 @@ mgu.run({
                 big('ov:ff', mid + 100, 58, false, () => model.skip(10000), num('+10', mid + 100));
             }
             else if (model.state === 'error' && model.id) big('ov:play', mid - 100, 72, true, again, (c) => retryGlyph(cv, mid - 100, cy, 30, c));
+            if (model.active()) {
+                // Close, after the other controls (Next takes mid + 300 when something plays next)
+                const kx = mid + (queue.length ? 500 : 300);
+                big('ov:close', kx, 58, false, closeVideo, (c) => xGlyph(cv, kx, cy, 20, c));
+            }
             if (queue.length) {
                 const nx = mid + 300;
                 big('ov:next', nx, 58, false, () => { const r = queue.shift(); play(r.id, r); }, (c) => {
@@ -845,6 +920,12 @@ mgu.run({
                 tg(qx0, qy0, cw, chh, () => { qrUntil = 0; wake(); }, 'ov:qrcard', 24);
                 cv.xf();
                 return;
+            }
+            // middle left, Close: the video ends and the list shows again (mirrors Quality / Zoom on the right)
+            if (act) {
+                const kx = LX + 150;
+                ctl('ov:close', kx, cy, 42, closeVideo, (c) => xGlyph(cv, kx, cy, 15, c));
+                cv.text(translate('Close'), kx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
             }
             // middle: -10 s, play / pause, +10 s; preparing: the ring with the percentage
             let mid = null;
@@ -944,7 +1025,8 @@ mgu.run({
                 if (mode === 'player' && cv.own && cv.place && cv.place.full) drawFull(cv);
                 else {
                     if (browsing()) drawRail(cv);
-                    if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
+                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

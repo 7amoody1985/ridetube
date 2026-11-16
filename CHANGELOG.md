@@ -2,9 +2,41 @@
 
 ## Unreleased
 
-- Add a Simplified Chinese RideTube build, including menus, settings and sign-in messages.
-- Add Chinese video-title fallback glyphs at 14 and 52 px for readable large titles.
-- Keep English wording and locale packaging unchanged; retain the existing shared zh-CN revision.
+- Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
+  the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
+  GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
+
+## App 0.3.11
+
+- Cyrillic titles and channel names show every letter. The fonts the app draws with had only Latin letters, so
+  "Поправка a B58" lost all its Cyrillic. Text with Cyrillic now draws from a companion font of the same weight
+  and size, which also has every Latin letter the main fonts have, so mixed titles ("Café — Кофе",
+  "Đorđe / Ђорђе") keep their accents. It covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian
+  and Kazakh. Latin-only text draws as before. The app grows by about 1 MiB (the companion fonts).
+
+## App 0.3.10
+
+- Playlists: a new page on the rail and in the Search menu with your playlists (Liked videos and the ones you
+  made or saved), each with its first video's picture and its video count. A playlist opens as its videos; one
+  played goes on through the rest of the playlist. Members-only videos are left out unless the setting is on, as
+  in Watch later. Needs service 0.3.10: an older one says so on the page.
+- A video played from a grid (Watch later, search results, a playlist) goes on through the whole grid, not just
+  the rest of its row of four.
+
+## App 0.3.9
+
+- Close: the player's overlay (middle left), the podcast view while driving (after the controls) and the HMI menu
+  (Close video) end the video at once: the service stops the sound, gives the speakers back and ends the decoder,
+  nothing plays next, and the list it came from shows again. The service is unchanged (its `stop` command).
+
+## Service 0.3.10
+
+- Playlists: `playlists` lists the account's playlists from the TV app's Playlists page, or from the Save to
+  playlist list when that page refuses or lists none; `playlist` gives one playlist's videos.
+- A live video (or a premiere, or a live that just ended) now fails at once with "Live videos can't be played
+  yet", with no retries. Before, it failed after two retries with yt-dlp's "m3u8 download detected but ffmpeg
+  could not be found" (#2). YouTube offers those only as HLS, which needs ffmpeg, and the head unit has none.
+- The video is picked from the plain https formats only, so an HLS format is never chosen for a normal video.
 
 ## Service 0.3.9
 

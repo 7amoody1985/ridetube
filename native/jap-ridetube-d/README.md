@@ -84,6 +84,8 @@ App → daemon:
 | `{"cmd":"auth"}` | signed in, or a code still valid: → that `auth` again; else a new device code → `auth` `code`, then polled until `signed_in`, `signed_out` (expired, denied) or `error` |
 | `{"cmd":"sign_out"}` | deletes the account → `auth` `signed_out` |
 | `{"cmd":"feed","which":"home\|subs\|wl"}` | → `feed` (items, or error `signed out` / `feed offline` / `unknown feed`) |
+| `{"cmd":"playlists"}` | → `playlists` (the account's playlists, or error as `feed`) |
+| `{"cmd":"playlist","id":".."}` | → `playlist` (its videos, or error as `feed`, or `bad playlist`) |
 
 Daemon → app: `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`,
 `{"ev":"time","elapsed","total"}` (ms, ≤ 4/s), `{"ev":"results","q","items":[{id,title,channel,duration_s,meta?}]}` (`meta: ["12K views"]` when there is a view count),
@@ -95,6 +97,11 @@ the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none). `items`
 `shelves`: YouTube's rows in page order (≤ 8, ≤ 12 tiles each, video tiles only, deduped per row, empty rows such as Shorts
 dropped); `title` is the row header, else the channel when all its tiles share one (Subscriptions' per-channel rows), else `""`.
 Watch later is a playlist with no rows: `shelves: []`, use `items`.
+`{"ev":"playlists","items":[{id,title,count,meta,thumb}]}` or `{"ev":"playlists","error"}`: the library page's playlists, page
+order, each once, Watch later left out (`feed` `wl` has it). `count` is the tile's "N videos" (null when it shows none), `meta`
+its other texts (`["Private","Updated today"]`), `thumb` the video whose picture the tile shows (ask it with `thumb`; null when
+none). `{"ev":"playlist","id","title","items":[item]}` or `{"ev":"playlist","id","error"}`: a playlist's videos (≤ 50), `title`
+its name (`""` when the page has none).
 
 `state` carries `buffering` (bool; true while playback waits for the fetch), and `preparing`'s `pct`
 is the fetch's progress to playable (0-100).
@@ -110,6 +117,8 @@ The car signs in itself with the TV device sign-in: the client id and secret are
 is polled, then refreshes the token when less than 5 min is left (`invalid_grant` = signed out).
 Feeds: `POST /youtubei/v1/browse` as `TVHTML5`, `FEwhat_to_watch` (home), `FEsubscriptions`
 (subs), `VLWL` (wl); their video tiles, each id once (no shorts, channels, playlists), at most 50.
+Playlists: the TV Playlists page `FEplaylist_aggregation`, its playlist tiles (when it refuses: the Save to playlist list,
+`playlist/get_add_to_playlist`, without counts or pictures); a playlist: `VL` + its id, as Watch later.
 The account (tokens and the scraped secret) is `/var/opt/jap-ridetube-d/state/account.json`, 0600 in the
 0700 state dir, written atomically; nothing secret goes on the socket or into the log. `sign_out` wins
 over work in flight: a refresh, device-code request or poll started before it saves, shows and

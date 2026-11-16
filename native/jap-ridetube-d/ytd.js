@@ -80,7 +80,7 @@ function qualityHeight(q, lease) {
 // members-only (or members-first) videos: a badge somewhere in the tile, its shape unknown (no capture) - matched on the text
 // shortcut: a JSON scan of the tile, swap for the badge's field once a real members tile is captured
 const isMembers = (t) => /BADGE_STYLE_TYPE_MEMBERS|"Members (only|first)"/i.test(JSON.stringify(t));
-const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country/i;
+const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country|can't be played|can't play/i;
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function withTimeout(p, ms, what) {
     return new Promise(function (resolve, reject) {
@@ -424,6 +424,100 @@ function channelTiles(root) {
     return out;
 }
 
+// The TV app's Playlists page (FEplaylist_aggregation) -> the account's playlists [{id, title, count, meta, thumb}], each once, page order.
+// A tileRenderer (TILE_CONTENT_TYPE_PLAYLIST) or a lockupViewModel (LOCKUP_CONTENT_TYPE_PLAYLIST). id: the playlist's
+// (its browse id without "VL"); count: the "N videos" text, null when none; meta: the other texts ("Private", "Updated
+// today"); thumb: the video whose picture the tile shows (thumb{id} makes it), null when none. Watch later is skipped:
+// the app has it as a page of its own.
+const PL_RE = /^[\w-]{2,64}$/;
+const isPl = (x) => typeof x === 'string' && PL_RE.test(x);
+function playlistTiles(root) {
+    const out = [], seen = { WL: true };
+    const plId = (c) => {
+        const be = c && c.browseEndpoint, wp = c && (c.watchPlaylistEndpoint || c.watchEndpoint);
+        if (be && /^VL[\w-]{2,64}$/.test(String(be.browseId))) return be.browseId.slice(2);
+        return (wp && wp.playlistId) || null;
+    };
+    const vidOf = (url) => { const m = /\/vi(?:_webp)?\/([\w-]{11})\//.exec(String(url || '')); return m ? m[1] : null; };
+    const firstVid = (o) => {                      // the first thumbnail URL under o that names a video
+        let v = null;
+        (function walk(x) {
+            if (v || !x || typeof x !== 'object') return;
+            if (typeof x.url === 'string') v = vidOf(x.url);
+            Object.keys(x).forEach((k) => walk(x[k]));
+        })(o);
+        return v;
+    };
+    const add = (id, title, texts, thumb) => {
+        if (!isPl(id) || seen[id]) return;
+        seen[id] = true;
+        const COUNT = /^(?:([\d.,\s]+)|no)\s+videos?$/i, n = texts.map((s) => COUNT.exec(s.trim())).filter(Boolean)[0];
+        out.push({ id: id, title: title || id, count: n ? Number((n[1] || '0').replace(/[^\d]/g, '')) : null,
+            meta: texts.filter((s) => s && s.trim() !== '•' && !COUNT.test(s.trim())), thumb: thumb || null });
+    };
+    (function walk(o) {
+        if (!o || typeof o !== 'object') return;
+        const t = o.tileRenderer, l = o.lockupViewModel;
+        if (t && typeof t === 'object' && /PLAYLIST/.test(String(t.contentType))) {
+            const m = (t.metadata && t.metadata.tileMetadataRenderer) || {};
+            const texts = [].concat(...(Array.isArray(m.lines) ? m.lines : []).map((x) => ((x && x.lineRenderer && x.lineRenderer.items) || [])
+                .map((i) => runsText(i && i.lineItemRenderer && i.lineItemRenderer.text))));
+            const ov = ((t.header && t.header.tileHeaderRenderer && t.header.tileHeaderRenderer.thumbnailOverlays) || [])
+                .map((x) => runsText(x && x.thumbnailOverlayTimeStatusRenderer && x.thumbnailOverlayTimeStatusRenderer.text)).filter(Boolean);
+            const ep = t.onSelectCommand || {};
+            add(plId(ep) || t.contentId, runsText(m.title), ov.concat(texts).filter(Boolean),
+                (ep.watchEndpoint && ID_RE.test(String(ep.watchEndpoint.videoId)) && ep.watchEndpoint.videoId) || firstVid(t.header));
+            return;
+        }
+        if (l && typeof l === 'object' && /PLAYLIST/.test(String(l.contentType))) {
+            const m = (l.metadata && l.metadata.lockupMetadataViewModel) || {};
+            const cm = m.metadata && m.metadata.contentMetadataViewModel;
+            const texts = [].concat(...((cm && cm.metadataRows) || []).map((r) => ((r && r.metadataParts) || []).map((x) => (x && x.text && x.text.content) || '')));
+            const badges = [];
+            (function walk(x) {
+                if (!x || typeof x !== 'object') return;
+                if (x.thumbnailBadgeViewModel && typeof x.thumbnailBadgeViewModel.text === 'string') badges.push(x.thumbnailBadgeViewModel.text);
+                Object.keys(x).forEach((k) => walk(x[k]));
+            })(l.contentImage);
+            const cc = l.rendererContext && l.rendererContext.commandContext, cmd = (cc && cc.onTap && cc.onTap.innertubeCommand) || {};
+            add(plId(cmd) || l.contentId, m.title && m.title.content, badges.concat(texts).filter(Boolean), firstVid(l.contentImage));
+            return;
+        }
+        Object.keys(o).forEach((k) => walk(o[k]));
+    })(root);
+    return out;
+}
+// A playlist page's name (its header: TVHTML5's entityMetadataRenderer, 2026-11), or ''
+function playlistTitle(root) {
+    let t = '';
+    (function walk(o) {
+        if (t || !o || typeof o !== 'object') return;
+        const h = o.entityMetadataRenderer || o.playlistHeaderRenderer || o.pageHeaderViewModel;
+        if (h) { t = runsText(h.title) || (h.title && h.title.dynamicTextViewModel && h.title.dynamicTextViewModel.text && h.title.dynamicTextViewModel.text.content) || ''; if (t) return; }
+        Object.keys(o).forEach((k) => walk(o[k]));
+    })(root);
+    return t;
+}
+// playlist/get_add_to_playlist (the Save to playlist list: the playlists the account owns) -> as playlistTiles, with
+// no count; meta: its privacy ("Private"); thumb: the video its picture shows, when it names one. Watch later skipped.
+function addToPlaylistItems(root) {
+    const out = [], seen = { WL: true };
+    (function walk(o) {
+        if (!o || typeof o !== 'object') return;
+        const p = o.playlistAddToOptionRenderer;
+        if (p && typeof p === 'object') {
+            const id = p.playlistId;
+            if (!isPl(id) || seen[id]) return;
+            seen[id] = true;
+            const pv = String(p.privacy || ''), m = /\/vi(?:_webp)?\/([\w-]{11})\//.exec(JSON.stringify(p.thumbnailRenderer || {}));
+            out.push({ id: id, title: runsText(p.title) || id, count: null, meta: pv ? [pv.charAt(0) + pv.slice(1).toLowerCase()] : [], thumb: m ? m[1] : null });
+            return;
+        }
+        Object.keys(o).forEach((k) => walk(o[k]));
+    })(root);
+    return out;
+}
+
 // emit(o): to the app. Every method answers with an event and never rejects (a rejection would be a fault).
 function Account(opts, emit) {
     this.opts = opts;
@@ -624,6 +718,40 @@ Account.prototype.channels = function () { return this.browseEv({ ev: 'channels'
 Account.prototype.channel = function (id) {
     if (!CHAN_RE.test(String(id))) { this.emit({ ev: 'channel', id: String(id), error: 'bad channel' }); return Promise.resolve(); }
     return this.browseEv({ ev: 'channel', id: id }, id, (j) => ({ items: feedItems(j).slice(0, FEED_MAX), shelves: feedShelves(j) }), 0);
+};
+// `playlists` -> playlists{items:[{id,title,count,meta,thumb}]} or playlists{error}, never kept. The TV Playlists page;
+// when it refuses (seen 2026-11: 404 for an account a while, then 200) or lists none (a page we no longer read:
+// every account has Liked videos at least), the Save to playlist list (no counts). That one failing after the
+// page's 200: the page's (empty) answer.
+// `playlist` {id} -> playlist{id, title, items} (its videos, at most 50) or playlist{id, error}
+const ANY_VIDEO = 'jNQXAC9IVRw';   // get_add_to_playlist lists the playlists for a video; any public one does
+Account.prototype.playlists = async function () {
+    const g = this.gen, call = async (fn) => {
+        let r = await fn(await this.token(false));
+        if (r.status === 401) r = await fn(await this.token(true));
+        if (g !== this.gen) throw Object.assign(new Error('signed out'), { signedOut: true });
+        return r;
+    };
+    try {
+        const r = await call((tok) => this.browse('FEplaylist_aggregation', tok));
+        let items = r.status === 200 && r.j ? playlistTiles(r.j) : null;
+        if (!items || !items.length) {
+            const q = await call((tok) => this.json('POST', YT + '/youtubei/v1/playlist/get_add_to_playlist',
+                { context: { client: TV_CLIENT }, videoIds: [ANY_VIDEO] }, { Authorization: 'Bearer ' + tok }));
+            if (q.status === 200 && q.j) items = addToPlaylistItems(q.j);
+            else if (!items) throw new Error('playlists ' + r.status + ', save list ' + q.status);
+            else this.log('playlists: none on the page, save list ' + q.status);
+        }
+        this.emit({ ev: 'playlists', items: items });
+    } catch (e) {
+        if (!e.signedOut) this.log('playlists: ' + e.message);
+        this.emit({ ev: 'playlists', error: e.signedOut ? 'signed out' : e.noUid ? e.message : 'feed offline' });
+    }
+    return undefined;
+};
+Account.prototype.playlist = function (id) {
+    if (!isPl(id)) { this.emit({ ev: 'playlist', id: String(id), error: 'bad playlist' }); return Promise.resolve(); }
+    return this.browseEv({ ev: 'playlist', id: id }, 'VL' + id, (j) => ({ title: playlistTitle(j), items: feedItems(j).slice(0, FEED_MAX) }), 0);
 };
 Account.prototype.browseEv = async function (head, browseId, parse, keepMs) {
     const g = this.gen, c = this.kept || (this.kept = {}), k = c[browseId];
@@ -1071,6 +1199,8 @@ Daemon.prototype.onLine = function (line) {
     case 'feed': return this.account.feed(m.which);
     case 'channels': return this.account.channels();
     case 'channel': return this.account.channel(m.id);
+    case 'playlists': return this.account.playlists();
+    case 'playlist': return this.account.playlist(m.id);
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
     }
 };
@@ -1640,7 +1770,7 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before

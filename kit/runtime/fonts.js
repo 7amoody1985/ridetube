@@ -34,7 +34,9 @@ function get(name, size, text) {
             name = 'cjk-titles';
         }
     }
-    else if (text && /[\u0400-\u04ff]/.test(text)) name = 'cyrillic';
+    // Cyrillic (a title, a channel): the same weight's companion (bake_fonts.py --cyrillic), else the regular one,
+    // else a Russian build's own atlas
+    else if (text && /[\u0400-\u04ff]/.test(text)) name = family(name + '_cyr') ? name + '_cyr' : family('label_cyr') ? 'label_cyr' : 'cyrillic';
     const fam = family(name) || family('label');
     if (!fam) return null;
     let best = null;

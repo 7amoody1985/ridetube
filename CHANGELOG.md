@@ -1,5 +1,12 @@
 # Changelog
 
+## App (unreleased)
+
+- The progress bar follows a finger, in the player and in the podcast view while driving: dragged, the bar, the
+  time and a bubble with the time it goes to (and its chapter) follow it, and the video goes there when it lets
+  go; a tap on the bar jumps there. Pressing the controller on the bar still plays or pauses, and turning it still
+  seeks 10 s a detent.
+
 ## App 0.3.11
 
 - Cyrillic titles and channel names show every letter. The fonts the app draws with had only Latin letters, so

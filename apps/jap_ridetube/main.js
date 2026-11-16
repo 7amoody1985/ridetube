@@ -249,7 +249,40 @@ mgu.run({
             clearTimeout(pendT);
             pendT = setTimeout(() => { const ms = pend; pend = 0; model.skip(ms); dirty = true; }, 350);
         }
-        const shownAt = () => Math.max(0, Math.min(model.total > 0 ? model.total : Infinity, model.elapsed + pend));
+        // a finger on the progress bar (where the kit runs the screen): pressed or dragged, the bar, the time and a
+        // bubble follow it; one seek where it lets go. seekBar: where the last frame drew the bar (overlay px, its
+        // touch band, the overlay's scale); scrub: {ms, bar} while a finger holds it
+        let seekBar = null, scrub = null;
+        const barMs = (b, sx) => Math.round(Math.max(0, Math.min(1, (sx / b.s - b.x0) / b.w)) * model.total);
+        if (ctx.onTouch) ctx.onTouch((phase, sx, sy) => {
+            if (phase === 1) {
+                scrub = null;
+                const b = seekBar, x = b ? sx / b.s : 0, y = b ? sy / b.s : 0;
+                if (!b || mode !== 'player' || !(model.total > 0) || (model.state !== 'playing' && model.state !== 'paused')) return false;
+                if (x < b.x0 - 24 || x > b.x0 + b.w + 24 || y < b.y0 || y > b.y1) return false;
+                clearTimeout(pendT); pend = 0;                     // (a knob seek not sent yet: the finger wins)
+                scrub = { ms: barMs(b, sx), bar: b };
+                wake();
+                return true;
+            }
+            if (!scrub) return false;
+            scrub.ms = barMs(scrub.bar, sx);
+            if (phase === 3) { const ms = scrub.ms; scrub = null; model.skip(ms - model.elapsed); }
+            wake();
+            return true;
+        });
+        const shownAt = () => (scrub ? scrub.ms : Math.max(0, Math.min(model.total > 0 ? model.total : Infinity, model.elapsed + pend)));
+        // while a finger holds the bar: the time it would go to (and its chapter) in a bubble over the scrubber
+        function scrubBubble(cv, fx, y) {
+            if (!scrub) return;
+            const ex = model.extras && model.extras.id === model.id ? model.extras : null;
+            let ch = null;
+            if (ex) ex.chapters.forEach((k) => { if (k[0] <= scrub.ms) ch = k[1]; });
+            const t = clock(scrub.ms) + (ch ? '  ·  ' + ch : ''), tw = Math.min(520, cv.textWidth(t, 26, LITB) + 36);
+            const bx = Math.max(16, Math.min(fx - tw / 2, (cv.place ? cv.place.w / cv.place.scale : W) - tw - 16));
+            cv.roundRect(bx, y - 62, tw, 46, 12, '#000000e0');
+            cv.text(fit(cv, t, 26, tw - 36, LITB), bx + 18, y - 30, 26, '#ffffff', LITB);
+        }
         // preparing: its percentage, or the network lost and the daemon trying again
         const prepText = () => (model.retry ? 'No connection - trying again (' + model.retry + ')...' : 'Preparing... ' + Math.round(model.pct || 0) + ' %');
         // a failed play: Try again (the same video, the queue kept)
@@ -292,7 +325,7 @@ mgu.run({
         let ovUntil = 0, qrUntil = 0;   // qrUntil: the On phone QR card shows until then
         function wake() { ovUntil = Date.now() + OVERLAY_MS; dirty = true; }
         // it stays while there is no moving picture to look at
-        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg();
+        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || !!scrub;
         const overlay = () => pinned() || Date.now() < ovUntil || Date.now() < qrUntil;
         // a tap beside the controls (no target): hides them
         if (ctx.onTap) ctx.onTap(() => { if (mode === 'player' && !pinned() && overlay()) { ovUntil = 0; dirty = true; } });
@@ -817,8 +850,10 @@ mgu.run({
                 if (ex) sbSegs(ex).forEach((g) => cv.fillRect(at(g[0]), by, Math.max(4, at(g[1]) - at(g[0])), 10, sbColor(g)));
                 if (ex) ex.chapters.forEach((k) => { if (k[0] > 0) cv.fillRect(at(k[0]) - 2, by, 4, 10, C.bg); });
                 if (bf) cv.circle(at(el), by + 5, 24, '#3ea6ff');
-                cv.circle(at(el), by + 5, bf ? 18 : 14, C.red);
+                cv.circle(at(el), by + 5, bf || scrub ? 18 : 14, C.red);
                 tg(x0 - 10, by - 36, bw + 20, 80, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                seekBar = { x0, w: bw, y0: by - 40, y1: by + 50, s: cv.place.scale };
+                scrubBubble(cv, at(el), by - 6);
                 cv.text(clock(el), x0, by + 50, 26, C.dim, LIT);
                 cv.text('-' + clock(tot - el), x0 + bw, by + 50, 26, C.dim, { literal: true, align: 'right' });
             } else if (model.state === 'preparing') cv.text(prepText(), x0, by + 50, 26, C.dim, LIT);
@@ -874,6 +909,7 @@ mgu.run({
             void cv.extra;
             const tg = (x, y, w, h, run, key, r, turn) => cv.target(x - dx, y - dy, w, h, run, key, r, turn);
             cv.xf(1, 0, 0).fillRect(0, 0, pl.w, pl.h, '#000000');
+            seekBar = null;                                // (set again where this frame draws the bar)
             const pod = model.active() && noVideo();   // driving: podcast mode (no picture, big controls, always shown)
             if (videoShown && !pod) cv.video(VID, 0, 0, pl.w, pl.h, 0);
             if (!overlay() && !pod) { cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined)); return; }
@@ -977,8 +1013,10 @@ mgu.run({
                 if (ex) sbSegs(ex).forEach((g) => cv.fillRect(at(g[0]), y, Math.max(3, at(g[1]) - at(g[0])), 6, sbColor(g)));   // SponsorBlock: skipped green, asked yellow
                 if (ex) ex.chapters.forEach((c) => { if (c[0] > 0) cv.fillRect(at(c[0]) - 2, y, 4, 6, '#000000'); });
                 if (bf) cv.circle(fx, y + 3, 18, '#ffffff');
-                cv.circle(fx, y + 3, bf ? 14 : 10, C.red);
+                cv.circle(fx, y + 3, bf || scrub ? 14 : 10, C.red);
                 tg(x0 - 10, y - 34, w + 20, 70, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                seekBar = { x0, w, y0: y - 40, y1: y + 40, s };
+                scrubBubble(cv, fx, y - 8);
                 const tt0 = clock(el) + ' / ' + clock(model.total), tw = cv.textWidth(tt0, 24, LITB), chap = model.chapter();
                 cv.text(tt0, x0, SH - 22, 24, '#ffffff', LITB);
                 if (chap) cv.text(fit(cv, '·  ' + chap, 24, w - tw - 20, LIT), x0 + tw + 14, SH - 22, 24, '#dddddd', LIT);

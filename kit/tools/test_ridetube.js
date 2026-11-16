@@ -312,6 +312,7 @@ async function appFrames() {
     hu.ctx.hideButton = (id, hide) => disp.hideButton(id, hide);
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
     hu.ctx.focus = (k) => disp.focusPage(k);
+    assert.strictEqual(typeof hu.ctx.onTouch, 'function', 'the stub has onTouch, as kit/mgu.js');
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
     const POOL = (id) => id >= 8 && id < 64;
@@ -394,6 +395,28 @@ async function appFrames() {
         await sleep(500);
         assert.strictEqual(d.cmds('seek').length, nSeek + 1, 'one seek for the three detents');
         await lastIs(d, { cmd: 'seek', ms: 21000 }, 'the knob on the bar: +10 s net');
+        // a finger on the bar (the kit's touch path, page px): dragged, the time follows it, one seek where it lets go;
+        // a tap on it jumps there (no play / pause); a touch beside it is the page's as before
+        const barT = disp.pageTargets.find((t) => t.key === 'ov:bar'), at = (k) => [barT.x + 10 + (barT.w - 20) * k, barT.y + barT.h / 2];
+        const nSeek2 = d.cmds('seek').length, nPause0 = d.cmds('pause').length;
+        disp._touch(1, ...at(0.25)); disp._touch(2, ...at(0.4)); disp._touch(2, ...at(0.5));
+        await sleep(400); await hu.loopFn();
+        assert.strictEqual(d.cmds('seek').length, nSeek2, 'no seek while the finger holds the bar');
+        assert.ok(disp.pageTargets.some((t) => t.key === 'ov:bar'), 'the controls stay while it holds the bar');
+        disp._touch(3, ...at(0.5));
+        await lastIs(d, { cmd: 'seek', ms: 100000 }, 'let go at half the bar: half the video (200 s)');
+        assert.strictEqual(d.cmds('seek').length, nSeek2 + 1, 'one seek for the drag');
+        disp._touch(1, ...at(0.75)); disp._touch(3, ...at(0.75));
+        await lastIs(d, { cmd: 'seek', ms: 150000 }, 'a tap on the bar jumps there');
+        disp._touch(1, ...at(1)); disp._touch(2, ...at(-0.5)); disp._touch(3, ...at(-0.5));
+        await lastIs(d, { cmd: 'seek', ms: 0 }, 'dragged past the start: the start');
+        assert.strictEqual(d.cmds('pause').length, nPause0, 'a finger on the bar never pauses');
+        const sx = (x) => x * pl.scale + pl.ox, sy = (y) => y * pl.scale + pl.oy;
+        assert.strictEqual(disp.onTouch(1, sx(barT.x + barT.w / 2), sy(barT.y - 120)), false, 'a touch above the bar: the page\'s (its controls, the tap that hides them)');
+        assert.strictEqual(disp.onTouch(3, sx(barT.x + barT.w / 2), sy(barT.y - 120)), false);
+        d.send({ ev: 'time', elapsed: 21000, total: 200000 });
+        await sleep(300); await hu.loopFn();
+        console.log('ok   the progress bar: dragged or tapped with a finger, one seek where it lets go');
         // SponsorBlock "ask" (end cards by default): a Skip button while the clock is in one, the overlay kept
         d.send({ ev: 'extras', id: 'aaa', chapters: [], segments: [[15000, 60000, 'outro']] });
         await sleep(100); await hu.loopFn();
@@ -448,6 +471,10 @@ async function appFrames() {
         disp.pageTargets.find((t) => t.key === 'ov:ff').run();
         await until(() => d.cmds('seek').length > seeks, 2000, 'a podcast +10 s');
         assert.ok(disp.pageTargets.some((t) => t.key === 'ov:bar' && t.turn), 'podcast: the knob seeks on the bar');
+        await sleep(300); await hu.loopFn();
+        const podBar = disp.pageTargets.find((t) => t.key === 'ov:bar'), pAt = (k) => [podBar.x + 10 + (podBar.w - 20) * k, podBar.y + podBar.h / 2];
+        disp._touch(1, ...pAt(0.1)); disp._touch(2, ...pAt(0.5)); disp._touch(3, ...pAt(0.5));
+        await lastIs(d, { cmd: 'seek', ms: 100000 }, 'podcast: the bar dragged with a finger');
         // a failed play while driving: Try again in the middle (the same video)
         d.send({ ev: 'state', state: 'error', id: 'aaa', title: 'Song' }); d.send({ ev: 'error', msg: 'fetch: boom' });
         await sleep(300); await hu.loopFn();

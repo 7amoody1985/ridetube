@@ -469,6 +469,10 @@ def build(app_id, language='en'):
             shutil.copytree(p, os.path.join(src, 'javascript', 'kit', f))
         else:
             shutil.copy(p, os.path.join(src, 'javascript', 'kit', f))
+    if language != 'zh-CN':
+        p = os.path.join(src, 'javascript', 'kit', 'locales', 'zh-CN.json')
+        if os.path.exists(p):
+            os.remove(p)
     if language != 'ru':
         for name in ('ru.json', 'ru.tsv'):
             p = os.path.join(src, 'javascript', 'kit', 'locales', name)

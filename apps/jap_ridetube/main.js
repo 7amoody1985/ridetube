@@ -490,7 +490,7 @@ mgu.run({
             const hits = model.findChannels(chanQ);
             const all = { id: '::all', title: translate('All channels'), sub: message('{count} subscriptions', { count: ch.items.length }), act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
             return [{ title: message(chanQ.length === 1 ? 'Channels starting with “{query}”' : 'Channels matching “{query}”', { query: chanQ }),
-                sub: hits.length ? message(hits.length === 1 ? '{count} channel' : '{count} channels', { count: hits.length }) : translate('None'), items: [find, all].concat(hits), chan: true, grid: true }];
+                sub: hits.length ? message(hits.length === 1 ? '{count} channel' : '{count} channels', { count: hits.length }) : translate('none'), items: [find, all].concat(hits), chan: true, grid: true }];
         }
         function drawChannel(cv) {
             const c = model.chan;
@@ -644,7 +644,7 @@ mgu.run({
             const a = model.auth;
             // a code expired or refused, or signed out: a new one only when asked (a tap, or Sign in in the menu)
             if (a.state === 'error' || a.state === 'signed_out') {
-                say(cv, a.state === 'error' ? message('Sign-in is not available ({error}) - tap to try again', { error: a.msg || translate('Unknown error') })
+                say(cv, a.state === 'error' ? message('Sign-in is not available ({error}) - tap to try again', { error: a.msg || translate('error') })
                     : cv.own ? translate('Tap here to get a sign-in code') : translate('Sign in (menu) to get a sign-in code'),
                 translate('Your Home, Subscriptions and Watch later, on the car'));
                 if (cv.own) cv.target(MID - 520, 160, 1040, 200, () => model.authStart(true), 'signin', 16);

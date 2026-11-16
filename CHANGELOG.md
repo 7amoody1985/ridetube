@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add a Simplified Chinese RideTube build, including menus, settings and sign-in messages.
+- Add Chinese video-title fallback glyphs at 14 and 52 px for readable large titles.
+- Keep English wording and locale packaging unchanged; retain the existing shared zh-CN revision.
+
 ## Service 0.3.9
 
 - Videos play again: each video's folder was 0700, so BMW's media engine (its own uid) could not open the audio

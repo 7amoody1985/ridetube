@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,17 @@ def packets(path, sel):
                           'packet=size,duration', '-of', 'csv=p=0', path],
                          check=True, capture_output=True, text=True).stdout
     return [line.split(',')[:2] for line in out.split()]
+
+
+def probe(path, entries):
+    return json.loads(subprocess.run([FFPROBE, '-v', 'error', '-show_entries', entries, '-of', 'json', path],
+                                     check=True, capture_output=True, text=True, encoding='utf-8').stdout)
+
+
+def decoded(path):
+    """the decoded audio's MD5 (ffmpeg's md5 muxer)"""
+    return subprocess.run([FF, '-v', 'error', '-i', path, '-map', '0:a:0', '-f', 'md5', '-'],
+                          check=True, capture_output=True, text=True).stdout.strip()
 
 
 def atoms(path):
@@ -173,12 +185,92 @@ class Offline(unittest.TestCase, Pipeline):
         ff('-i', clip(TMP), '-map', '0:a:0', '-c', 'copy', '-movflags', '+faststart', plain)
         self.assertIsNone(ytfetch.flatten_m4a(plain, head, limit=os.path.getsize(plain) // 2))
 
+    def test_audio_tags(self):
+        """the car's player reads the title, artist and cover from the file: iTunes tags in the moov, which a
+        reader (ffprobe) finds; the same audio, decoded bit for bit, as without them (the offsets moved too)"""
+        jpg = os.path.join(self.tmp, 'cover.jpg')
+        ff('-f', 'lavfi', '-i', 'color=red:size=320x180', '-frames:v', '1', jpg)
+        with open(jpg, 'rb') as f:
+            cover = f.read()
+        plain, out = os.path.join(self.tmp, 'untagged.m4a'), os.path.join(self.tmp, 'tagged.m4a')
+        ytfetch.flatten_m4a(self.a, plain)
+        ytfetch.flatten_m4a(self.a, out, udta=ytfetch.tags_udta('Поправка a B58 — Café', 'Night Garage', cover))
+        self.assertEqual(atoms(out), ['ftyp', 'moov', 'mdat'])
+        self.assertEqual(decoded(out), decoded(plain), 'the same audio, every sample where the moov says')
+        self.assertEqual(probe(out, 'format_tags=title,artist')['format']['tags'], {'title': 'Поправка a B58 — Café', 'artist': 'Night Garage'})
+        pics = [s for s in probe(out, 'stream=codec_name:stream_disposition=attached_pic')['streams'] if s['disposition']['attached_pic']]
+        self.assertEqual([s['codec_name'] for s in pics], ['mjpeg'], 'the cover, as an attached picture')
+        # the head (a prefix of the download) carries them too
+        with open(self.a, 'rb') as f:
+            data = f.read()
+        part, head = os.path.join(self.tmp, 'half_t.m4a'), os.path.join(self.tmp, 'head_t.m4a')
+        with open(part, 'wb') as f:
+            f.write(data[:len(data) // 2] + bytes(len(data) - len(data) // 2))
+        ytfetch.flatten_m4a(part, head, limit=len(data) // 2, udta=ytfetch.tags_udta('Head', 'Chan'))
+        self.assertEqual(probe(head, 'format_tags=title,artist')['format']['tags'], {'title': 'Head', 'artist': 'Chan'})
+
     def test_audio_plain_is_copied(self):
         plain, out = os.path.join(self.tmp, 'plain.m4a'), os.path.join(self.tmp, 'plain_out.m4a')
         ff('-i', clip(TMP), '-map', '0:a:0', '-c', 'copy', '-movflags', '+faststart', plain)
         ytfetch.flatten_m4a(plain, out)
         with open(plain, 'rb') as a, open(out, 'rb') as b:
             self.assertEqual(a.read(), b.read())
+
+
+class Tags(unittest.TestCase):
+    @staticmethod
+    def items(u):
+        """udta > meta (a full box) > hdlr mdir + ilst > {item: (data type, value)}"""
+        (t, s, e), = ytfetch.boxes(u)
+        assert t == b'udta'
+        (t, s, e), = ytfetch.boxes(u, s, e)
+        assert t == b'meta'
+        hdlr, ilst = ytfetch.boxes(u, s + 4, e)
+        assert (hdlr[0], u[hdlr[1] + 8:hdlr[1] + 12], ilst[0]) == (b'hdlr', b'mdir', b'ilst')
+        out = {}
+        for t, s, e in ytfetch.boxes(u, ilst[1], ilst[2]):
+            (d, ds, de), = ytfetch.boxes(u, s, e)
+            assert d == b'data'
+            out[t] = (struct.unpack_from('>I', u, ds)[0], u[ds + 8:de])
+        return out
+
+    def test_udta_layout(self):
+        self.assertEqual(self.items(ytfetch.tags_udta('Title', 'Artist', b'\xff\xd8 a jpeg')),
+                         {b'\xa9nam': (1, b'Title'), b'\xa9ART': (1, b'Artist'), b'covr': (13, b'\xff\xd8 a jpeg')})
+        self.assertEqual(self.items(ytfetch.tags_udta('Кофе — Café', None, None)), {b'\xa9nam': (1, 'Кофе — Café'.encode())})
+        self.assertEqual(self.items(ytfetch.tags_udta(None, 'A', b'\x89PNG\r\n\x1a\nx')), {b'\xa9ART': (1, b'A'), b'covr': (14, b'\x89PNG\r\n\x1a\nx')})
+        self.assertEqual(ytfetch.tags_udta(), b'', 'nothing to say: no box')
+        self.assertEqual(len(self.items(ytfetch.tags_udta('x' * 300))[b'\xa9nam'][1]), 255, 'a long title cut')
+
+    def test_cover_is_a_jpeg_or_nothing(self):
+        bodies = {'/ok': b'\xff\xd8' + b'j' * 100, '/png': b'\x89PNG\r\n\x1a\n' + b'p' * 100,
+                  '/big': b'\xff\xd8' + bytes(ytfetch.COVER_MAX), '/missing': None}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                b = bodies.get(self.path)
+                if b is None:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        old, ytfetch.COVER_URL = ytfetch.COVER_URL, f'http://127.0.0.1:{srv.server_port}/{{}}'
+        try:
+            self.assertEqual(ytfetch.fetch_cover('ok'), bodies['/ok'])
+            for p in ('png', 'big', 'missing'):
+                self.assertIsNone(ytfetch.fetch_cover(p), p)
+        finally:
+            ytfetch.COVER_URL = old
+            srv.shutdown()
+            srv.server_close()
 
 
 class _Ranges(http.server.BaseHTTPRequestHandler):

@@ -198,6 +198,16 @@ async function main() {
         assert.ok(ytdecLines()[0].endsWith('argv --dir ' + path.join(cache, 'DemoVideo01') + ' --rect 1836x504 --fill --log ' + path.join(tmp, 'ytdec.log')), ytdecLines()[0]);
     });
 
+    await t('the player\'s own metadata (newer firmware): logged, keys as names or numbers; none of them said so', async () => {
+        assert.strictEqual(typeof subs.currentItemMetadata, 'function', 'subscribed');
+        const n = logs.length;
+        subs.currentItemMetadata([{ key: 3, value: { stringValue: 'Поправка a B58' } }, { key: 'ARTIST', value: { stringValue: 'Night Garage' } },
+            { key: 17, value: { stringValue: '/var/cache/cover/1.jpg' } }, { key: 44, value: { numeric: 60000 } }, { key: 0, value: { id: Buffer.from('x') } }]);
+        subs.currentItemMetadata([{ key: 16, value: { stringValue: 'audio.m4a' } }]);
+        assert.deepStrictEqual(logs.slice(n), ['player metadata: TITLE="Поправка a B58" ARTIST="Night Garage" COVER_FILE="/var/cache/cover/1.jpg" LENGTH=60000',
+            'player metadata: no title, artist, album or cover']);
+    });
+
     await t('clock ticks forwarded to ytdec (mono ms) and as time events', async () => {
         subs.currentItemTime({ elapsed: 0, total: 1 }); // ignored
         subs.playerState('PLAYER_STATE_PLAY');

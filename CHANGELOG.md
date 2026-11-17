@@ -5,6 +5,10 @@
 - Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
   the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
   GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
+- Service: the car's media player (the cluster, the media screen) can show the video's title, channel and
+  thumbnail instead of "unknown title" and "unknown artist". BMW's media player is given only the audio file,
+  so the service now writes them into it as standard MP4 tags. Videos already in the car's cache get them
+  when they are fetched again.
 
 ## App 0.3.11
 

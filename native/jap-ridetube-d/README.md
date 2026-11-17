@@ -26,6 +26,12 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
   not https, or a range failing 3 times). Once the gap-free prefix holds max(60 s, 1.5 x the rest's
   estimated download time) of samples, it writes `audio.head.m4a`, a plain MP4 of just those, and says
   `audio_head {ms}`. The daemon starts on `audio_head` (or `audio_ready`) + 10 s of video, playing the head.
+- Track info: BMW's MediaPlayer takes only a path (`playFile`, `setTime`: no title or artist), so the car shows
+  what the file says. Both files carry iTunes tags in `moov/udta/meta/ilst`: the title (`©nam`), the channel
+  (`©ART`) and the video's `mqdefault.jpg` thumbnail (`covr`), fetched alongside the audio (playback never
+  waits for it; the head has it if it came in time, `audio.m4a` waits up to 5 s). No picture: no cover, no failure.
+  Newer firmware's MediaPlayer reports what it read (`currentItemMetadata`, read-only: it has no setter): the daemon
+  logs it, `player metadata: TITLE="…" ARTIST="…" COVER_FILE="…"` (`journalctl -u jap-ridetube-d | grep "player metadata"`).
 - Head -> full: on `audio_ready` the daemon calls `playFile(audio.m4a)` on the live connection, then
   `setTime` at the clock (extrapolated from the last tick: ytdec keeps running) and deletes the head; the
   player's times and states between the two are ignored, and its times below the target for 3 s after.

@@ -776,6 +776,21 @@ Account.prototype.close = function () {
 };
 
 // ---------------------------------------------------------------- audio: BMW MediaPlayer
+// The player's own reading of the item playing (currentItemMetadata: newer firmware's MediaPlayer has it, read-only;
+// the older OAP one has only playFile/setTime). Logged, to see whether it found the tags ytfetch writes into the
+// file - what the cluster and the media screen show. Keys come as names or as their numbers.
+const META_KEYS = { 3: 'TITLE', 5: 'ARTIST', 7: 'ALBUM', 17: 'COVER_FILE', 44: 'LENGTH' };
+function metadataLine(v) {
+    const out = [];
+    (Array.isArray(v) ? v : []).forEach((e) => {
+        const k = e && (typeof e.key === 'number' ? META_KEYS[e.key] : e.key);
+        if (!k || ['TITLE', 'ARTIST', 'ALBUM', 'COVER_FILE', 'LENGTH'].indexOf(k) < 0) return;
+        const x = (e.value && typeof e.value === 'object') ? e.value : { v: e.value };
+        const val = x.stringValue !== undefined ? x.stringValue : x.numeric !== undefined ? x.numeric : Object.keys(x).map((n) => x[n])[0];
+        out.push(k + '=' + (typeof val === 'string' ? JSON.stringify(val.slice(0, 80)) : String(val)));
+    });
+    return out.length ? out.join(' ') : 'no title, artist, album or cover';
+}
 function Audio(opts, handlers) {
     this.opts = opts;
     this.h = handlers; // {time(v), state(v), error(v)}
@@ -796,6 +811,10 @@ Audio.prototype.init = async function () {
     mp.subscribe({ name: 'playerState', onReceive: safe(h.state) });
     mp.subscribe({ name: 'currentItemTime', onReceive: safe(h.time) });
     mp.subscribe({ name: 'playbackErrorEvent', onReceive: safe(h.error) });
+    try {
+        const r = mp.subscribe({ name: 'currentItemMetadata', onReceive: safe((v) => this.opts.log('player metadata: ' + metadataLine(v))) });
+        if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch (e) { /* not in this firmware's MediaPlayer */ }
     this.cc = cc;
     this.mp = mp;
 };

@@ -254,18 +254,51 @@ mgu.run({
         // touch band, the overlay's scale); scrub: {ms, bar} while a finger holds it
         let seekBar = null, scrub = null;
         const barMs = (b, sx) => Math.round(Math.max(0, Math.min(1, (sx / b.s - b.x0) / b.w)) * model.total);
+        // a double tap on the picture's left or right third: -10 s / +10 s, each further quick tap 10 s more (one seek
+        // once they stop, as the knob). A single tap still shows or hides the controls, a tap on a control is the
+        // control's. picArea: the video player's last frame {SW, s, ctls: the controls shown (overlay px)};
+        // taps: the last tap counted {dir, t, x, y, n, ctls: the controls shown at the first}; tapFx: the hint drawn
+        let picArea = null, taps = null, tapFx = null, tapHeld = false, downAt = null;
+        const TAP_MS = 400;
+        const live = () => model.state === 'playing' || model.state === 'paused';
+        const third = (a, x) => (x < a.SW * 0.35 ? -1 : x > a.SW * 0.65 ? 1 : 0);
+        const onCtl = (ctls, x, y) => ctls.some((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+        function tapDown(sx, sy) {
+            const a = picArea, now = Date.now();
+            downAt = { sx, sy, t: now };
+            if (!a || mode !== 'player' || !live() || !taps || now - taps.t > TAP_MS) return false;
+            const x = sx / a.s, y = sy / a.s, dir = third(a, x);
+            // the first tap's side, near it, and not on a control that was there then (one it showed doesn't count)
+            if (dir !== taps.dir || Math.abs(x - taps.x) > 240 || Math.abs(y - taps.y) > 240 || onCtl(taps.ctls, x, y)) return false;
+            Object.assign(taps, { t: now, x, y, n: taps.n + 1 });
+            turnSeek(dir);
+            tapFx = { dir, n: taps.n, until: now + 900 };
+            tapHeld = true;
+            wake();
+            return true;
+        }
+        // a tap the page got (short, not moved): counted when it was on the picture's left or right third, off the controls
+        function tapUp(sx, sy) {
+            const a = picArea, d = downAt, now = Date.now();
+            downAt = null; taps = null;
+            if (!a || !d || mode !== 'player' || !live() || now - d.t > 300 || Math.abs(sx - d.sx) > 30 || Math.abs(sy - d.sy) > 30) return;
+            const x = sx / a.s, y = sy / a.s, dir = third(a, x);
+            if (dir && !onCtl(a.ctls, x, y)) taps = { dir, t: now, x, y, n: 0, ctls: a.ctls };
+        }
         if (ctx.onTouch) ctx.onTouch((phase, sx, sy) => {
             if (phase === 1) {
-                scrub = null;
+                scrub = null; tapHeld = false;
                 const b = seekBar, x = b ? sx / b.s : 0, y = b ? sy / b.s : 0;
-                if (!b || mode !== 'player' || !(model.total > 0) || (model.state !== 'playing' && model.state !== 'paused')) return false;
-                if (x < b.x0 - 24 || x > b.x0 + b.w + 24 || y < b.y0 || y > b.y1) return false;
+                const onBar = b && mode === 'player' && model.total > 0 && live() && x >= b.x0 - 24 && x <= b.x0 + b.w + 24 && y >= b.y0 && y <= b.y1;
+                if (!onBar) return tapDown(sx, sy);
+                taps = null;
                 clearTimeout(pendT); pend = 0;                     // (a knob seek not sent yet: the finger wins)
                 scrub = { ms: barMs(b, sx), bar: b };
                 wake();
                 return true;
             }
-            if (!scrub) return false;
+            if (tapHeld) { if (phase === 3) tapHeld = false; return true; }
+            if (!scrub) { if (phase === 3) tapUp(sx, sy); return false; }
             scrub.ms = barMs(scrub.bar, sx);
             if (phase === 3) { const ms = scrub.ms; scrub = null; model.skip(ms - model.elapsed); }
             wake();
@@ -907,12 +940,18 @@ mgu.run({
             cv.chrome = null;              // no header or bar composed over it (display.js present)
             // read: the page stays placed as the browsing pages (reaching down), so oy, and the targets with it, hold
             void cv.extra;
-            const tg = (x, y, w, h, run, key, r, turn) => cv.target(x - dx, y - dy, w, h, run, key, r, turn);
+            const ctls = [];                               // the controls this frame shows (a double tap on them is theirs)
+            const tg = (x, y, w, h, run, key, r, turn) => { ctls.push({ x, y, w, h }); return cv.target(x - dx, y - dy, w, h, run, key, r, turn); };
             cv.xf(1, 0, 0).fillRect(0, 0, pl.w, pl.h, '#000000');
             seekBar = null;                                // (set again where this frame draws the bar)
             const pod = model.active() && noVideo();   // driving: podcast mode (no picture, big controls, always shown)
+            picArea = pod ? null : { SW, s, ctls };        // double taps: the video player only (podcast mode has its big buttons)
             if (videoShown && !pod) cv.video(VID, 0, 0, pl.w, pl.h, 0);
-            if (!overlay() && !pod) { cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined)); return; }
+            if (!overlay() && !pod) {
+                cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined));
+                picArea.ctls = [];                         // (hidden: those keys only wake it, no control under a tap)
+                return;
+            }
             cv.xf(s, 0, 0);
             const LX = HMI.left / s, act = model.active(), live = model.state === 'playing' || model.state === 'paused';
             const cx = SW / 2, cy = SH / 2 - 6, run = (fn) => () => { fn(); wake(); };
@@ -1032,6 +1071,13 @@ mgu.run({
                 cv.roundRect(sx, sy, w2, 60, 30, f ? '#ffffff' : '#3a3a3ae6');
                 cv.text(tt, sx + 35, sy + 40, 28, f ? '#0f0f0f' : '#ffffff', LITB);
                 tg(sx, sy, w2, 60, run(sbJump(ask)), 'ov:sbskip', 30);
+            }
+            // a double tap's hint on its side: « 10 s / 20 s » (10 s a tap after the first)
+            if (tapFx && Date.now() < tapFx.until) {
+                const t = (tapFx.dir < 0 ? '«  ' : '') + tapFx.n * 10 + ' s' + (tapFx.dir > 0 ? '  »' : ''), tw = cv.textWidth(t, 34, LITB) + 56;
+                const hx = tapFx.dir < 0 ? LX + 60 : SW - 60 - tw, hy = cy - 150;
+                cv.roundRect(hx, hy, tw, 64, 32, '#000000b0');
+                cv.text(t, hx + tw / 2, hy + 44, 34, '#ffffff', { literal: true, font: 'bold', align: 'center' });
             }
             hmiIcons(cv);
         }

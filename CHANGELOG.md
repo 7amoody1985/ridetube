@@ -6,6 +6,9 @@
   time and a bubble with the time it goes to (and its chapter) follow it, and the video goes there when it lets
   go; a tap on the bar jumps there. Pressing the controller on the bar still plays or pauses, and turning it still
   seeks 10 s a detent.
+- A double tap on the left or right third of the video goes back or forward 10 s, each further quick tap 10 s
+  more ("« 20 s"), as one seek once the taps stop. A single tap still shows or hides the controls, and a tap on a
+  control is the control's. The podcast view while driving keeps its big buttons only.
 
 ## App 0.3.11
 

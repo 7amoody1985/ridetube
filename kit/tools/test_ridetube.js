@@ -417,6 +417,43 @@ async function appFrames() {
         d.send({ ev: 'time', elapsed: 21000, total: 200000 });
         await sleep(300); await hu.loopFn();
         console.log('ok   the progress bar: dragged or tapped with a finger, one seek where it lets go');
+        // double taps on the picture (overlay px -> the kit's page px): the right third +10 s a tap after the first, one seek
+        // once they stop; a single tap none; a double tap on a control shown is the control's; with the controls hidden,
+        // a second tap where a control just showed is still a double tap
+        const SW = pl.w / pl.scale, SH = pl.h / pl.scale, ovPt = (X, Y) => [X - pl.ox / pl.scale, Y - pl.oy / pl.scale];
+        const tap = (p) => { disp._touch(1, ...p); disp._touch(3, ...p); };
+        const nPause1 = d.cmds('pause').length, nFill = d.cmds('fill').length;
+        // (parked: the speed read again, as the car sends it - a reading older than 5 s counts as driving: podcast mode)
+        const parkedNow = () => speedH({ speedVehicleCentreOfGravity: 0 });
+        const at50 = async () => { parkedNow(); d.send({ ev: 'time', elapsed: 50000, total: 200000 }); disp.onPageFocus('ov:rw'); await sleep(300); await hu.loopFn(); };
+        await at50();
+        let nS = d.cmds('seek').length;
+        const R = ovPt(SW * 0.85, SH * 0.3);
+        tap(R); tap([R[0] + 20, R[1] + 10]); tap(R);
+        await sleep(500);
+        assert.deepStrictEqual(d.cmds('seek').slice(nS), [{ cmd: 'seek', ms: 70000 }], 'a triple tap on the right: +20 s, one seek');
+        await sleep(300); await hu.loopFn();
+        nS = d.cmds('seek').length;
+        tap(ovPt(SW * 0.15, SH * 0.3));
+        await sleep(600);
+        assert.strictEqual(d.cmds('seek').length, nS, 'a single tap on the left: no seek');
+        await at50();
+        const Z = ovPt(SW - 150, SH / 2 - 6);                // the Zoom control (right third)
+        nS = d.cmds('seek').length;
+        tap(Z); await hu.loopFn(); tap(Z);
+        await sleep(500);
+        assert.deepStrictEqual([d.cmds('seek').length, d.cmds('fill').slice(nFill).map((x) => x.on)], [nS, [true, false]], 'a double tap on Zoom: Zoom twice, no seek');
+        parkedNow(); disp.onTap(800, 300); await sleep(300); await hu.loopFn();    // (controls hidden)
+        assert.ok(disp.pageTargets.every((t) => t.w > 1000), 'controls hidden');
+        tap(Z); await hu.loopFn(); tap(Z);
+        await sleep(500);
+        assert.deepStrictEqual(d.cmds('seek').slice(nS), [{ cmd: 'seek', ms: 60000 }], 'controls hidden: a double tap where Zoom shows is +10 s');
+        assert.strictEqual(d.cmds('fill').length, nFill + 2, 'and not a Zoom');
+        assert.strictEqual(d.cmds('pause').length, nPause1, 'double taps never pause');
+        hu.ctx.settings.set('fill', false);
+        d.send({ ev: 'time', elapsed: 21000, total: 200000 });
+        await sleep(300); await hu.loopFn();
+        console.log('ok   double tap on the picture\'s left / right third: -10 s / +10 s a tap, the controls keep theirs');
         // SponsorBlock "ask" (end cards by default): a Skip button while the clock is in one, the overlay kept
         d.send({ ev: 'extras', id: 'aaa', chapters: [], segments: [[15000, 60000, 'outro']] });
         await sleep(100); await hu.loopFn();

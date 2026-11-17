@@ -27,7 +27,13 @@ function family(name) {
 /** Smallest baked size >= requested (downscaling looks better), else largest. */
 function get(name, size, text) {
     // Shared supplemental atlases avoid duplicating glyphs in every numeric size.
-    if (text && /[\u3000-\u9fff\uff00-\uffef]/.test(text)) name = 'cjk';
+    if (text && /[\u3000-\u9fff\uff00-\uffef]/.test(text)) {
+        name = 'cjk';
+        const primary = family(name), titles = family('cjk-titles');
+        if (titles && (!primary || Array.from(text).some((ch) => !primary[0].glyphs[ch.codePointAt(0)]))) {
+            name = 'cjk-titles';
+        }
+    }
     // Cyrillic (a title, a channel): the same weight's companion (bake_fonts.py --cyrillic), else the regular one,
     // else a Russian build's own atlas
     else if (text && /[\u0400-\u04ff]/.test(text)) name = family(name + '_cyr') ? name + '_cyr' : family('label_cyr') ? 'label_cyr' : 'cyrillic';

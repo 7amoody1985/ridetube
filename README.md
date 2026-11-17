@@ -1,5 +1,12 @@
 # RideTube
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
+For a Simplified Chinese local build, provide your own `oap-sdk/` and run
+`python3 kit/tools/build.py --language zh-CN jap_ridetube`.
+Chinese translation by 小白151 (JackieZ123430). The [Chinese guide](README.zh-CN.md)
+includes setup, playback settings, and font coverage.
+
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
 > endorsed by or sponsored by Google or YouTube. Use it at your own risk. You are responsible for following
 > YouTube's Terms of Service and the laws of your country, and for using it safely: by default the picture

@@ -44,6 +44,11 @@ const path = require('path');
 const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const QR = require('./kit/qr');
+const { t: translate } = require('./kit/i18n');
+
+function message(key, values) {
+    return translate(key).replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
+}
 const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
 const Parked = require('./kit/parked');
@@ -136,8 +141,9 @@ mgu.run({
         const RECENT = path.join(ctx.dataDir, 'recent.json');
         let recent = [];
         try { recent = JSON.parse(fs.readFileSync(RECENT, 'utf8')).filter((s) => typeof s === 'string').slice(0, SLOTS.length); } catch (e) { /* none yet */ }
-        const slots = () => recent.concat(SUGGEST.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length);
-        const showSlots = () => slots().forEach((s, i) => ui.text(SLOTS[i], s));
+        const suggestions = SUGGEST.map(translate);
+        const slots = () => recent.concat(suggestions.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length);
+        const showSlots = () => slots().forEach((s, i) => ui.text(SLOTS[i], s, 0, 'Text', { literal: true }));
         function search(q) {
             q = String(q || '').trim();
             if (!q) return;
@@ -148,9 +154,9 @@ mgu.run({
             show('results');
             ui.open('VIEW');
         }
-        ui.onClick('BTN_SEARCH', () => spell(ctx.app, 'Search videos')
+        ui.onClick('BTN_SEARCH', () => spell(ctx.app, translate('Search videos'))
             .then((t) => search(t))
-            .catch((e) => { log.error('speller', e); ui.text('MAIN_INFO', 'The keyboard did not open: ' + (e.message || e)); }));
+            .catch((e) => { log.error('speller', e); ui.text('MAIN_INFO', translate('The keyboard did not open: ') + (e.message || e), 0, 'Text', { literal: true }); }));
         SLOTS.forEach((b, i) => ui.onClick(b, () => search(slots()[i])));
         ui.onClick('BTN_NOW', () => { show('player'); ui.open('VIEW'); });
         ui.onClick('BTN_CLOSE', () => { closeVideo(); info(); });
@@ -169,12 +175,12 @@ mgu.run({
 
         function info() {
             let s;
-            if (!model.connected) s = 'The RideTube service (jap-ridetube-d) is not running';
-            else if (model.searchError) s = 'Search: ' + model.searchError;
-            else if (model.error) s = 'Error: ' + model.error;
-            else if (model.active()) s = (model.state === 'preparing' ? 'Preparing ' + Math.round(model.pct) + ' %: ' : model.state === 'paused' ? 'Paused: ' : 'Playing: ') + model.title;
-            else s = 'Search, or pick a recent search below';
-            ui.text('MAIN_INFO', s);
+            if (!model.connected) s = translate('The RideTube service (jap-ridetube-d) is not running');
+            else if (model.searchError) s = translate('Search: ') + model.searchError;
+            else if (model.error) s = translate('Error: ') + model.error;
+            else if (model.active()) s = (model.state === 'preparing' ? message('Preparing {percent} %: ', { percent: Math.round(model.pct) }) : model.state === 'paused' ? translate('Paused: ') : translate('Playing: ')) + model.title;
+            else s = translate('Search, or pick a recent search below');
+            ui.text('MAIN_INFO', s, 0, 'Text', { literal: true });
         }
         info();
         setInterval(() => { try { model.checkSearch(Date.now(), SEARCH_MS); model.checkFeeds(Date.now(), FEED_MS); if (ui.isVisible('MAIN')) info(); } catch (e) { log.error('info', e); } }, 1000);
@@ -223,11 +229,11 @@ mgu.run({
         let lastPlay = null, lastList = null, lastAcct = null;
         function labels() {
             const p = model.state === 'playing' ? 'Pause' : 'Play';
-            if (p !== lastPlay) { lastPlay = p; ui.text('BTN_PLAY', p); }
+            if (p !== lastPlay) { lastPlay = p; ui.text('BTN_PLAY', translate(p)); }
             const l = mode === 'player' ? NAMES[browse] : model.active() ? 'Now playing' : 'Player';
-            if (l !== lastList) { lastList = l; ui.text('BTN_LIST', l); }
+            if (l !== lastList) { lastList = l; ui.text('BTN_LIST', translate(l)); }
             const a = model.auth.state !== 'signed_in' ? 'Sign in' : signOutArmed ? 'Press again to sign out' : 'Sign out';
-            if (a !== lastAcct) { lastAcct = a; ui.text('BTN_ACCOUNT', a); }
+            if (a !== lastAcct) { lastAcct = a; ui.text('BTN_ACCOUNT', translate(a)); }
         }
         ui.onClick('BTN_PLAY', () => model.toggle());
         ui.onClick('BTN_RW', () => model.skip(-10000));
@@ -317,7 +323,7 @@ mgu.run({
             cv.text(fit(cv, t, 26, tw - 36, LITB), bx + 18, y - 30, 26, '#ffffff', LITB);
         }
         // preparing: its percentage, or the network lost and the daemon trying again
-        const prepText = () => (model.retry ? 'No connection - trying again (' + model.retry + ')...' : 'Preparing... ' + Math.round(model.pct || 0) + ' %');
+        const prepText = () => (model.retry ? message('No connection - trying again ({count})...', { count: model.retry }) : message('Preparing... {percent} %', { percent: Math.round(model.pct || 0) }));
         // a failed play: Try again (the same video, the queue kept)
         const again = () => { if (model.id) play(model.id, model.item(model.id)); };
         /* ---------- SponsorBlock: per category Skip, a Skip button (ask) or Off (Settings) ---------- */
@@ -347,10 +353,10 @@ mgu.run({
             if (parked.moving() || model.state !== 'playing') return;          // driving charges it
             if (soc < lim) {
                 model.toggle();
-                model.toast = { text: '12 V battery at ' + soc + ' % - paused. Start the car to keep watching', until: Date.now() + 15000, warn: true };
+                model.toast = { text: message('12 V battery at {soc} % - paused. Start the car to keep watching', { soc }), until: Date.now() + 15000, warn: true };
             } else if (soc < lim + 5 && !socWarned) {
                 socWarned = true;
-                model.toast = { text: '12 V battery at ' + soc + ' % - it pauses at ' + lim + ' %', until: Date.now() + 8000, warn: true };
+                model.toast = { text: message('12 V battery at {soc} % - it pauses at {limit} %', { soc, limit: lim }), until: Date.now() + 8000, warn: true };
             } else return;
             wake(); changed();
         }
@@ -487,7 +493,7 @@ mgu.run({
                 const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
                 if (on) { cv.roundRect(18, cy - 38, 90, 84, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
-                cv.text(name === 'Subscriptions' ? 'Subs' : name, cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
+                cv.text(translate(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
                 if (cv.own) cv.target(16, cy - 38, 92, 84, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
             });
         }
@@ -515,9 +521,9 @@ mgu.run({
             }
             if (cur) {
                 cv.strokeRoundRect(x - 2, y - 2, TW + 4, TH + 4, 14, 3, C.red);
-                const pw = cv.textWidth('NOW PLAYING', 16, { literal: true, font: 'bold', spacing: 1 }) + 20;
+                const pw = cv.textWidth(translate('NOW PLAYING'), 16, { literal: true, font: 'bold', spacing: 1 }) + 20;
                 cv.roundRect(x + 10, y + 10, pw, 28, 6, C.red);
-                cv.text('NOW PLAYING', x + 20, y + 30, 16, '#ffffff', { literal: true, font: 'bold', spacing: 1 });
+                cv.text(translate('NOW PLAYING'), x + 20, y + 30, 16, '#ffffff', { literal: true, font: 'bold', spacing: 1 });
             }
             const lines = wrap(cv, String(r.title || r.id));
             lines.forEach((l, k) => cv.text(l, x, y + TH + 32 + k * 30, 24, C.text, LITB));
@@ -536,7 +542,7 @@ mgu.run({
             const pid = th && cv.place ? slot(r.thumb, th) : null;
             if (pid) cv.picture(pid, x, y, TW, TH, 12);
             else { cv.roundRect(x, y, TW, TH, 12, C.ph); listGlyph(cv, x + TW / 2, y + TH / 2, 60, '#ffffff38'); }
-            const n = r.count === null || r.count === undefined ? 'Playlist' : r.count === 0 ? 'No videos' : r.count + (r.count === 1 ? ' video' : ' videos');
+            const n = r.count === null || r.count === undefined ? translate('Playlist') : r.count === 0 ? translate('No videos') : message(r.count === 1 ? '{count} video' : '{count} videos', { count: r.count });
             const nw = cv.textWidth(n, 20, LITB) + 52;
             cv.roundRect(x + TW - 8 - nw, y + TH - 36, nw, 28, 6, '#000000cc');
             listGlyph(cv, x + TW - nw + 12, y + TH - 22, 18, '#ffffff');
@@ -576,7 +582,7 @@ mgu.run({
         // the channels, filtered by chanQ (the keyboard: one letter = names starting with it, else names holding it)
         let chanQ = '';
         function findChannel() {
-            spell(ctx.app, 'Find a channel').then((t) => {
+            spell(ctx.app, translate('Find a channel')).then((t) => {
                 if (t === null || t === undefined) { ui.open('VIEW'); return; }
                 chanQ = String(t).trim(); vs('subs').sy = 0; vs('subs').off = {}; dirty = true;
                 show('subs'); ui.open('VIEW');
@@ -586,24 +592,24 @@ mgu.run({
         function openChannel(c) { if (mode !== 'channel') chanFrom = mode; model.openChannel(c.id, c.title); show('channel'); vs('channel').sy = 0; vs('channel').off = {}; }
         function chanSections() {
             const ch = model.chans;
-            if (!ch || (!ch.items.length && ch.loading)) return [{ title: 'Channels', sub: 'Loading...', items: [], chan: true }];
-            if (!ch.items.length) return ch.error ? [{ title: 'Channels', sub: ch.error, items: [], chan: true }] : [];
-            const find = { id: '::find', title: chanQ ? 'Search again' : 'Search channels', sub: 'A letter, or a word', act: findChannel, glyph: KEYS };
-            if (!chanQ) return [{ title: 'Channels', sub: ch.items.length + ' subscriptions, A-Z', items: [find].concat(ch.items), chan: true }];
+            if (!ch || (!ch.items.length && ch.loading)) return [{ title: translate('Channels'), sub: translate('Loading...'), items: [], chan: true }];
+            if (!ch.items.length) return ch.error ? [{ title: translate('Channels'), sub: ch.error, items: [], chan: true }] : [];
+            const find = { id: '::find', title: chanQ ? translate('Search again') : translate('Search channels'), sub: translate('A letter, or a word'), act: findChannel, glyph: KEYS };
+            if (!chanQ) return [{ title: translate('Channels'), sub: message('{count} subscriptions, A-Z', { count: ch.items.length }), items: [find].concat(ch.items), chan: true }];
             const hits = model.findChannels(chanQ);
-            const all = { id: '::all', title: 'All channels', sub: ch.items.length + ' subscriptions', act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
-            return [{ title: (chanQ.length === 1 ? 'Channels starting with “' : 'Channels matching “') + chanQ + '”',
-                sub: hits.length ? hits.length + (hits.length === 1 ? ' channel' : ' channels') : 'none', items: [find, all].concat(hits), chan: true, grid: true }];
+            const all = { id: '::all', title: translate('All channels'), sub: message('{count} subscriptions', { count: ch.items.length }), act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
+            return [{ title: message(chanQ.length === 1 ? 'Channels starting with “{query}”' : 'Channels matching “{query}”', { query: chanQ }),
+                sub: hits.length ? message(hits.length === 1 ? '{count} channel' : '{count} channels', { count: hits.length }) : translate('none'), items: [find, all].concat(hits), chan: true, grid: true }];
         }
         function drawChannel(cv) {
             const c = model.chan;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (!c) return say(cv, 'Pick a channel in Subscriptions');
-            if (!c.items.length) return say(cv, c.loading ? 'Loading ' + (c.title || 'the channel') + '...' : c.error === 'feed offline' ? 'The video service is not reachable - check the car\'s internet connection' : c.error || 'No videos on this channel', c.title || null);
+            if (!c) return say(cv, translate('Pick a channel in Subscriptions'));
+            if (!c.items.length) return say(cv, c.loading ? message('Loading {name}...', { name: c.title || translate('the channel') }) : c.error === 'feed offline' ? translate('The video service is not reachable - check the car\'s internet connection') : c.error || translate('No videos on this channel'), c.title || null);
             const hid = hidden.indexOf(c.title) >= 0;
-            const tog = { id: '::hide', title: hid ? 'Show this channel' : 'Hide this channel', sub: hid ? 'Hidden from Home, Subscriptions, Search' : 'From Home, Subscriptions and Search',
+            const tog = { id: '::hide', title: hid ? translate('Show this channel') : translate('Hide this channel'), sub: hid ? translate('Hidden from Home, Subscriptions, Search') : translate('From Home, Subscriptions and Search'),
                 act: () => toggleHidden(c.title), glyph: hid ? SHOW : BLOCK };
-            drawPage(cv, (c.shelves && c.shelves.length ? c.shelves : [{ title: 'Videos', items: c.items, grid: true }])
+            drawPage(cv, (c.shelves && c.shelves.length ? c.shelves : [{ title: translate('Videos'), items: c.items, grid: true }])
                 .map((s, i) => (i === 0 ? Object.assign({}, s, { title: c.title + (s.title ? ' · ' + s.title : ''), items: [tog].concat(s.items) }) : s)));
         }
 
@@ -714,77 +720,77 @@ mgu.run({
             cv.text(fit(cv, msg, 34, 1360, LIT), browsing() ? MID : W / 2, 290, 34, '#ffffff', { literal: true, align: 'center' });
             if (sub) cv.text(fit(cv, sub, 24, 1360, LIT), browsing() ? MID : W / 2, 336, 24, C.dim, { literal: true, align: 'center' });
         }
-        const OFF = 'The RideTube service (jap-ridetube-d) is not running';
-        const OFF2 = 'Install the RideTube service (jap-ridetube-d) from the MGU Store';
+        const OFF = translate('The RideTube service (jap-ridetube-d) is not running');
+        const OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (model.searching) return say(cv, 'Searching "' + model.q + '"...');
-            if (model.searchError) return say(cv, 'Search: ' + model.searchError, 'Try again from Search');
-            if (!model.results.length) return say(cv, model.q ? 'Nothing found for "' + model.q + '"' : 'Search (bar button) to find videos', model.q ? 'Try other words' : null);
-            drawPage(cv, [{ title: 'Results for “' + model.q + '”', items: shown(model.results), grid: true }]);
+            if (model.searching) return say(cv, message('Searching "{query}"...', { query: model.q }));
+            if (model.searchError) return say(cv, translate('Search: ') + model.searchError, translate('Try again from Search'));
+            if (!model.results.length) return say(cv, model.q ? message('Nothing found for "{query}"', { query: model.q }) : translate('Search (bar button) to find videos'), model.q ? translate('Try other words') : null);
+            drawPage(cv, [{ title: message('Results for “{query}”', { query: model.q }), items: shown(model.results), grid: true }]);
         }
         function drawFeed(cv, which) {
             const f = model.feeds[which], a = model.auth.state;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (a === 'unsupported') return say(cv, 'Signing in needs a newer jap-ridetube-d tool on the car');
+            if (a === 'unsupported') return say(cv, translate('Signing in needs a newer jap-ridetube-d tool on the car'));
             if (a !== 'signed_in') return drawSignIn(cv);
             const chans = which === 'subs' && model.chans && model.chans.items.length;   // the channels show without the videos
             if ((!f || !f.items.length) && !chans) {
-                return say(cv, !f || f.loading ? 'Loading ' + NAMES[which] + '...' : f.error === 'feed offline' ? 'The video service is not reachable - check the car\'s internet connection'
-                    : f.error ? NAMES[which] + ': ' + f.error : which === 'wl' ? 'Nothing in Watch later' : 'No videos here yet', which === 'wl' && f && !f.loading && !f.error ? 'Videos you save for later show here' : null);
+                return say(cv, !f || f.loading ? message('Loading {name}...', { name: translate(NAMES[which]) }) : f.error === 'feed offline' ? translate('The video service is not reachable - check the car\'s internet connection')
+                    : f.error ? translate(NAMES[which]) + ': ' + f.error : which === 'wl' ? translate('Nothing in Watch later') : translate('No videos here yet'), which === 'wl' && f && !f.loading && !f.error ? translate('Videos you save for later show here') : null);
             }
             let secs;
             if (which === 'home') {
                 const wl = model.feeds.wl;
-                secs = (model.resume.length ? [{ title: 'Continue watching', items: model.resume }] : [])
-                    .concat(f.shelves || [{ title: 'Recommended', items: f.items, grid: true }])
-                    .concat(wl && wl.items.length ? [{ title: 'Watch later', items: wl.items.slice(0, SHELF_MAX) }] : []);
-            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: NAMES[which], sub: f.items.length + ' videos', items: f.items, grid: true }];
+                secs = (model.resume.length ? [{ title: translate('Continue watching'), items: model.resume }] : [])
+                    .concat(f.shelves || [{ title: translate('Recommended'), items: f.items, grid: true }])
+                    .concat(wl && wl.items.length ? [{ title: translate('Watch later'), items: wl.items.slice(0, SHELF_MAX) }] : []);
+            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: translate(NAMES[which]), sub: message('{count} videos', { count: f.items.length }), items: f.items, grid: true }];
             if (which === 'subs') secs = chanSections().concat(chanQ || !f || !f.items.length ? [] : secs);
             drawPage(cv, secs.map((sc) => (sc.chan ? sc : Object.assign({}, sc, { items: shown(sc.items) }))).filter((sc) => sc.chan || sc.items.length));
         }
         // the account's playlists, a grid; one opens as its videos (the Playlists page stays lit on the rail)
         function openPlaylist(p) { model.openPlaylist(p.id, p.title); show('list'); vs('list').sy = 0; vs('list').off = {}; }
-        const OFFLINE = 'The video service is not reachable - check the car\'s internet connection';
+        const OFFLINE = translate('The video service is not reachable - check the car\'s internet connection');
         function drawPlaylists(cv) {
             const p = model.pls, a = model.auth.state;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (a === 'unsupported') return say(cv, 'Signing in needs a newer jap-ridetube-d tool on the car');
+            if (a === 'unsupported') return say(cv, translate('Signing in needs a newer jap-ridetube-d tool on the car'));
             if (a !== 'signed_in') return drawSignIn(cv);
             if (!p || !p.items.length) {
-                if (p && p.error === 'unknown cmd playlists') return say(cv, 'Playlists need a newer jap-ridetube-d tool on the car', 'Update the RideTube service in the MGU Store');
-                return say(cv, !p || p.loading ? 'Loading Playlists...' : p.error === 'feed offline' ? OFFLINE : p.error ? 'Playlists: ' + p.error : 'No playlists yet',
-                    p && !p.loading && !p.error ? 'Playlists you make or save on YouTube show here' : null);
+                if (p && p.error === 'unknown cmd playlists') return say(cv, translate('Playlists need a newer jap-ridetube-d tool on the car'), translate('Update the RideTube service in the MGU Store'));
+                return say(cv, !p || p.loading ? message('Loading {name}...', { name: translate('Playlists') }) : p.error === 'feed offline' ? OFFLINE : p.error ? translate('Playlists') + ': ' + p.error : translate('No playlists yet'),
+                    p && !p.loading && !p.error ? translate('Playlists you make or save on YouTube show here') : null);
             }
-            drawPage(cv, [{ title: 'Playlists', sub: p.items.length + (p.items.length === 1 ? ' playlist' : ' playlists'), items: p.items, grid: true, pl: true }]);
+            drawPage(cv, [{ title: translate('Playlists'), sub: message(p.items.length === 1 ? '{count} playlist' : '{count} playlists', { count: p.items.length }), items: p.items, grid: true, pl: true }]);
         }
         function drawPlaylist(cv) {
             const p = model.plist;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (!p) return say(cv, 'Pick a playlist in Playlists');
-            if (!p.items.length) return say(cv, p.loading ? 'Loading ' + (p.title || 'the playlist') + '...' : p.error === 'feed offline' ? OFFLINE
-                : p.error === 'unknown cmd playlists' ? 'Playlists need a newer jap-ridetube-d tool on the car' : p.error || 'This playlist is empty', p.title || null);
+            if (!p) return say(cv, translate('Pick a playlist in Playlists'));
+            if (!p.items.length) return say(cv, p.loading ? message('Loading {name}...', { name: p.title || translate('the playlist') }) : p.error === 'feed offline' ? OFFLINE
+                : p.error === 'unknown cmd playlists' ? translate('Playlists need a newer jap-ridetube-d tool on the car') : p.error || translate('This playlist is empty'), p.title || null);
             // as Watch later: members-only videos (the setting off) and hidden channels left out, and said so
             const vids = shown(p.items), off = p.items.length - vids.length;
-            if (!vids.length) return say(cv, 'Nothing to show in ' + (p.title || 'this playlist'), off + (off === 1 ? ' video' : ' videos') + ' hidden: members-only (Settings) or a hidden channel');
-            drawPage(cv, [{ title: p.title || 'Playlist', sub: vids.length + (vids.length === 1 ? ' video' : ' videos') + (off ? ' · ' + off + ' hidden' : ''), items: vids, grid: true }]);
+            if (!vids.length) return say(cv, message('Nothing to show in {name}', { name: p.title || translate('this playlist') }), message(off === 1 ? '{count} video hidden: members-only (Settings) or a hidden channel' : '{count} videos hidden: members-only (Settings) or a hidden channel', { count: off }));
+            drawPage(cv, [{ title: p.title || translate('Playlist'), sub: message(vids.length === 1 ? '{count} video' : '{count} videos', { count: vids.length }) + (off ? ' · ' + message('{count} hidden', { count: off }) : ''), items: vids, grid: true }]);
         }
         // not signed in: a QR code for the sign-in page, the code to enter there in big letters, on a card
         function drawSignIn(cv) {
             const a = model.auth;
             // a code expired or refused, or signed out: a new one only when asked (a tap, or Sign in in the menu)
             if (a.state === 'error' || a.state === 'signed_out') {
-                say(cv, a.state === 'error' ? 'Sign-in is not available (' + (a.msg || 'error') + ') - tap to try again'
-                    : cv.own ? 'Tap here to get a sign-in code' : 'Sign in (menu) to get a sign-in code',
-                'Your Home, Subscriptions, Watch later and playlists, on the car');
+                say(cv, a.state === 'error' ? message('Sign-in is not available ({error}) - tap to try again', { error: a.msg || translate('error') })
+                    : cv.own ? translate('Tap here to get a sign-in code') : translate('Sign in (menu) to get a sign-in code'),
+                translate('Your Home, Subscriptions, Watch later and playlists, on the car'));
                 if (cv.own) cv.target(MID - 520, 160, 1040, 200, () => model.authStart(true), 'signin', 16);
                 return;
             }
-            if (a.state !== 'code' || !a.code) return say(cv, 'Getting a sign-in code...');
+            if (a.state !== 'code' || !a.code) return say(cv, translate('Getting a sign-in code...'));
             let url = /^https:\/\//.test(a.url || '') ? a.url : SIGNIN_URL, q;
             try { q = QR.encode(url); } catch (e) { url = SIGNIN_URL; q = QR.encode(url); }   // longer than a version 4 code holds
-            const code = { literal: true, font: 'bold', spacing: 6 }, cwid = cv.textWidth(a.code, 54, code), hint = 'Scan the code, or go to ' + url.replace(/^https:\/\/(www\.)?/, '');
-            const side = (q.length + 8) * 8, textW = Math.max(cwid + 56, cv.textWidth(hint, 26, LIT), 88 + cv.textWidth('Sign in', 44, LITB), 560);
+            const code = { literal: true, font: 'bold', spacing: 6 }, cwid = cv.textWidth(a.code, 54, code), hint = translate('Scan the code, or go to ') + url.replace(/^https:\/\/(www\.)?/, '');
+            const side = (q.length + 8) * 8, textW = Math.max(cwid + 56, cv.textWidth(hint, 26, LIT), 88 + cv.textWidth(translate('Sign in'), 44, LITB), 560);
             const cw = Math.min(1400, 44 + side + 80 + textW + 64), ch = 444, cx = Math.round(MID - cw / 2), cy = TOP + Math.max(14, Math.round((H + (cv.own ? cv.extra : 0) - TOP - ch) / 2)), dy = cy - 58;
             cv.roundRect(cx, cy, cw, ch, 24, C.card);
             const qx = cx + 44, qy = cy + Math.round((ch - side) / 2);
@@ -792,12 +798,12 @@ mgu.run({
             QR.draw(cv, url, qx, qy, 8);
             const tx = qx + side + 80;
             logo(cv, tx + 34, 128 + dy, 68);
-            cv.text('Sign in', tx + 88, 144 + dy, 44, '#ffffff', LITB);
-            cv.text('Enter this code on your phone', tx, 214 + dy, 30, C.dim, LIT);
+            cv.text(translate('Sign in'), tx + 88, 144 + dy, 44, '#ffffff', LITB);
+            cv.text(translate('Enter this code on your phone'), tx, 214 + dy, 30, C.dim, LIT);
             cv.roundRect(tx, 238 + dy, cwid + 56, 96, 16, C.bg);
             cv.text(a.code, tx + 28, 308 + dy, 54, '#ffffff', code);
             cv.text(hint, tx, 392 + dy, 26, C.dim, LIT);
-            cv.text('The account stays on the car; this app never sees a password', tx, 440 + dy, 20, '#717171', LIT);
+            cv.text(translate('The account stays on the car; this app never sees a password'), tx, 440 + dy, 20, '#717171', LIT);
         }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
@@ -812,7 +818,7 @@ mgu.run({
                 if (it && it.channel) cv.text(fit(cv, it.channel, 22, BOX.w - 60, LIT), BOX.x + 30, BOX.y + 82, 22, '#cccccc', LIT);
             }
             let mid = null;
-            if (!model.connected) mid = 'The RideTube service (jap-ridetube-d) is not running';
+            if (!model.connected) mid = translate('The RideTube service (jap-ridetube-d) is not running');
             else if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy - 20, 54, '#00000099');
@@ -820,11 +826,11 @@ mgu.run({
                 if (p > 0) cv.arc(cx, cy - 20, 44, 52, 0, p * 3.6, C.red, { round: true });
                 cv.text(Math.round(p) + '%', cx, cy - 10, 30, '#ffffff', { literal: true, font: 'bold', align: 'center' });
                 cv.text(prepText(), cx, cy + 82, 26, '#dddddd', { literal: true, align: 'center' });
-            } else if (model.state === 'error') mid = 'Error: ' + (model.error || 'playback stopped');
-            else if (!model.active()) mid = model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search';
-            else if (noVideo()) mid = 'Video stops while driving - the sound plays on';
-            else if (!cv.place || !gpu()) mid = 'The picture needs the GPU renderer (mgu-render) - the sound plays';
-            else if (!videoShown) mid = 'Starting the picture...';
+            } else if (model.state === 'error') mid = translate('Error: ') + (model.error || translate('playback stopped'));
+            else if (!model.active()) mid = model.state === 'ended' ? translate('Finished') : translate('Pick a video on Home or Search');
+            else if (noVideo()) mid = translate('Video stops while driving - the sound plays on');
+            else if (!cv.place || !gpu()) mid = translate('The picture needs the GPU renderer (mgu-render) - the sound plays');
+            else if (!videoShown) mid = translate('Starting the picture...');
             if (model.state === 'paused' && !mid) { cv.circle(cx, cy, 60, '#000000a0'); cv.arc(cx, cy, 57, 60, 0, 360, '#ffffff50'); tri(cv, cx + 5, cy, 46, '#ffffff'); }
             if (mid) {
                 if (model.state === 'paused') { cv.circle(cx, cy - 40, 46, '#000000a0'); tri(cv, cx + 4, cy - 40, 36, '#ffffff'); }
@@ -854,10 +860,10 @@ mgu.run({
             cv.fillRect(0, 0, SW, SH, C.bg);
             const x0 = LX + 46, top = 40, ch = model.channel || (model.item(model.id) || {}).channel;
             cv.text('RideTube', x0, top + 30, 34, '#ffffff', LITB);
-            const chip = 'Podcast mode · driving', cw = cv.textWidth(chip, 22, LIT) + 40;
+            const chip = translate('Podcast mode · driving'), cw = cv.textWidth(chip, 22, LIT) + 40;
             cv.roundRect(x0 + 170, top, cw, 40, 20, C.ph);
             cv.text(chip, x0 + 170 + cw / 2, top + 28, 22, C.dim, { literal: true, align: 'center' });
-            cv.text('Video returns when parked', SW - 60, top + 28, 22, '#717171', { literal: true, align: 'right' });
+            cv.text(translate('Video returns when parked'), SW - 60, top + 28, 22, '#717171', { literal: true, align: 'right' });
             // laid out from the bottom: the notice / up-next row, the controls, the bar; the artwork takes what is left
             const cy = SH - 178, by = cy - 128, ay = top + 72, ah = Math.max(120, by - 56 - ay), aw = Math.round(ah * 16 / 9), ax = x0;
             const th = model.thumbs[model.id];
@@ -918,22 +924,22 @@ mgu.run({
                 big('ov:next', nx, 58, false, () => { const r = queue.shift(); play(r.id, r); }, (c) => {
                     cv.quad([[nx - 22, cy - 26], [nx - 22, cy + 26], [nx + 12, cy], [nx - 22, cy - 26]], c); cv.fillRect(nx + 14, cy - 26, 9, 52, c);
                 });
-                const up = 'Up next  ·  ' + String(queue[0].title || queue[0].id), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);
+                const up = translate('Up next') + '  ·  ' + String(queue[0].title || queue[0].id), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);
                 cv.roundRect(SW - 60 - uw, SH - 96, uw, 64, 16, '#1c1c1c');
                 cv.text(fit(cv, up, 26, uw - 50, LIT), SW - 60 - uw + 25, SH - 54, 26, '#dddddd', LIT);
             }
             const ask = askSeg();
             if (ask) {
-                const tt = 'Skip ' + sbName(ask[2]), w2 = cv.textWidth(tt, 30, LITB) + 80, f = focusKey === 'ov:sbskip';
+                const tt = translate('Skip ') + translate(sbName(ask[2])), w2 = cv.textWidth(tt, 30, LITB) + 80, f = focusKey === 'ov:sbskip';
                 cv.roundRect(x0, SH - 100, w2, 72, 36, f ? '#3ea6ff' : '#ffffff');
                 cv.text(tt, x0 + 40, SH - 52, 30, f ? '#ffffff' : C.bg, LITB);
                 tg(x0, SH - 100, w2, 72, run(sbJump(ask)), 'ov:sbskip', 36);
             } else if (model.toast && Date.now() < model.toast.until) {
-                const tt = model.toast.text, w2 = cv.textWidth(tt, 26, LIT) + 60, wn = model.toast.warn;
+                const tt = model.toast.warn ? model.toast.text : translate(model.toast.text), w2 = cv.textWidth(tt, 26, LIT) + 60, wn = model.toast.warn;
                 cv.roundRect(x0, SH - 96, w2, 64, 32, wn ? '#4a3a10' : '#1f3d1f');
                 cv.text(tt, x0 + 30, SH - 54, 26, wn ? '#ffd27a' : '#7ee07e', LIT);
             }
-            if (model.state === 'error') cv.text(fit(cv, 'Error: ' + (model.error || 'playback stopped'), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
+            if (model.state === 'error') cv.text(fit(cv, translate('Error: ') + (model.error || translate('playback stopped')), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
         }
         function drawFull(cv) {
             const pl = cv.place, s = pl.scale, SW = pl.w / s, SH = pl.h / s, dx = pl.ox / s, dy = pl.oy / s;
@@ -976,7 +982,7 @@ mgu.run({
                 ctl('ov:qr', px, by, 30, () => { qrUntil = qrUntil > Date.now() ? 0 : Date.now() + 30000; }, (c) => {
                     cv.strokeRoundRect(px - 10, by - 17, 20, 34, 4, 3, c); cv.fillRect(px - 4, by + 10, 8, 3, c);
                 });
-                cv.text('On phone', px - 42, by + 9, 24, '#ffffff', Object.assign({}, LIT, { align: 'right' }));
+                cv.text(translate('On phone'), px - 42, by + 9, 24, '#ffffff', Object.assign({}, LIT, { align: 'right' }));
             }
             if (model.id && qrUntil > Date.now()) {
                 const url = 'https://youtu.be/' + model.id + (model.elapsed > 5000 ? '?t=' + Math.floor(model.elapsed / 1000) : ''), mod = 8;
@@ -984,8 +990,8 @@ mgu.run({
                 cv.roundRect(qx0, qy0, cw, chh, 24, '#212121f2');
                 cv.roundRect(qx0 + 30 - 6, qy0 + 30 - 6, side + 12, side + 12, 18, '#ffffff');
                 QR.draw(cv, url, qx0 + 30, qy0 + 30, mod);
-                cv.text('Continue on your phone', qx0 + side + 80, qy0 + chh / 2 - 20, 34, '#ffffff', LITB);
-                cv.text('Scan with the camera to go on from ' + clock(model.elapsed), qx0 + side + 80, qy0 + chh / 2 + 24, 22, '#cccccc', LIT);
+                cv.text(translate('Continue on your phone'), qx0 + side + 80, qy0 + chh / 2 - 20, 34, '#ffffff', LITB);
+                cv.text(translate('Scan with the camera to go on from ') + clock(model.elapsed), qx0 + side + 80, qy0 + chh / 2 + 24, 22, '#cccccc', LIT);
                 tg(qx0, qy0, cw, chh, () => { qrUntil = 0; wake(); }, 'ov:qrcard', 24);
                 cv.xf();
                 return;
@@ -994,20 +1000,20 @@ mgu.run({
             if (act) {
                 const kx = LX + 150;
                 ctl('ov:close', kx, cy, 42, closeVideo, (c) => xGlyph(cv, kx, cy, 15, c));
-                cv.text('Close', kx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
+                cv.text(translate('Close'), kx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
             }
             // middle: -10 s, play / pause, +10 s; preparing: the ring with the percentage
             let mid = null;
             if (!model.connected) mid = OFF;
-            else if (model.state === 'error') mid = 'Error: ' + (model.error || 'playback stopped');
+            else if (model.state === 'error') mid = translate('Error: ') + (model.error || translate('playback stopped'));
             const up = upNext;
             if (up) {
-                mid = 'Up next in ' + Math.max(1, Math.ceil((nextAt - Date.now()) / 1000)) + ' s: ' + String(up.title || up.id);
+                mid = message('Up next in {seconds} s: {title}', { seconds: Math.max(1, Math.ceil((nextAt - Date.now()) / 1000)), title: up.title || up.id });
                 ctl('ov:play', cx, cy, 58, () => { nextAt = 1; }, (c) => tri(cv, cx + 5, cy, 46, c));
-            } else if (!act && model.state !== 'error') mid = model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search';
-            else if (noVideo()) mid = 'Video stops while driving - the sound plays on';
-            else if (!gpu()) mid = 'The picture needs the GPU renderer (mgu-render) - the sound plays';
-            else if (live && !videoShown) mid = 'Starting the picture...';
+            } else if (!act && model.state !== 'error') mid = model.state === 'ended' ? translate('Finished') : translate('Pick a video on Home or Search');
+            else if (noVideo()) mid = translate('Video stops while driving - the sound plays on');
+            else if (!gpu()) mid = translate('The picture needs the GPU renderer (mgu-render) - the sound plays');
+            else if (live && !videoShown) mid = translate('Starting the picture...');
             if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy, 56, '#00000099');
@@ -1030,16 +1036,16 @@ mgu.run({
                 // right: Video quality (a press takes the next one; the video starts again there) and zoom (fill crops)
                 const qv = String(settings.get('quality') || 'auto'), fl = settings.get('fill') !== false, qx = SW - 330, zx = SW - 150;
                 ctl('ov:q', qx, cy, 42, () => { const q = QUALITIES[(QUALITIES.indexOf(qv) + 1) % QUALITIES.length]; settings.set('quality', q); model.quality(q); },
-                    (c) => cv.text(qv === 'auto' ? 'Auto' : qv + 'p', qx, cy + 8, 22, c, { literal: true, font: 'bold', align: 'center' }));
-                cv.text('Quality', qx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
+                    (c) => cv.text(qv === 'auto' ? translate('Auto') : qv + 'p', qx, cy + 8, 22, c, { literal: true, font: 'bold', align: 'center' }));
+                cv.text(translate('Quality'), qx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
                 ctl('ov:zoom', zx, cy, 42, () => { settings.set('fill', !fl); model.fill(!fl); }, (c) => {
                     cv.strokeRoundRect(zx - 22, cy - 15, 44, 30, 4, 3, c);
                     if (fl) cv.fillRect(zx - 22, cy - 15, 44, 30, c); else cv.fillRect(zx - 12, cy - 15, 24, 30, c);
                 });
-                cv.text(fl ? 'Unzoom' : 'Zoom', zx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
+                cv.text(translate(fl ? 'Unzoom' : 'Zoom'), zx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
             } else if (model.state === 'error' && model.id && model.connected) {
                 ctl('ov:play', cx, cy, 58, again, (c) => retryGlyph(cv, cx, cy, 26, c));
-                cv.text('Try again', cx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
+                cv.text(translate('Try again'), cx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
             }
             if (mid) cv.text(fit(cv, mid, 30, SW - 2 * LX, LIT), cx, model.state === 'preparing' || live || up || (model.state === 'error' && model.id) ? cy + 150 : cy + 10, 30, '#ffffff', { literal: true, align: 'center' });
             // bottom: the progress bar (the track, the part played, the scrubber) and the times
@@ -1061,13 +1067,13 @@ mgu.run({
                 if (chap) cv.text(fit(cv, '·  ' + chap, 24, w - tw - 20, LIT), x0 + tw + 14, SH - 22, 24, '#dddddd', LIT);
             }
             if (model.toast && Date.now() < model.toast.until && live) {
-                const tt = model.toast.text, tw2 = cv.textWidth(tt, 24, LIT) + 48, wn = model.toast.warn;
+                const tt = model.toast.warn ? model.toast.text : translate(model.toast.text), tw2 = cv.textWidth(tt, 24, LIT) + 48, wn = model.toast.warn;
                 cv.roundRect(LX + 40, SH - 150, tw2, 50, 25, wn ? '#4a3a10e6' : '#1f3d1fe6');
                 cv.text(tt, LX + 64, SH - 116, 24, wn ? '#ffd27a' : '#7ee07e', LIT);
             }
             const ask = live && askSeg();
             if (ask) {
-                const tt = 'Skip ' + sbName(ask[2]), w2 = cv.textWidth(tt, 28, LITB) + 70, sx = SW - 60 - w2, sy = SH - 168, f = focusKey === 'ov:sbskip';
+                const tt = translate('Skip ') + translate(sbName(ask[2])), w2 = cv.textWidth(tt, 28, LITB) + 70, sx = SW - 60 - w2, sy = SH - 168, f = focusKey === 'ov:sbskip';
                 cv.roundRect(sx, sy, w2, 60, 30, f ? '#ffffff' : '#3a3a3ae6');
                 cv.text(tt, sx + 35, sy + 40, 28, f ? '#0f0f0f' : '#ffffff', LITB);
                 tg(sx, sy, w2, 60, run(sbJump(ask)), 'ov:sbskip', 30);

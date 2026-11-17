@@ -164,10 +164,10 @@ class Ui {
         return Promise.race([Promise.resolve(p), slow]).catch((e) => log.warn(what + ': ' + e)).then((v) => { clearTimeout(timer); return v; });
     }
 
-    text(name, text, row, cell) {
+    text(name, text, row, cell, options) {
         const c = this.comp(name);
         if (c && !row && (!cell || cell === 'Text') && this.display) this.display.label(name, text);   // slim bar mirrors it
-        return c ? this._try('text ' + name, this._cnText.set(c, name, row || 0, cell || 'Text', text)) : Promise.resolve();
+        return c ? this._try('text ' + name, this._cnText.set(c, name, row || 0, cell || 'Text', text, options)) : Promise.resolve();
     }
     /** Set several cells of one row: ui.cells('LIST', 3, { Text1stCol: 'a', Text2ndCol: 'b' }) */
     cells(name, row, obj) {

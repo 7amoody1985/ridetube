@@ -49,6 +49,8 @@ def localize_spec(spec, language):
     s = copy.deepcopy(spec)
     s['version'] = package_version(s['version'], language)
     s['title'] = text(s['title'], words)
+    if language != 'en' and 'description' in s:
+        s['description'] = text(s['description'], words)
     for screen in s.get('screens', []):
         if 'title' in screen:
             screen['title'] = text(screen['title'], words)

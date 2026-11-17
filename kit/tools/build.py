@@ -469,6 +469,10 @@ def build(app_id, language='en'):
             shutil.copytree(p, os.path.join(src, 'javascript', 'kit', f))
         else:
             shutil.copy(p, os.path.join(src, 'javascript', 'kit', f))
+    if language != 'zh-CN':
+        p = os.path.join(src, 'javascript', 'kit', 'locales', 'zh-CN.json')
+        if os.path.exists(p):
+            os.remove(p)
     if language != 'ru':
         for name in ('ru.json', 'ru.tsv'):
             p = os.path.join(src, 'javascript', 'kit', 'locales', name)
@@ -482,6 +486,10 @@ def build(app_id, language='en'):
         if app_id == 'dtc_scanner':
             shutil.copy(os.path.join(KIT, 'localization', 'fonts', 'diagnostic-zh-CN.json'),
                         os.path.join(src, 'javascript', 'kit', 'fonts', 'cjk.json'))
+    if language == 'zh-CN' and app_id == 'jap_ridetube':
+        for source, target in (('ridetube-zh-CN.json', 'cjk.json'), ('cjk-titles.json', 'cjk-titles.json')):
+            shutil.copy(os.path.join(KIT, 'localization', 'fonts', source),
+                        os.path.join(src, 'javascript', 'kit', 'fonts', target))
     if credit(language):
         # The translation credit in the installed entry code, as plain comments.
         entry = os.path.join(src, 'javascript', 'app.js')

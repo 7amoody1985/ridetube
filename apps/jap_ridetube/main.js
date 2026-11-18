@@ -47,7 +47,7 @@ const path = require('path');
 const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const QR = require('./kit/qr');
-const { t: translate, dict } = require('./kit/i18n');
+const { t: translate, dict, getLanguage } = require('./kit/i18n');
 
 function message(key, values) {
     return translate(key).replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
@@ -80,6 +80,7 @@ const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Pla
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
+const [LANG, REGION] = String(getLanguage()).split('-');   // hello's: "zh-CN" -> zh, CN; "en" -> en, no region
 const LOGS_MS = 45000;                                   // a log report with no answer by then failed (the service gives up at 31 s)
 const LOGS_ERR = { closed: 'Log reporting is closed for now', busy: 'Too many reports right now - try again later',
     offline: 'No connection - try again later', failed: 'Sending failed - try again later', old: 'Sending logs needs a newer jap-ridetube-d tool on the car' };
@@ -101,7 +102,7 @@ mgu.run({
 
         /* ---------- the daemon ---------- */
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);
-        const model = new Model((o) => ctl.send(o));
+        const model = new Model((o) => ctl.send(o), { app: APP_VERSION, lang: LANG, region: REGION });
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
         const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); };
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
@@ -578,11 +579,16 @@ mgu.run({
             ['wl', 'Watch later', (cv, x, y, c) => { cv.arc(x, y, 14, 17.5, 0, 360, c); cv.line(x, y + 1, x, y - 9, 3.5, c); cv.line(x, y, x + 7, y + 5, 3.5, c); }],
             ['pl', 'Playlists', (cv, x, y, c) => listGlyph(cv, x, y, 36, c)],
         ];
+        // rail entries of later packages: [mode, name, glyph, cap], shown when the service has the cap (none yet)
+        const RAIL_MORE = [];
+        // pages of later packages: mode -> draw(cv), dispatched by render (none yet)
+        const PAGES = {};
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
         const PLAYING = ['player', 'Playing', (cv, x, y, c) => { [10, 20, 14].forEach((h, k) => cv.roundRect(x - 15 + k * 11, y + 8 - h, 8, h + 8, 2, c)); }];
         function drawRail(cv) {
             const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode === 'list' ? 'pl' : mode, bottom = H + (cv.own ? cv.extra : 0);
-            const items = cv.own && model.active() ? RAIL.concat([PLAYING]) : RAIL;
+            const rail = RAIL.concat(RAIL_MORE.filter((r) => model.can(r[3])));
+            const items = cv.own && model.active() ? rail.concat([PLAYING]) : rail;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
             items.forEach(([m, name, glyph], i) => {
                 const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
@@ -1234,7 +1240,7 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
-                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

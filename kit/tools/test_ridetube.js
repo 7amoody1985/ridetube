@@ -316,6 +316,8 @@ async function appFrames() {
     assert.strictEqual(typeof hu.ctx.onTouch, 'function', 'the stub has onTouch, as kit/mgu.js');
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
+    await until(() => d.cmds('hello').length, 3000, 'hello on connect');
+    assert.deepStrictEqual(d.cmds('hello')[0], { cmd: 'hello', app: require('../../apps/jap_ridetube/app.json').version, lang: 'en' }, 'hello: the app version and the build language, no region for en');
     const POOL = (id) => id >= 8 && id < 64;
     const frame = () => scan(fs.readFileSync(file));
     // first screen: Home, signed out: the sign-in card, no tiles; never a library (nothing is kept on the car)
@@ -998,4 +1000,45 @@ function channelSearch() {
     console.log('ok   channel search: a letter = the names starting with it, a word = the names (or handles) holding it');
 }
 
-clientAndModel().then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+// ======== WP0 foundations: hello and the caps
+async function helloCaps() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-hello-'));
+    const sock = path.join(dir, 'ctl.sock');
+    const d = await fakeDaemon(sock);
+    const ctl = new Ctl(sock, quiet);
+    const m = new Model((o) => ctl.send(o), { app: '0.4.0', lang: 'zh', region: 'CN' });
+    ctl.on('up', () => m.setConnected(true)).on('down', () => m.setConnected(false)).on('msg', (x) => m.onMsg(x));
+    ctl.connect();
+    await until(() => d.cmds('hello').length, 2000, 'hello on connect');
+    assert.deepStrictEqual(d.got.map((x) => x.cmd).slice(0, 4), ['status', 'auth_status', 'positions', 'hello'], 'hello after the 0.3 commands');
+    assert.deepStrictEqual(d.cmds('hello')[0], { cmd: 'hello', app: '0.4.0', lang: 'zh', region: 'CN' });
+    // an old service: unknown cmd hello = no caps, not an error, a search in flight goes on
+    assert.ok(m.search('old service'));
+    d.send({ ev: 'error', msg: 'unknown cmd hello' });
+    await sleep(50);
+    assert.deepStrictEqual([m.caps, m.error, m.searching, m.can('related')], [[], null, true, false], 'old service: no caps, nothing shown');
+    // a 0.4.0 service: the caps it lists (strings only); a frozen command it has not built is not an error on screen
+    d.send({ ev: 'hello', service: '0.4.0', caps: ['related', 'hist', 7, null] });
+    await until(() => m.caps.length, 2000, 'caps');
+    assert.deepStrictEqual(m.caps, ['related', 'hist']);
+    assert.ok(m.can('related') && m.can('hist') && !m.can('health'));
+    d.send({ ev: 'error', cmd: 'health', msg: 'not implemented health' });
+    await sleep(50);
+    assert.deepStrictEqual([m.error, m.searching], [null, true], 'not implemented: nothing shown');
+    // a later package's event reaches its ev_<name> method; an event nobody handles changes nothing
+    const rev = m.rev, got = [];
+    m.ev_related = (x) => got.push(x.id);
+    d.send({ ev: 'related', id: 'abcdefghijk', items: [] });
+    d.send({ ev: 'nobody' });
+    await until(() => got.length, 2000, 'ev_related');
+    await sleep(50);
+    assert.deepStrictEqual([got, m.rev], [['abcdefghijk'], rev + 1], 'handled once, one change');
+    d.conn.destroy();
+    await until(() => !m.connected, 2000, 'down');
+    assert.deepStrictEqual(m.caps, [], 'the service gone: no caps until it says again');
+    ctl.close();
+    d.server.close();
+    console.log('ok   hello: sent on connect with the build language; an old service = no caps; caps gate; ev_<name> hook');
+}
+
+clientAndModel().then(helloCaps).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });

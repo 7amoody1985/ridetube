@@ -6,6 +6,7 @@
  *          App -> daemon: search{q} thumb{id} play{id,rect:"WxH",fill} pause resume seek{ms} stop quality{quality} fill{on} video{on} status
  *                         auth_status auth sign_out feed{which:home|subs|wl} channels channel{id} playlists playlist{id}
  *                         send_logs{app}: the service's recent log, redacted, to the developer
+ *                         hello{app,lang,region?}: on connect, after the rest; the service's caps come back
  *          Daemon -> app: (a played video is deleted from the car once stopped; nothing is kept for offline)
  *                         results{q,items:[{id,title,channel,duration_s,meta?}]} thumb{id,w,h,rgba(base64)}: 160x90 or 320x180
  *                         state{state:idle|preparing|playing|paused|ended|error,pct,id,title} time{elapsed,total} error{msg}
@@ -17,6 +18,8 @@
  *                         playlists{items:[{id,title,count,meta,thumb}]|error}: the account's playlists (thumb: a video id)
  *                         playlist{id,title?,items|error}: a playlist's videos
  *                         logs_sent{id}: the code to quote in a GitHub issue; logs_error{msg:closed|busy|offline|failed}
+ *                         hello{service,caps}: what the service really answers (0.4.0 on); an older one answers
+ *                         error "unknown cmd hello": no caps. Entries for a feature hide unless can(<its cap>)
  *          Thumbs are asked lazily (Model.wantThumb, from the screens' draw path): only for the tiles drawn.
  *          The daemon signs in itself (TV device sign-in) and keeps the tokens; none come here.
  *          The daemon stops playback within 1 s of this socket closing, so the app keeps it open hidden too.
@@ -91,9 +94,11 @@ class Ctl {
 const ACTIVE = ['preparing', 'playing', 'paused'];
 
 class Model {
-    /** send(obj): Ctl.send */
-    constructor(send) {
+    /** send(obj): Ctl.send; hi: {app, lang, region} for hello */
+    constructor(send, hi) {
         this.send = send;
+        this.hi = hi || {};
+        this.caps = [];              // hello's: what the service answers beyond 0.3 (none from an older one)
         this.connected = false;
         this.q = null; this.searching = false;
         this.results = [];           // [{id,title,channel,duration_s}]
@@ -121,11 +126,14 @@ class Model {
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
+    /** the service answers this (hello's caps: health, related, hist, ytdlp, remote, proxy, stream) */
+    can(cap) { return this.caps.indexOf(cap) >= 0; }
     _changed() { this.rev++; }
 
     setConnected(on) {
         this.connected = on;
-        if (on) { this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.videoOn = null; this._video(); } else {
+        if (on) { this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.send(Object.assign({ cmd: 'hello' }, this.hi)); this.videoOn = null; this._video(); } else {
+            this.caps = [];
             this.searching = false; this.state = 'idle'; this.pending.clear();
             this.auth = { state: 'unknown', code: null, url: null, msg: null };
             Object.keys(this.feeds).forEach((w) => { this.feeds[w].loading = false; });
@@ -229,10 +237,15 @@ class Model {
         } else if (m.ev === 'skipped') {
             const names = { sponsor: 'sponsor', selfpromo: 'self-promotion', interaction: 'like & subscribe reminder', intro: 'intro' };
             this.toast = { text: 'Skipped ' + (names[m.category] || 'segment') + ' · ' + clock(m.ms), until: Date.now() + 4000 };
+        } else if (m.ev === 'hello') {
+            this.caps = Array.isArray(m.caps) ? m.caps.filter((x) => typeof x === 'string') : [];
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
         } else if (m.ev === 'error') {
+            // a service older than 0.4.0: no caps, nothing wrong; a frozen command it has not built: nothing to show
+            if (m.msg === 'unknown cmd hello') { this.caps = []; this._changed(); return; }
+            if (m.cmd && /^not implemented /.test(m.msg)) return;
             // a daemon older than the account commands: no sign-in, nothing wrong with playback
             if (/^unknown cmd (auth|auth_status|sign_out|feed)$/.test(m.msg)) { this.auth = { state: 'unsupported', code: null, url: null, msg: null }; this._changed(); return; }
             // a daemon older than playlists: the Playlists page says so, nothing wrong with playback
@@ -247,7 +260,8 @@ class Model {
             }
             this.error = String(m.msg || 'error');
             if (this.searching) { this.searching = false; this.searchError = this.error; }
-        } else return;
+        } else if (typeof this['ev_' + m.ev] === 'function') this['ev_' + m.ev](m);   // events of later packages: an ev_<name> method
+        else return;
         this._changed();
     }
 

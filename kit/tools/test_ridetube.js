@@ -152,7 +152,7 @@ async function clientAndModel() {
     assert.ok(!m.active() && m.error === null && m.elapsed === 0);
     assert.strictEqual(m.stop(), false, 'nothing to stop');
 
-    // the account: a code asked once, signed in, a feed (at most 20, thumbs asked), no answer, signed out
+    // the account: a code asked once, signed in, a feed (at most 100, thumbs asked), no answer, signed out
     d.got.length = 0;
     assert.strictEqual(m.authStart(), false, 'no code asked before the daemon said signed out');
     d.send({ ev: 'auth', state: 'signed_out' });
@@ -170,10 +170,10 @@ async function clientAndModel() {
     d.got.length = 0;
     assert.ok(m.feed('subs') && !m.feed('subs') && m.feeds.subs.loading, 'one feed request at a time');
     await lastIs(d, { cmd: 'feed', which: 'subs' });
-    const many = Array.from({ length: 25 }, (_, i) => ({ id: 'sub' + i, title: 'Sub ' + i, channel: 'C', duration_s: 60, meta: ['1K views', '2 days ago'] }));
+    const many = Array.from({ length: 105 }, (_, i) => ({ id: 'sub' + i, title: 'Sub ' + i, channel: 'C', duration_s: 60, meta: ['1K views', '2 days ago'] }));
     d.send({ ev: 'feed', which: 'subs', items: many.concat([{ bad: 1 }]) });
     await until(() => m.feeds.subs.items.length, 2000, 'feed');
-    assert.ok(m.feeds.subs.items.length === 20 && !m.feeds.subs.loading && m.feeds.subs.error === null, 'at most 20');
+    assert.ok(m.feeds.subs.items.length === 100 && !m.feeds.subs.loading && m.feeds.subs.error === null, 'at most 100');
     assert.strictEqual(m.feeds.subs.shelves, null, 'no shelves (an older daemon): none');
     assert.deepStrictEqual(m.feeds.subs.items[0].meta, ['1K views', '2 days ago'], 'meta kept');
     await sleep(30);
@@ -314,6 +314,7 @@ async function appFrames() {
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
     hu.ctx.focus = (k) => disp.focusPage(k);
     assert.strictEqual(typeof hu.ctx.onTouch, 'function', 'the stub has onTouch, as kit/mgu.js');
+    const wp5 = wp5Spies(hu);
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
     await until(() => d.cmds('hello').length, 3000, 'hello on connect');
@@ -932,6 +933,8 @@ async function appFrames() {
         }
         console.log('ok   send logs: asked first, Cancel sends nothing, Sending..., the code; the service\'s errors; the error screen\'s button');
     }
+    if (own) await wp5Frames({ hu, d, disp, keys, drawn, texts, wp5, rock: (v) => rockerH({ operationPushButtonAudioAutomaticTuningSteeringWheel: v }), speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
+    else console.log('skip WP5 frames (the stub does not run the screen)');
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
 }
@@ -1041,4 +1044,197 @@ async function helloCaps() {
     console.log('ok   hello: sent on connect with the build language; an old service = no caps; caps gate; ev_<name> hook');
 }
 
-clientAndModel().then(helloCaps).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+// ======== WP5 app 0.4.0: History, the health check, watch-next, the wheel's next, the resume notice, lists and Shorts
+function wp5Model() {
+    const sent = [];
+    const m = new Model((o) => { sent.push(o); return true; });
+    m.connected = true; m.auth.state = 'signed_in';
+    // old service: nothing new is asked
+    assert.ok(!m.loadRelated('AAAAAAAAAAA') && !m.runHealth() && !sent.length, 'no caps: no related, no health');
+    m.onMsg({ ev: 'hello', service: '0.4.0', caps: ['related', 'health', 'hist'] });
+    // lists: 100 a feed or a playlist, 100 results
+    const n = (k) => Array.from({ length: k }, (_, i) => ({ id: ('v' + i + 'xxxxxxxxxx').slice(0, 11) }));
+    m.feed('hist'); assert.deepStrictEqual(sent.pop(), { cmd: 'feed', which: 'hist' }, 'History is a feed');
+    m.onMsg({ ev: 'feed', which: 'hist', items: n(130) }); assert.strictEqual(m.feeds.hist.items.length, 100, 'History: at most 100');
+    m.q = 'q'; m.onMsg({ ev: 'results', q: 'q', items: n(130) }); assert.strictEqual(m.results.length, 100, 'results: at most 100');
+    m.openPlaylist('PLaaaaaaaaaa'); m.onMsg({ ev: 'playlist', id: 'PLaaaaaaaaaa', items: n(130) }); assert.strictEqual(m.plist.items.length, 100, 'a playlist: at most 100');
+    m.onMsg({ ev: 'feed', which: 'hist', items: [{ id: 'SHORT000001', short: true }] }); assert.strictEqual(m.feeds.hist.items[0].short, true, 'short:true kept (main.js filters)');
+    const shorts = n(120).map((r) => Object.assign({ short: true }, r));
+    m.onMsg({ ev: 'feed', which: 'hist', items: shorts.slice(0, 90).concat(n(5)) });
+    assert.deepStrictEqual([m.feeds.hist.items.length, m.feeds.hist.items.filter((r) => !r.short).length], [95, 5], 'Shorts never push videos past the cap');
+    m.onMsg({ ev: 'feed', which: 'hist', items: shorts.concat(n(130)) });
+    assert.deepStrictEqual([m.feeds.hist.items.filter((r) => r.short).length, m.feeds.hist.items.filter((r) => !r.short).length], [100, 100], 'at most 100 of each');
+    // related: asked once per id, another id's late answer ignored, its videos known; an error ends it; no answer in 15 s
+    let told = 0;
+    m.onRelated = () => told++;
+    assert.ok(m.loadRelated('AAAAAAAAAAA') && !m.loadRelated('AAAAAAAAAAA') && !m.loadRelated('bad'), 'asked once, a bad id never');
+    assert.deepStrictEqual(sent.pop(), { cmd: 'related', id: 'AAAAAAAAAAA' });
+    m.onMsg({ ev: 'related', id: 'ZZZZZZZZZZZ', items: [{ id: 'XXXXXXXXXXX' }] });
+    assert.ok(m.related.loading && !told, "another video's answer ignored");
+    m.onMsg({ ev: 'related', id: 'AAAAAAAAAAA', items: [{ id: 'RRRRRRRRRRR', title: 'Next' }, { bad: 1 }] });
+    assert.deepStrictEqual([m.related.loading, m.related.items.map((x) => x.id), told, !!m.item('RRRRRRRRRRR')], [false, ['RRRRRRRRRRR'], 1, true], 'its videos, told once, known');
+    m.loadRelated('BBBBBBBBBBB'); m.onMsg({ ev: 'related', id: 'BBBBBBBBBBB', error: 'feed offline' });
+    assert.deepStrictEqual([m.related.error, m.error], ['feed offline', null], 'an error is the list\'s, not playback\'s');
+    m.loadRelated('CCCCCCCCCCC');
+    assert.ok(!m.checkFeeds(Date.now() + 1000, 15000) && m.checkFeeds(Date.now() + 16000, 15000) && /No answer/.test(m.related.error), 'no answer in 15 s');
+    // health: rows as they come (a key again replaces its row), done; one run at a time; a minute per row
+    assert.ok(m.runHealth() && !m.runHealth(), 'one run at a time');
+    assert.deepStrictEqual(sent.pop(), { cmd: 'health' });
+    m.onMsg({ ev: 'health', key: 'dns', ok: true, text: 'ok' }); m.onMsg({ ev: 'health', key: 'tls', ok: false, text: 'timeout' });
+    m.onMsg({ ev: 'health', key: 'dns', ok: false, text: 'no answer' }); m.onMsg({ ev: 'health', ok: true });
+    assert.ok(!m.checkFeeds(Date.now() + 30000, 15000) && m.health.loading, 'a slow check: still waiting at 30 s');
+    m.onMsg({ ev: 'health', done: true });
+    assert.deepStrictEqual([m.health.loading, m.health.items], [false, [{ key: 'dns', ok: false, text: 'no answer' }, { key: 'tls', ok: false, text: 'timeout' }]], 'two rows, done');
+    m.onMsg({ ev: 'health', key: 'late', ok: true, text: '' }); assert.strictEqual(m.health.items.length, 2, 'a row after done: ignored');
+    m.runHealth(); assert.ok(m.checkFeeds(Date.now() + 61000, 15000) && /No answer/.test(m.health.error), 'no row for a minute: an error');
+    // the resume notice: a fresh play whose first tick is past 10 s; not a quality change's restart; Start over seeks to 0
+    m.play('RRRRRRRRRRR', '1x1', false);
+    m.onMsg({ ev: 'state', state: 'playing', id: 'RRRRRRRRRRR' }); m.onMsg({ ev: 'time', elapsed: 754000, total: 1200000 });
+    const now = Date.now(), r = m.resumedNow(now);
+    assert.ok(r && r.ms === 754000 && r.until - now <= 5000 && r.until - now > 4000 && !m.resumedNow(now + 5100), 'resumed at 12:34, shown 5 s');
+    m.startOver(); assert.deepStrictEqual([sent.pop(), m.resumedNow(now)], [{ cmd: 'seek', ms: 0 }, null], 'Start over: seek 0, the notice gone');
+    m.quality('480'); m.onMsg({ ev: 'state', state: 'preparing', id: 'RRRRRRRRRRR' }); m.onMsg({ ev: 'state', state: 'playing', id: 'RRRRRRRRRRR' });
+    m.onMsg({ ev: 'time', elapsed: 300000, total: 1200000 });
+    assert.strictEqual(m.resumedNow(Date.now()), null, 'a quality change goes on from where it was: no notice');
+    m.play('AAAAAAAAAAA', '1x1', false); m.onMsg({ ev: 'state', state: 'playing', id: 'AAAAAAAAAAA' }); m.onMsg({ ev: 'time', elapsed: 900, total: 60000 });
+    m.onMsg({ ev: 'time', elapsed: 20000, total: 60000 });
+    assert.strictEqual(m.resumedNow(Date.now()), null, 'from the start: no notice (later ticks never count)');
+    console.log('ok   WP5 model: 100-item lists, related once per id, health rows, the resume notice');
+}
+
+// before the app starts: what the menu entries are told (visible), the speller (ctx.app read only by spell)
+function wp5Spies(hu) {
+    const o = { visible: [], spells: 0 };
+    const v = hu.ui.visible;
+    hu.ui.visible = (n, on) => { if (/^BTN_(HIST|HEALTH)$/.test(n)) o.visible.push([n, on]); return v(n, on); };
+    Object.defineProperty(hu.ctx, 'app', { configurable: true, get() { o.spells++; return { usecase: null }; } });
+    return o;
+}
+
+async function wp5Frames(x) {
+    const { hu, d, disp, keys, drawn, texts, wp5, rock, speed } = x;
+    const tgt = (k) => disp.pageTargets.find((t) => (k instanceof RegExp ? k.test(t.key) : t.key === k));
+    const plays = () => d.cmds('play').map((p) => p.id);
+    const railOk = () => {
+        const r = disp.pageTargets.filter((t) => /^rail:/.test(t.key));
+        r.forEach((t, i) => { if (i) assert.ok(r[i - 1].y + r[i - 1].h <= t.y + 1, 'rail targets do not overlap: ' + JSON.stringify(r.map((q) => [q.key, q.y, q.h]))); });
+        return r.map((t) => t.key);
+    };
+    const parked = () => speed(0);
+    const wheel = async () => { rock(2); rock(0); await sleep(80); };
+    // an old service (no hello answer): no rail entry, the menu entries hidden, their handlers send nothing
+    d.send({ ev: 'state', state: 'idle' });
+    hu.handlers.BTN_HOME();
+    await sleep(100); await drawn();
+    assert.ok(railOk().indexOf('rail:hist') < 0, 'old service: no History on the rail');
+    assert.deepStrictEqual(wp5.visible.filter((v) => v[1]), [], 'old service: the menu entries never shown');
+    assert.ok(wp5.visible.some((v) => v[0] === 'BTN_HIST') && wp5.visible.some((v) => v[0] === 'BTN_HEALTH'), 'and hidden: ' + JSON.stringify(wp5.visible));
+    hu.handlers.BTN_HIST(); hu.handlers.BTN_HEALTH();
+    await sleep(100);
+    assert.deepStrictEqual([d.cmds('feed').filter((f) => f.which === 'hist').length, d.cmds('health').length, d.cmds('related').length], [0, 0, 0], 'old service: nothing new asked');
+    console.log('ok   WP5 old service: no History, no Health check, nothing new asked');
+    // a 0.4.0 service
+    d.send({ ev: 'hello', service: '0.4.0', caps: ['health', 'related', 'hist'] });
+    await sleep(100); await drawn();
+    assert.deepStrictEqual(wp5.visible.slice(-2), [['BTN_HIST', true], ['BTN_HEALTH', true]], 'the menu entries shown');
+    assert.deepStrictEqual(railOk(), ['rail:search', 'rail:home', 'rail:subs', 'rail:wl', 'rail:pl', 'rail:hist'], 'History on the rail');
+    // History: a feed page; a Short hidden unless the setting shows them
+    tgt('rail:hist').run();
+    await until(() => d.cmds('feed').slice(-1)[0].which === 'hist', 2000, 'History asked');
+    d.send({ ev: 'feed', which: 'hist', items: [{ id: 'HIST0000001', title: 'Watched one', channel: 'C', duration_s: 60 }, { id: 'SHORT000001', title: 'A short', channel: 'C', duration_s: 30, short: true },
+        { id: 'HIST0000002', title: 'Watched two', channel: 'C', duration_s: 60 }] });
+    await sleep(100); await drawn();
+    assert.ok(tgt(/^h:0:HIST0000001$/) && tgt(/^h:0:HIST0000002$/) && !tgt(/SHORT000001/), 'History tiles, the Short left out: ' + keys());
+    assert.ok(texts.indexOf('History') >= 0, 'titled History: ' + texts.slice(0, 12).join('|'));
+    hu.ctx.settings.set('shorts', true);
+    await sleep(300); await drawn();                       // (a setting redraws within 250 ms)
+    assert.ok(tgt(/^h:0:SHORT000001$/), 'Show Shorts on: the Short shows');
+    hu.ctx.settings.set('shorts', false);
+    console.log('ok   WP5 History page (rail), Shorts only with the setting');
+    // the health check: run on opening, rows as they come, Run again
+    hu.handlers.BTN_HEALTH();
+    await until(() => d.cmds('health').length === 1, 2000, 'health asked');
+    await drawn();
+    assert.ok(texts.indexOf('Checking...') >= 0 && !tgt('health:run'), 'checking: ' + texts.join('|'));
+    d.send({ ev: 'health', key: 'dns', ok: true, text: 'youtube.com resolves' });
+    d.send({ ev: 'health', key: 'extract', ok: false, text: 'HTTP 403 from the video service' });
+    d.send({ ev: 'health', done: true });
+    await sleep(100); await drawn();
+    ['Health check', '1 check failed', 'dns', 'youtube.com resolves', 'extract', 'HTTP 403 from the video service', 'Run again'].forEach((t) => assert.ok(texts.indexOf(t) >= 0, t + ': ' + texts.join('|')));
+    tgt('health:run').run();
+    await until(() => d.cmds('health').length === 2, 2000, 'Run again asks again');
+    d.send({ ev: 'health', done: true });
+    console.log('ok   WP5 health check page: rows ok / failed, Run again');
+    // the resume notice: a video the service resumes at 12:34; Start over goes back to 0
+    const q = d.cmds('search').slice(-1)[0].q;
+    d.send({ ev: 'positions', items: [{ id: 'RESUME00001', ms: 754000, total: 1200000, done: false, title: 'Long one' }] });
+    d.send({ ev: 'results', q, items: [{ id: 'RESUME00001', title: 'Long one', channel: 'C', duration_s: 1200 }] });
+    await sleep(100);
+    hu.handlers.BTN_RESULTS(); await drawn();
+    tgt(/^r:\d+:RESUME00001$/).run();
+    await until(() => plays().slice(-1)[0] === 'RESUME00001', 2000, 'played');
+    parked();
+    d.send({ ev: 'state', state: 'playing', id: 'RESUME00001', title: 'Long one' }); d.send({ ev: 'time', elapsed: 754000, total: 1200000 });
+    await sleep(100); await drawn();
+    assert.ok(texts.indexOf('Resumed at 12:34 · Start over') >= 0 && tgt('ov:resume'), 'the notice: ' + keys());
+    tgt('ov:resume').run();
+    await lastIs(d, { cmd: 'seek', ms: 0 }, 'Start over seeks to 0');
+    await drawn();
+    assert.ok(!tgt('ov:resume'), 'and the notice goes');
+    console.log('ok   WP5 resume notice: Resumed at 12:34 · Start over, a press seeks to 0');
+    // the wheel's next, first match wins: an asked segment; the list's next; the next chapter; the first related video
+    d.send({ ev: 'results', q, items: [{ id: 'WHEEL000001', title: 'One', channel: 'C', duration_s: 600 }, { id: 'WHEEL000002', title: 'Two', channel: 'C', duration_s: 600 }] });
+    await sleep(100);
+    hu.handlers.BTN_RESULTS(); await drawn();
+    tgt(/^r:\d+:WHEEL000001$/).run();
+    await until(() => plays().slice(-1)[0] === 'WHEEL000001', 2000, 'played');
+    const on = async (id, ms, extras) => { parked(); d.send({ ev: 'state', state: 'playing', id }); d.send({ ev: 'time', elapsed: ms, total: 600000 }); if (extras) d.send(Object.assign({ ev: 'extras', id }, extras)); await sleep(80); await drawn(); };
+    await on('WHEEL000001', 20000, { chapters: [[0, 'A'], [300000, 'B']], segments: [[10000, 60000, 'outro']] });
+    let nP = plays().length, nS = d.cmds('seek').length;
+    await wheel();
+    assert.deepStrictEqual([plays().length, d.cmds('seek').slice(nS)], [nP, [{ cmd: 'seek', ms: 60000 }]], 'in an asked segment (end cards): skipped, before the list and the chapter');
+    await on('WHEEL000001', 61000, { chapters: [[0, 'A'], [300000, 'B']], segments: [] });
+    await wheel();
+    assert.deepStrictEqual(plays().slice(nP), ['WHEEL000002'], 'a video in the list: it plays, before the next chapter');
+    await on('WHEEL000002', 40000, { chapters: [[0, 'A'], [90000, 'B']], segments: [] });
+    nP = plays().length; nS = d.cmds('seek').length;
+    await wheel();
+    assert.deepStrictEqual([plays().length, d.cmds('seek').slice(nS)], [nP, [{ cmd: 'seek', ms: 90000 }]], 'the list done: the next chapter');
+    await on('WHEEL000002', 95000);
+    await wheel();
+    await lastIs(d, { cmd: 'related', id: 'WHEEL000002' }, 'no later chapter: related asked');
+    assert.strictEqual(plays().length, nP, 'nothing played before it comes');
+    d.send({ ev: 'related', id: 'WHEEL000002', items: [{ id: 'WHEEL000002', title: 'Itself' }, { id: 'WHEEL000001', title: 'Just played' }, { id: 'SHORT000002', title: 'Short', short: true }, { id: 'RELATED0001', title: 'Related', channel: 'R' }] });
+    await until(() => plays().length > nP, 2000, 'the related video plays when it comes (no frame needed)');
+    assert.deepStrictEqual(plays().slice(nP), ['RELATED0001'], 'the first worth playing: not itself, not the one before, not a Short');
+    console.log('ok   WP5 steering wheel next: segment, list, chapter, related - first match wins');
+    // watch-next: a video ends with the list done -> related asked, its first video after 5 s
+    await on('RELATED0001', 1000);
+    hu.handlers.BTN_HOME(); await sleep(50); await drawn();     // browsing while it plays: History and Playing fit
+    assert.deepStrictEqual(railOk().slice(-2), ['rail:hist', 'rail:player'], 'the rail with History and Playing');
+    tgt('rail:player').run(); await drawn();
+    d.send({ ev: 'state', state: 'ended', id: 'RELATED0001' });
+    await sleep(80); await drawn();
+    await lastIs(d, { cmd: 'related', id: 'RELATED0001' }, 'the list ends: related asked');
+    d.send({ ev: 'related', id: 'RELATED0001', items: [{ id: 'WHEEL000002', title: 'Seen' }, { id: 'RELNEXT0001', title: 'Watch next' }] });
+    await sleep(100); await drawn();
+    assert.ok(texts.some((t) => /^Up next in \d s: Watch next$/.test(t)), 'up next shown: ' + texts.join('|'));
+    nP = plays().length;
+    for (let k = 0; k < 40 && plays().length === nP; k++) { await sleep(200); await hu.loopFn(); }
+    assert.deepStrictEqual(plays().slice(nP), ['RELNEXT0001'], 'and it plays after 5 s');
+    console.log('ok   WP5 watch-next: the list done, the first related video plays after 5 s');
+    // nothing new opens the speller while moving (or at all)
+    speed(50 * 64);
+    const sp = wp5.spells;
+    d.send({ ev: 'state', state: 'playing', id: 'RELNEXT0001' }); d.send({ ev: 'time', elapsed: 1000, total: 600000 });
+    hu.handlers.BTN_HIST(); await drawn(); hu.handlers.BTN_HEALTH(); await drawn();
+    d.send({ ev: 'health', done: true }); await sleep(50); await drawn();
+    tgt('health:run').run(); d.send({ ev: 'health', done: true });
+    tgt('rail:hist').run(); await drawn();
+    await wheel(); await sleep(100);
+    assert.strictEqual(wp5.spells, sp, 'no text entry opened while moving');
+    d.send({ ev: 'state', state: 'idle' }); parked();
+    console.log('ok   WP5 nothing new opens text entry while moving');
+}
+
+clientAndModel().then(helloCaps).then(wp5Model).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });

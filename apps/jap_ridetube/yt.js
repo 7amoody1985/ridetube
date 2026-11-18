@@ -4,9 +4,10 @@
  *
  *   Ctl    the control socket /run/jap-ridetube-d/ctl.sock: JSON lines, reconnects every 2 s.
  *          App -> daemon: search{q} thumb{id} play{id,rect:"WxH",fill} pause resume seek{ms} stop quality{quality} fill{on} video{on} status
- *                         auth_status auth sign_out feed{which:home|subs|wl} channels channel{id} playlists playlist{id}
+ *                         auth_status auth sign_out feed{which:home|subs|wl|hist} channels channel{id} playlists playlist{id}
  *                         send_logs{app}: the service's recent log, redacted, to the developer
  *                         hello{app,lang,region?}: on connect, after the rest; the service's caps come back
+ *                         health (cap health), related{id} (cap related)
  *          Daemon -> app: (a played video is deleted from the car once stopped; nothing is kept for offline)
  *                         results{q,items:[{id,title,channel,duration_s,meta?}]} thumb{id,w,h,rgba(base64)}: 160x90 or 320x180
  *                         state{state:idle|preparing|playing|paused|ended|error,pct,id,title} time{elapsed,total} error{msg}
@@ -20,6 +21,8 @@
  *                         logs_sent{id}: the code to quote in a GitHub issue; logs_error{msg:closed|busy|offline|failed}
  *                         hello{service,caps}: what the service really answers (0.4.0 on); an older one answers
  *                         error "unknown cmd hello": no caps. Entries for a feature hide unless can(<its cap>)
+ *                         health{key,ok,text} per check, then health{done:true}; related{id,items|error}
+ *                         a tile may carry short:true (a Short: shown only with the Show Shorts setting)
  *          Thumbs are asked lazily (Model.wantThumb, from the screens' draw path): only for the tiles drawn.
  *          The daemon signs in itself (TV device sign-in) and keeps the tokens; none come here.
  *          The daemon stops playback within 1 s of this socket closing, so the app keeps it open hidden too.
@@ -29,13 +32,14 @@ const net = require('net');
 
 const SOCKET = '/run/jap-ridetube-d/ctl.sock';
 const MAX_LINE = 1 << 20;            // a 320x180 thumb is 307 kB of base64; anything far past that is not ours
-const FEEDS = ['home', 'subs', 'wl'];
-const FEED_MAX = 20;                 // a feed's flat list (its pictures: as many as drawn, main.js's pool)
+const FEEDS = ['home', 'subs', 'wl', 'hist'];          // hist: History (cap hist)
+const FEED_MAX = 100;                // a feed's flat list (its pictures: as many as drawn, main.js's pool)
 const SHELVES = 8, SHELF_MAX = 12;   // a feed's shelves, the videos in each
 const SIZES = ['160x90', '320x180']; // the thumb sizes the daemon sends
 const PL_RE = /^[\w-]{2,64}$/, VID_RE = /^[\w-]{11}$/;   // a playlist id (PL..., LL, OLAK5uy_...), a video id
 const isPl = (x) => typeof x === 'string' && PL_RE.test(x), isVid = (x) => typeof x === 'string' && VID_RE.test(x);
-const PL_MAX = 60, PL_ITEMS = 50;    // the playlists shown, the videos of one
+const PL_MAX = 60, PL_ITEMS = 100;    // the playlists shown, the videos of one
+const HEALTH_MS = 60000;             // a health check row may take this long (the service tries a real extract)
 const LOG_ERRORS = ['closed', 'busy', 'offline', 'failed'];   // logs_error's msg; 'old': a service without send_logs
 
 class Ctl {
@@ -123,6 +127,10 @@ class Model {
         this.pls = null;             // the account's playlists: {items:[{id,title,count,meta,thumb}], loading, error, t}
         this.plist = null;           // the playlist shown: {id, title, items, loading, error, t}
         this.logs = null;            // a log report: {state: confirm|sending|sent|error, code (sent), msg (error), t}
+        this.related = null;         // watch-next (cap related): {id, items, loading, error, t}
+        this.health = null;          // the health check (cap health): {items:[{key, ok, text}], loading, error, t}
+        this.resumeWait = false;     // a fresh play: its first tick says whether the service resumed it
+        this.resumed = null;         // {id, ms, until}: "Resumed at 12:34 · Start over" shows until then
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
@@ -242,6 +250,7 @@ class Model {
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
+            this._resumeTick(Date.now());
         } else if (m.ev === 'error') {
             // a service older than 0.4.0: no caps, nothing wrong; a frozen command it has not built: nothing to show
             if (m.msg === 'unknown cmd hello') { this.caps = []; this._changed(); return; }
@@ -269,6 +278,7 @@ class Model {
         const f = FEEDS.map((w) => this.feeds[w]).filter(Boolean);
         if (this.chan) f.push(this.chan);
         if (this.plist) f.push(this.plist);
+        if (this.related) f.push(this.related);
         return this.results.concat(this.resume, ...f.map((x) => x.items || []), ...f.map((x) => [].concat(...(x.shelves || []).map((s) => s.items))));
     }
     /** the videos whose pictures the playlist tiles show */
@@ -320,6 +330,7 @@ class Model {
     play(id, rect, fill, it, o) {
         const r = it || this.item(id);
         this.id = id; this.title = r ? String(r.title || '') : ''; this.channel = r ? String(r.channel || '') : ''; this.state = 'preparing'; this.pct = 0; this.elapsed = 0; this.total = 0; this.error = null; this.retry = 0;
+        this.resumeWait = true; this.resumed = null;
         this._changed();
         // the account's own resume point (the tile's), used by the daemon when this car never played it
         return this.send(Object.assign({ cmd: 'play', id, rect, fill: !!fill }, r && r.start_s > 0 ? { at: r.start_s * 1000 } : {}, o || {}));
@@ -362,8 +373,8 @@ class Model {
     /** a feed with no answer after ms: an error, as for searches */
     checkFeeds(now, ms) {
         let any = false;
-        FEEDS.map((w) => this.feeds[w]).concat([this.chans, this.chan, this.pls, this.plist])
-            .forEach((f) => { if (f && f.loading && now - f.t >= ms) { f.loading = false; f.error = 'No answer from the RideTube service'; any = true; } });
+        FEEDS.map((w) => this.feeds[w]).concat([this.chans, this.chan, this.pls, this.plist, this.related, this.health])
+            .forEach((f) => { if (f && f.loading && now - f.t >= (f === this.health ? HEALTH_MS : ms)) { f.loading = false; f.error = 'No answer from the RideTube service'; any = true; } });
         if (any) this._changed();
         return any;
     }
@@ -446,6 +457,57 @@ class Model {
         if (!this.connected || this.videoOn === this.wantVideo) return;
         if (this.send({ cmd: 'video', on: this.wantVideo })) this.videoOn = this.wantVideo;
     }
+
+    /* ---------- 0.4.0 (caps): watch-next, the health check, the resume notice ---------- */
+    /** the videos YouTube lists after id (watch-next); asked once per id (the service caches them 10 min) */
+    loadRelated(id) {
+        if (!this.can('related') || !isVid(id) || (this.related && this.related.id === id)) return false;
+        this.related = { id, items: [], loading: true, error: null, t: Date.now() };
+        this._prune();
+        this._changed();
+        if (this.send({ cmd: 'related', id })) return true;
+        this.related.loading = false; this.related.error = 'The RideTube service (jap-ridetube-d) is not running';
+        return false;
+    }
+    ev_related(m) {
+        const r = this.related;
+        if (!r || m.id !== r.id) return;                                         // another video's late answer
+        r.loading = false;
+        if (m.error) r.error = String(m.error); else { r.error = null; r.items = valid(m.items, FEED_MAX); this._prune(); }
+        if (this.onRelated) this.onRelated(r);                                    // (main.js: a wheel tap waiting for it)
+    }
+    /** run the service's health check (rows replace the last run's as they come); never two at once */
+    runHealth() {
+        if (!this.can('health') || (this.health && this.health.loading)) return false;
+        this.health = { items: [], loading: true, error: null, t: Date.now() };
+        this._changed();
+        if (this.send({ cmd: 'health' })) return true;
+        this.health.loading = false; this.health.error = 'The RideTube service (jap-ridetube-d) is not running';
+        return false;
+    }
+    ev_health(m) {
+        const h = this.health;
+        if (!h || !h.loading) return;                                            // a run nobody waits for
+        h.t = Date.now();                                                        // (the timeout counts from the last row)
+        if (m.done) { h.loading = false; return; }
+        if (typeof m.key !== 'string' || !m.key) return;
+        const row = { key: m.key, ok: m.ok === true, text: typeof m.text === 'string' ? m.text : '' };
+        const i = h.items.findIndex((x) => x.key === row.key);
+        if (i >= 0) h.items[i] = row; else h.items.push(row);
+    }
+    /** a fresh play's first tick past 10 s while playing: the service resumed it there (5 s notice, Start over) */
+    _resumeTick(now) {
+        if (!this.resumeWait || this.state !== 'playing') return;
+        this.resumeWait = false;
+        if (this.elapsed > 10000) this.resumed = { id: this.id, ms: this.elapsed, until: now + 5000 };
+    }
+    /** the resume notice to show now, or null */
+    resumedNow(now) {
+        const r = this.resumed;
+        return r && r.id === this.id && now < r.until && (this.state === 'playing' || this.state === 'paused') ? r : null;
+    }
+    /** Start over: from the very start (the service seeks to 1 ms for 0) */
+    startOver() { this.resumed = null; return this.skip(-this.elapsed); }
 }
 
 /** "Élise Atelier" -> "elise atelier": what a channel search compares */
@@ -454,7 +516,13 @@ function fold(t) {
     try { s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { /* a Node without ICU: accents kept */ }
     return s.toLowerCase().trim();
 }
-function valid(items, n) { return (Array.isArray(items) ? items : []).filter((r) => r && typeof r.id === 'string').slice(0, n || 10); }
+// at most n videos and n Shorts (short:true): Shorts never push videos out, so with Show Shorts off (main.js) a
+// Shorts-heavy list still shows its n videos
+function valid(items, n) {
+    let v = 0, s = 0;
+    n = n || 100;
+    return (Array.isArray(items) ? items : []).filter((r) => r && typeof r.id === 'string' && (r.short ? s++ < n : v++ < n));
+}
 
 /** 83000 -> "1:23", 3723000 -> "1:02:03" */
 function clock(ms) {

@@ -31,7 +31,7 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
   (`©ART`) and the video's `mqdefault.jpg` thumbnail (`covr`), fetched alongside the audio (playback never
   waits for it; the head has it if it came in time, `audio.m4a` waits up to 5 s). No picture: no cover, no failure.
   Newer firmware's MediaPlayer reports what it read (`currentItemMetadata`, read-only: it has no setter): the daemon
-  logs it, `player metadata: TITLE="…" ARTIST="…" COVER_FILE="…"` (`journalctl -u jap-ridetube-d | grep "player metadata"`).
+  logs text values by their length only, so no title reaches a log report: `player metadata: TITLE(42 chars) ARTIST(12 chars) COVER_FILE(30 chars)` (`journalctl -u jap-ridetube-d | grep "player metadata"`).
 - Head -> full: on `audio_ready` the daemon calls `playFile(audio.m4a)` on the live connection, then
   `setTime` at the clock (extrapolated from the last tick: ytdec keeps running) and deletes the head; the
   player's times and states between the two are ignored, and its times below the target for 3 s after.

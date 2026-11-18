@@ -23,7 +23,7 @@ const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
 const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
-const VERSION = '0.3.11';   // component.json's (test_ytd.js checks): sent with a log report
+const VERSION = '0.3.12';   // component.json's (test_ytd.js checks): sent with a log report
 // the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
 const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
 const RING_MAX = 1500, REPORT_MAX = 200 * 1024, OS_MAX = 2048; // log lines kept for a report; its log and os caps (bytes)
@@ -786,7 +786,8 @@ Account.prototype.close = function () {
 // ---------------------------------------------------------------- audio: BMW MediaPlayer
 // The player's own reading of the item playing (currentItemMetadata: newer firmware's MediaPlayer has it, read-only;
 // the older OAP one has only playFile/setTime). Logged, to see whether it found the tags ytfetch writes into the
-// file - what the cluster and the media screen show. Keys come as names or as their numbers.
+// file - what the cluster and the media screen show. Keys come as names or as their numbers. Text values are logged
+// as their length only: titles and channels must not reach the log a report sends (redactLog matches them whole).
 const META_KEYS = { 3: 'TITLE', 5: 'ARTIST', 7: 'ALBUM', 17: 'COVER_FILE', 44: 'LENGTH' };
 function metadataLine(v) {
     const out = [];
@@ -795,7 +796,7 @@ function metadataLine(v) {
         if (!k || ['TITLE', 'ARTIST', 'ALBUM', 'COVER_FILE', 'LENGTH'].indexOf(k) < 0) return;
         const x = (e.value && typeof e.value === 'object') ? e.value : { v: e.value };
         const val = x.stringValue !== undefined ? x.stringValue : x.numeric !== undefined ? x.numeric : Object.keys(x).map((n) => x[n])[0];
-        out.push(k + '=' + (typeof val === 'string' ? JSON.stringify(val.slice(0, 80)) : String(val)));
+        out.push(k + (typeof val === 'string' ? '(' + val.length + ' chars)' : '=' + String(val)));
     });
     return out.length ? out.join(' ') : 'no title, artist, album or cover';
 }

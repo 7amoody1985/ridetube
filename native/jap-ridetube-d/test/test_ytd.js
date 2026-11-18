@@ -204,7 +204,7 @@ async function main() {
         subs.currentItemMetadata([{ key: 3, value: { stringValue: 'Поправка a B58' } }, { key: 'ARTIST', value: { stringValue: 'Night Garage' } },
             { key: 17, value: { stringValue: '/var/cache/cover/1.jpg' } }, { key: 44, value: { numeric: 60000 } }, { key: 0, value: { id: Buffer.from('x') } }]);
         subs.currentItemMetadata([{ key: 16, value: { stringValue: 'audio.m4a' } }]);
-        assert.deepStrictEqual(logs.slice(n), ['player metadata: TITLE="Поправка a B58" ARTIST="Night Garage" COVER_FILE="/var/cache/cover/1.jpg" LENGTH=60000',
+        assert.deepStrictEqual(logs.slice(n), ['player metadata: TITLE(14 chars) ARTIST(12 chars) COVER_FILE(22 chars) LENGTH=60000',
             'player metadata: no title, artist, album or cover']);
     });
 

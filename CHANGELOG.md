@@ -5,6 +5,14 @@
 - Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
   the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
   GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
+- The steering wheel's next / previous buttons skip videos: next plays the next one in the row, shelf or playlist
+  it came from, previous goes back to the start after 3 s, else to the one before it. Held, they seek instead
+  (10 s a step, faster after 3 s), with one seek when let go. While browsing, a skip plays without bringing up the
+  player. The car's media player never passes these buttons to an app, so the app reads
+  the steering wheel's skip rocker itself (SteeringWheelPushButton), only while its own video is on. A car without
+  that interface installs RideTube without it.
+- Service: going back to the very start (Previous, or -10 s in the first 10 s) stays there. The car's player
+  ignored a seek to 0:00, so the sound played on where it was and the picture jumped back to it a second later.
 
 ## App 0.3.11
 

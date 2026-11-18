@@ -13,6 +13,10 @@
     },
     "de.bmw.infotainment.vehicle.CDS": {
       "statusBattery2": "rs"
+    },
+    "de.bmw.infotainment.controlelements.SteeringWheelPushButton": {
+      "statusSearchSwitch1": "rs",
+      "_optional": "the steering wheel's next / previous"
     }
   },
   "screens": [

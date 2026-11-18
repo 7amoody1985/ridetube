@@ -199,19 +199,50 @@ mgu.run({
         // it: the tile tapped (its title and channel show while the video is prepared)
         // list: the shelf, or the whole grid, it was picked from; the videos after it play next when one ends (autoplay)
         const QUALITIES = ['auto', '720', '480', '360'];   // app.json's Video quality values, in the button's order
-        let queue = [], nextAt = 0;
-        function play(id, it, list) {
-            show('player');
-            if (list) { const i = list.findIndex((r) => r.id === id); queue = list.slice(i + 1).filter((r) => r && !r.act && /^[\w-]{11}$/.test(r.id)); }
+        // queue: the list's videos after the one playing (next first); prevs: those before it (the nearest last)
+        let queue = [], prevs = [], nextAt = 0;
+        const playable = (r) => r && !r.act && /^[\w-]{11}$/.test(r.id);
+        // stay: play it without showing the player (a steering-wheel skip while browsing, the sound playing on)
+        function play(id, it, list, stay) {
+            if (!stay) show('player');
+            if (list) {
+                const i = list.findIndex((r) => r.id === id);
+                queue = list.slice(i + 1).filter(playable);
+                prevs = list.slice(0, Math.max(0, i)).filter(playable);
+            }
             nextAt = 0;
             if (model.id === id && model.active()) return;
             model.play(id, rect(), settings.get('fill') !== false, it, { quality: settings.get('quality'), skip: sbSkip() });
+        }
+        // the one playing, as a list item (what Previous and Next step over)
+        const current = () => model.item(model.id) || { id: model.id, title: model.title, channel: model.channel };
+        // Next / Previous in the list the video came from: the steering wheel (steer, below), the podcast view's Next,
+        // autoplay. Previous: back to the start when more than 3 s in or
+        // nothing is before it (as music players do), else the video before it
+        function skipNext(stay) {
+            if (!queue.length) return false;
+            if (model.id) prevs.push(current());
+            const r = queue.shift();
+            play(r.id, r, null, stay);
+            return true;
+        }
+        function skipPrev(stay) {
+            if (!model.id) return false;
+            if (model.elapsed > 3000 || !prevs.length) {
+                if (model.state === 'playing' || model.state === 'paused') model.skip(-model.elapsed);
+                else play(model.id, current(), null, stay);                  // ended or failed: from the start again
+                return true;
+            }
+            queue.unshift(current());
+            const r = prevs.pop();
+            play(r.id, r, null, stay);
+            return true;
         }
         // Close: the video ends here and now (the daemon stops the sound, gives the speakers back and ends the decoder),
         // nothing plays next, and the list it came from shows again
         function closeVideo() {
             if (!model.active() && model.state !== 'ended' && model.state !== 'error') return;
-            queue = []; nextAt = 0;
+            queue = []; prevs = []; nextAt = 0;
             model.stop();
             goBack(browse);
         }
@@ -222,8 +253,7 @@ mgu.run({
             if (model.state !== 'ended' || !queue.length || mode !== 'player') { nextAt = 0; return null; }
             if (!nextAt) { nextAt = Date.now() + 5000; wake(); }
             if (Date.now() < nextAt) return queue[0];
-            const r = queue.shift();
-            play(r.id, r);
+            skipNext();
             return null;
         }
         let lastPlay = null, lastList = null, lastAcct = null;
@@ -274,6 +304,49 @@ mgu.run({
             return ex.segments.find((g) => sbMode(g[2]) === 'ask' && t >= g[0] && t < g[1] - 1000) || null;
         }
         const sbJump = (g) => () => model.skip(g[1] - shownAt());
+
+        /* ---------- the steering wheel's next / previous ---------- */
+        // The car's media player never sees them while an app plays (no forwarded button reaches it), so the app reads
+        // the steering wheel's skip rocker itself: SteeringWheelPushButton.statusSearchSwitch1, 1 = down / skip left
+        // (previous), 2 = up / skip right (next), 0 = released, 3 = no signal (ignored); names or numbers. As a music
+        // player: a tap (let go within HOLD_MS) skips to the next / previous video when it is let go; held, it seeks,
+        // 10 s a step every HOLD_STEP_MS, 30 s a step after HOLD_FAST steps, the bar moving with it and one seek once
+        // it is let go (turnSeek, as the knob on the bar). Only while RideTube's sound is on (playing, preparing), or its
+        // page shows (paused, finished): a press while the radio plays stays the radio's. A car without the interface
+        // installs RideTube without it (app.json _optional).
+        const ROCKER = { 1: 'prev', 2: 'next', SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS: 'prev', SUCHLAUF_AUFWAERTS_MENUE_SKIP_RECHTS: 'next' };
+        const HOLD_MS = 600, HOLD_STEP_MS = 300, HOLD_FAST = 10;
+        let rocker = null, held = null;                           // held: {dir, steps, wait, rep} while pressed (ours)
+        const steerable = () => !!model.id && (model.state === 'playing' || model.state === 'preparing'
+            || ((model.state === 'paused' || model.state === 'ended') && ui.isVisible('VIEW')));
+        function holdStep() {
+            if (!held) return;
+            held.steps++;
+            turnSeek((held.dir === 'next' ? 1 : -1) * (held.steps > HOLD_FAST ? 3 : 1));
+        }
+        function steer(v) {
+            const raw = v && typeof v === 'object' ? v.operationPushButtonAudioAutomaticTuningSteeringWheel : v;
+            if (raw === 3 || raw === 'SIGNAL_UNBEFUELLT') return;   // no signal: nothing changes (a hold goes on)
+            const dir = ROCKER[raw] || null;
+            if (dir === rocker) return;                           // the same again
+            rocker = dir;
+            const was = held;
+            held = null;
+            if (was) {                                            // let go (or turned the other way)
+                clearTimeout(was.wait); clearInterval(was.rep);
+                if (!was.steps) {                                 // a tap: skip
+                    log.info('steering wheel: ' + was.dir);
+                    const stay = mode !== 'player';
+                    if (was.dir === 'next') skipNext(stay); else skipPrev(stay);
+                    changed();
+                }
+            }
+            if (!dir || !steerable()) return;
+            const h = held = { dir, steps: 0, wait: null, rep: null };
+            h.wait = setTimeout(() => { if (held !== h) return; log.info('steering wheel: seek ' + dir); holdStep(); h.rep = setInterval(holdStep, HOLD_STEP_MS); }, HOLD_MS);
+        }
+        Promise.resolve(ctx.signals.watch('de.bmw.infotainment.controlelements.SteeringWheelPushButton', '1', { statusSearchSwitch1: steer }, log))
+            .catch((e) => log.warn('steering wheel: ' + e));
 
         /* ---------- the 12 V battery while parked: a warning 5 points above the setting's level, paused below it ---------- */
         let soc = null, socWarned = false;
@@ -853,7 +926,7 @@ mgu.run({
             }
             if (queue.length) {
                 const nx = mid + 300;
-                big('ov:next', nx, 58, false, () => { const r = queue.shift(); play(r.id, r); }, (c) => {
+                big('ov:next', nx, 58, false, () => skipNext(), (c) => {
                     cv.quad([[nx - 22, cy - 26], [nx - 22, cy + 26], [nx + 12, cy], [nx - 22, cy - 26]], c); cv.fillRect(nx + 14, cy - 26, 9, 52, c);
                 });
                 const up = translate('Up next') + '  ·  ' + String(queue[0].title || queue[0].id), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);

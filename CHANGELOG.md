@@ -13,6 +13,11 @@
   more ("« 20 s"), as one seek once the taps stop. A single tap still shows or hides the controls, and a tap on a
   control is the control's. The podcast view while driving keeps its big buttons only.
 
+- Service: the car's media player (the cluster, the media screen) can show the video's title, channel and
+  thumbnail instead of "unknown title" and "unknown artist". BMW's media player is given only the audio file,
+  so the service now writes them into it as standard MP4 tags. Videos already in the car's cache get them
+  when they are fetched again.
+
 ## App 0.3.12, service 0.3.11
 
 - Send logs to the developer: a new menu entry, and a button next to Try again when a video fails. It asks

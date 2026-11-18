@@ -1493,7 +1493,7 @@ async function main() {
 
     await t('hello: service version and caps; lang / region kept for the connection; a bad one dropped, never refused', async () => {
         const FROZEN = ['health', 'related', 'hist', 'ytdlp', 'remote', 'proxy', 'stream'];
-        assert.deepStrictEqual(CAPS, [], 'nothing of the 0.4.0 protocol answers for real yet');
+        assert.deepStrictEqual(CAPS, ['health'], 'what of the 0.4.0 protocol answers for real (WP4: health)');
         assert.ok(CAPS.every((x) => FROZEN.indexOf(x) >= 0), 'caps only from the frozen names');
         c.clear();
         c.send({ cmd: 'hello', app: '0.4.0', lang: 'ru', region: 'RU' });
@@ -1521,7 +1521,7 @@ async function main() {
     });
 
     await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before; feed hist|liked: unknown feed', async () => {
-        for (const m of [{ cmd: 'health' }, { cmd: 'related', id: 'DemoVideo01' }, { cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
+        for (const m of [{ cmd: 'related', id: 'DemoVideo01' }, { cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
             c.clear();
             c.send(m);
             assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', cmd: m.cmd, msg: 'not implemented ' + m.cmd });
@@ -1535,6 +1535,163 @@ async function main() {
             assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'feed'), { ev: 'feed', which: which, error: 'unknown feed' });
         }
     });
+
+    // ---- WP4 health ----
+    {
+        const H = require('../health.js');
+        const hdir = path.join(tmp, 'health'), hcache = path.join(hdir, 'cache'), hctl = path.join(hdir, 'check.ctl');
+        [hdir, hcache].forEach((x) => fs.mkdirSync(x));
+        const sh = (name, body) => { const f = path.join(hdir, name); fs.writeFileSync(f, '#!/bin/sh\n' + body + '\n', { mode: 0o755 }); return f; };
+        // mgu-python: --version, else the fake check (node); jap-node22: --version only
+        const py = sh('python3', 'if [ "$1" = --version ]; then echo "Python 3.12.7"; exit 0; fi\nexec "' + process.execPath + '" "$@"');
+        const node22 = sh('node22', 'echo v22.23.4');
+        const lease = path.join(hdir, 'lease.json');
+        fs.writeFileSync(lease, JSON.stringify({ dns: ['192.168.77.1', '8.8.8.8'], ip: '192.168.77.20' }));
+        const kdir = path.join(hcache, 'KnownVid001');
+        fs.mkdirSync(kdir);
+        fs.writeFileSync(path.join(kdir, 'meta.json'), JSON.stringify({ id: 'KnownVid001', title: 'My Secret Holiday Video', channel: 'Private Channel Name', duration_s: 60 }));
+        const hd = (o) => {
+            const x = new Daemon(Object.assign({ someip: someip, srcGen: srcGen, cacheDir: hcache, logDir: hdir, stateDir: path.join(hdir, 'state'), etcDir: hdir,
+                accountFile: path.join(hdir, 'account.json'), noSetuid: true, leaseFile: lease, sock: path.join(hdir, 'none.sock'),
+                fetcher: [py, path.join(__dirname, 'fake_health.js'), hctl], thumbCmd: [node22, 'thumb.js'], log: () => {} }, o || {}));
+            x.fetchUid = me;
+            x.audio.cc = { isAvailable: async () => true };
+            return x;
+        };
+        const health = async (x) => { const evs = []; x.emit = (e) => evs.push(e); const t0 = Date.now(); await x.health(); evs.ms = Date.now() - t0; return evs; };
+        const byKey = (evs) => { const m = {}; evs.filter((e) => e.key).forEach((e) => { m[e.key] = e; }); return m; };
+        const NO = ['192.168.77', '8.8.8.8', '10.1.2.3', '81.82.83.84', 'aa:bb:cc', '2a02:1810', 'KnownVid001', 'My Secret Holiday', 'Private Channel'];
+        const clean = (evs) => evs.forEach((e) => NO.forEach((x) => assert.ok(JSON.stringify(e).indexOf(x) < 0, x + ' in ' + JSON.stringify(e))));
+
+        await t('health: every key once, as {ev, key, ok, text}, then done; check --json run as the fetch uid with the cache and the lease', async () => {
+            fs.writeFileSync(hctl, 'ok');
+            const x = hd();
+            const evs = await health(x);
+            assert.deepStrictEqual(evs[evs.length - 1], { ev: 'health', done: true });
+            assert.strictEqual(evs.filter((e) => e.done).length, 1);
+            const rows = evs.slice(0, -1);
+            assert.deepStrictEqual(rows.map((e) => e.key).sort(), H.KEYS.slice().sort(), 'each key once');
+            rows.forEach((e) => assert.deepStrictEqual([Object.keys(e), typeof e.ok, typeof e.text], [['ev', 'key', 'ok', 'text'], 'boolean', 'string'], JSON.stringify(e)));
+            const k = byKey(evs);
+            assert.deepStrictEqual(H.KEYS.filter((n) => !k[n].ok), ['socket'], 'all well but the socket (no lock info yet): ' + JSON.stringify(rows));
+            assert.strictEqual(k.service.text, 'jap-ridetube-d ' + VERSION);
+            assert.strictEqual(k.node.text, 'Node ' + process.version + ' runs the service');
+            assert.strictEqual(k.node22.text, 'jap-node22 v22.23.4');
+            assert.strictEqual(k.python.text, 'mgu-python: Python 3.12.7');
+            assert.strictEqual(k.ytdlp.text, 'yt-dlp 2026.10.26 (bundled)');
+            assert.strictEqual(k.uid.text, 'internet uid ' + me);
+            assert.strictEqual(k.lease.text, 'uplink lease, 2 DNS servers');
+            assert.strictEqual(k.dns.text, 'youtube.com resolves through the uplink DNS');
+            assert.strictEqual(k.tls.text, 'TLS to youtube.com works');
+            assert.ok(/^\d+ MiB free for videos \(a video needs 256 MiB left\)$/.test(k.free.text), k.free.text);
+            assert.strictEqual(k.audio.text, 'BMW audio service reachable');
+            assert.strictEqual(k.socket.text, 'control socket: lock state unknown');
+            const run = JSON.parse(fs.readFileSync(hctl + '.log', 'utf8'));
+            assert.deepStrictEqual(run.argv, ['check', '--json', '--cache-dir', hcache, '--lease', lease]);
+            clean(evs);
+            x.sockLocked = true;
+            assert.deepStrictEqual(byKey(await health(x)).socket, { ev: 'health', key: 'socket', ok: true, text: 'control socket: the RideTube app only' });
+            x.sockLocked = false;
+            assert.deepStrictEqual(byKey(await health(x)).socket, { ev: 'health', key: 'socket', ok: false, text: 'control socket: shared with other apps' });
+        });
+
+        await t('health over the socket: {"cmd":"health"} streams the lines, then done; caps say health', async () => {
+            fs.writeFileSync(hctl, 'ok');
+            const keep = d.opts.fetcher;
+            d.opts.fetcher = [process.execPath, path.join(__dirname, 'fake_health.js'), hctl];
+            c.clear();
+            c.send({ cmd: 'hello', app: '0.4.0' });
+            assert.ok((await c.waitFor((e) => e.ev === 'hello')).caps.indexOf('health') >= 0);
+            c.send({ cmd: 'health' });
+            await c.waitFor((e) => e.ev === 'health' && e.done, 9000);
+            assert.deepStrictEqual(c.evs.filter((e) => e.ev === 'health' && e.key).map((e) => e.key).sort(), H.KEYS.slice().sort());
+            d.opts.fetcher = keep;
+            const k = byKey(c.evs);
+            assert.deepStrictEqual([k.audio.ok, k.dns.ok, k.tls.ok, k.ytdlp.ok], [true, true, true, true], 'the running daemon\'s SOME/IP proxy, the fetcher\'s keys');
+        });
+
+        await t('health offline: no lease, DNS fails, TLS skipped -> ok:false with a readable text; the rest still answer', async () => {
+            fs.writeFileSync(hctl, 'offline');
+            const k = byKey(await health(hd({ leaseFile: path.join(hdir, 'no-lease.json') })));
+            assert.deepStrictEqual([k.lease.ok, k.lease.text], [false, 'no uplink lease: the uplink is down or not installed']);
+            assert.deepStrictEqual([k.dns.ok, k.dns.text], [false, 'DNS for youtube.com: name not resolved']);
+            assert.deepStrictEqual([k.tls.ok, k.tls.text], [false, 'no TLS to youtube.com: skipped: no DNS']);
+            assert.ok(k.ytdlp.ok && k.service.ok && k.audio.ok && k.node22.ok);
+        });
+
+        await t('health: no internet uid -> uid and the three fetcher keys say so; nothing missing (python, node22) never throws', async () => {
+            const x = hd({ noSetuid: false, mainapps: [], fetcher: [path.join(hdir, 'no-python'), 'ytfetch.py'], thumbCmd: [path.join(hdir, 'no-node22')] });
+            x.fetchUid = null;
+            x.audio.cc = null;
+            const evs = await health(x), k = byKey(evs);
+            assert.strictEqual(evs.filter((e) => e.key).length, H.KEYS.length);
+            assert.deepStrictEqual([k.uid.ok, k.uid.text], [false, 'no internet uid on the car (see the log)']);
+            ['ytdlp', 'dns', 'tls'].forEach((n) => assert.deepStrictEqual([k[n].ok, k[n].text], [false, 'not checked: no internet uid on the car (see the log)'], n));
+            assert.deepStrictEqual([k.python.text, k.node22.text, k.audio.text], ['mgu-python not installed', 'jap-node22 not installed', 'BMW audio service not connected yet']);
+            x.opts.noSetuid = true; x.fetchUid = me;   // a spawn that fails (ENOENT) rather than throws
+            assert.strictEqual(byKey(await health(x)).dns.text, 'not checked: mgu-python is not installed');
+        });
+
+        await t('health: a hanging check and a hanging audio service time out without holding the others; the child is killed', async () => {
+            fs.writeFileSync(hctl, 'hang');
+            const x = hd({ healthMs: 700 });
+            x.audio.cc = { isAvailable: () => new Promise(() => {}) };
+            const evs = await health(x), k = byKey(evs);
+            assert.ok(evs.ms < 700 + 600, 'done in ' + evs.ms + ' ms');
+            assert.strictEqual(evs.filter((e) => e.key).length, H.KEYS.length);
+            assert.deepStrictEqual([k.ytdlp.ok, k.ytdlp.text], [true, 'yt-dlp 2026.10.26 (bundled)'], 'what it said before it hung is kept');
+            assert.deepStrictEqual([k.dns.ok, k.dns.text, k.tls.text], [false, 'not checked: no answer in 0.7 s', 'not checked: no answer in 0.7 s']);
+            assert.deepStrictEqual([k.audio.ok, k.audio.text], [false, 'BMW audio service: no answer in 0.7 s']);
+            assert.ok(k.service.ok && k.node22.ok && k.python.ok && k.lease.ok && k.free.ok, 'the local keys answered');
+            const pid = JSON.parse(fs.readFileSync(hctl + '.log', 'utf8')).pid;
+            await waitUntil(() => { try { process.kill(pid, 0); return false; } catch (e) { return true; } }, 2000);
+        });
+
+        await t('health: what the fetch uid prints is not trusted: unknown names dropped, ok only when true, no address / id / title / newline, capped', async () => {
+            fs.writeFileSync(hctl, 'hostile');
+            const evs = await health(hd()), k = byKey(evs);
+            assert.ok(!evs.some((e) => e.key === 'evil'));
+            assert.deepStrictEqual([k.ytdlp.ok, k.ytdlp.text], [false, 'yt-dlp does not load: loaded'], 'a version that is not one');
+            assert.strictEqual(k.dns.ok, false, 'ok "yes" is not true');
+            assert.deepStrictEqual([k.dns.text, k.tls.text], ['DNS for youtube.com: failed', 'no TLS to youtube.com: failed'], 'only ytfetch\'s own phrases are shown');
+            assert.ok(evs.every((e) => !/[\n\r]/.test(e.text || '') && (e.text || '').length <= 120));
+            clean(evs);
+        });
+
+        await t('health: a check that dies without "done" -> its missing keys say it stopped; its stderr goes to the log, not the screen', async () => {
+            fs.writeFileSync(hctl, 'crash');
+            const lg = [], x = hd({ log: (m) => lg.push(m) });
+            const evs = await health(x), k = byKey(evs);
+            assert.deepStrictEqual([k.ytdlp.ok, k.dns.text, k.tls.text], [true, 'not checked: ytfetch.py check stopped (exit 1)', 'not checked: ytfetch.py check stopped (exit 1)']);
+            assert.ok(lg.indexOf('health: ytfetch.py check: OSError: [ip] KnownVid001 gone') >= 0, lg.join('\n'));
+            clean(evs);
+        });
+
+        await t('health in send_logs: the block ends the report\'s log, every key, through redactLog; no health event reaches the app', async () => {
+            fs.writeFileSync(hctl, 'hostile');
+            let body = null;
+            const x = hd({ ytRequest: async (m, u, h, b) => { body = b; return { status: 200, body: JSON.stringify({ id: 'ABC123' }) }; } });
+            const evs = [];
+            x.emit = (e) => evs.push(e);
+            x.log('ytfetch: fetch KnownVid001 done');
+            await x.sendLogs('0.4.0');
+            assert.deepStrictEqual(evs, [{ ev: 'logs_sent', id: 'ABC123' }]);
+            const ls = body.log.split('\n'), at = ls.indexOf('--- health');
+            assert.ok(at > 0, 'a health block');
+            assert.deepStrictEqual(ls.slice(at + 1).map((l) => l.split(' ')[1]), H.KEYS, 'each key, in order, last in the log');
+            assert.ok(ls[at + 1] === 'health service ok jap-ridetube-d ' + VERSION, ls[at + 1]);
+            assert.strictEqual(ls[at + 8], 'health dns FAIL DNS for youtube.com: failed');
+            NO.forEach((s) => assert.ok(body.log.indexOf(s) < 0, s + ' in the report'));
+            const b = x.report('0.4.0', [{ key: 'tls', ok: false, text: 'via 81.82.83.84 to KnownVid001' }]);
+            assert.ok(/--- health\nhealth tls FAIL via \[ip\] to v#[0-9a-f]{4}$/.test(b.log), b.log.slice(-80));
+            assert.ok(!/--- health/.test(x.report('0.4.0').log), 'no block without lines');
+        });
+
+        await t('health.clean: one short printable line, addresses masked, versions and words kept', async () => {
+            assert.strictEqual(H.clean('a\n\tb  192.168.1.1 fe80::1:2 AA-BB-CC-DD-EE-FF v22.23.4 2026.10.26 12:34:56 é'), 'a b [ip] [ip] [mac] v22.23.4 2026.10.26 12:34:56');
+            assert.strictEqual(H.clean('x'.repeat(300)).length, 120);
+        });
+    }
 
     c.destroy();
     await d.close();

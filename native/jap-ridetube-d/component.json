@@ -24,6 +24,11 @@
       "mode": "0644"
     },
     {
+      "path": "health.js",
+      "from": "health.js",
+      "mode": "0644"
+    },
+    {
       "path": "ytdec",
       "from": "build/ytdec",
       "mode": "0755"

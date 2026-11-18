@@ -531,5 +531,55 @@ class Online(unittest.TestCase, Pipeline):
             shutil.rmtree(tmp)
 
 
+# ---- WP4 health ----
+class CheckJson(unittest.TestCase):
+    """check --json (the daemon's health probes): one JSON line per probe, then done; offline here, on purpose."""
+
+    def test_shape_offline(self):
+        tmp = tempfile.mkdtemp(dir=TMP)
+        try:
+            pyz = os.path.join(tmp, 'pyz')  # a stand-in yt-dlp: loads, has a version
+            os.makedirs(os.path.join(pyz, 'yt_dlp'))
+            with open(os.path.join(pyz, 'yt_dlp', '__init__.py'), 'w') as f:
+                f.write('extractor = None\n')
+            with open(os.path.join(pyz, 'yt_dlp', 'version.py'), 'w') as f:
+                f.write("__version__ = '2099.01.02'\n")
+            lease = os.path.join(tmp, 'lease.json')
+            with open(lease, 'w') as f:
+                json.dump({'dns': ['127.0.0.1']}, f)  # loopback: no network gear can answer for it (some redirect any outside :53)
+            p = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ytfetch.py'), 'check', '--json', '--cache-dir', tmp,
+                                '--lease', lease, '--pyz', pyz], capture_output=True, text=True, timeout=30, env={}, cwd='/')
+            evs = [json.loads(x) for x in p.stdout.splitlines()]
+            self.assertEqual([e['ev'] for e in evs], ['check'] * 3 + ['done'], p.stderr)
+            self.assertEqual([e['name'] for e in evs[:3]], ['ytdlp', 'dns', 'tls'])
+            for e in evs[:3]:
+                self.assertEqual(sorted(e), sorted(['ev', 'name', 'ok', 's', 'info'] + {'ytdlp': ['version'], 'dns': ['servers']}.get(e['name'], [])))
+                self.assertIsInstance(e['ok'], bool)
+                self.assertIsInstance(e['info'], str)
+            y, d, t = evs[:3]
+            self.assertEqual((y['ok'], y['version']), (True, '2099.01.02'))
+            self.assertEqual(sorted(os.listdir(tmp)), ['lease.json', 'pyz'], 'no file written')
+            self.assertNotIn('127.0.0.1', p.stdout, 'no address in a line')
+            if d['ok']:
+                self.skipTest('a DNS server answers on 127.0.0.1 here')
+            self.assertEqual(p.returncode, 1)
+            self.assertEqual((d['ok'], d['servers'], d['info']), (False, 1, 'name not resolved'))
+            self.assertEqual((t['ok'], t['info']), (False, 'skipped: no DNS'))
+            self.assertEqual(evs[3], {'ev': 'done', 'ok': False})
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_why_has_no_address(self):
+        e = socket.gaierror(socket.EAI_NONAME, 'www.youtube.com: lease DNS: 192.168.1.1: timed out')
+        self.assertEqual(ytfetch._why(e), 'name not resolved')
+        self.assertEqual(ytfetch._why(socket.timeout('timed out')), 'timed out')
+        self.assertEqual(ytfetch._why(ConnectionRefusedError(61, 'Connection refused')), 'connection refused')
+        import errno
+        import urllib.error
+        self.assertEqual(ytfetch._why(urllib.error.URLError(OSError(errno.EHOSTUNREACH, 'No route to host'))), 'no route to host')
+        self.assertEqual(ytfetch._why(urllib.error.URLError(OSError(5, 'odd 10.0.0.1'))), 'failed')
+        self.assertEqual(ytfetch._why(ValueError('10.0.0.1')), 'failed')
+
+
 if __name__ == '__main__':
     unittest.main()

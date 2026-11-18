@@ -272,6 +272,27 @@ test('Cyrillic titles: every letter drawn (accented Latin too), in the weight an
     ['label', 'bold', 'num', 'light'].forEach((fam) => assert.strictEqual(fonts.get(fam, 32, 'Rebuilding a B58 · Café').family, fam, fam + ': Latin as before'));
 });
 
+test('Romanian ș ț Ș Ț draw as ş ţ Ş Ţ, an accented letter the atlas lacks as its base letter: nothing drops out of a title', () => {
+    const fonts = require('../runtime/fonts');
+    const { Canvas } = require('../runtime/canvas');
+    const ro = 'Știri și Țara Românească — Ştefan, ţară', vi = 'Phở ngon · Đà Nẵng';
+    [['label', 18], ['label', 32], ['bold', 24], ['bold', 44], ['light', 32], ['num', 40]].forEach(([fam, size]) => {
+        const f = fonts.get(fam, size, ro);
+        assert.strictEqual(f.family, fam, fam + ' ' + size + ': the main atlas, not a companion');
+        [ro, vi].forEach((t) => assert.deepStrictEqual(Array.from(t).filter((ch) => !fonts.glyph(f, ch)), [], fam + ' ' + size + ': nothing dropped from ' + t));
+        assert.strictEqual(fonts.glyph(f, 'ș'), f.glyphs['ş'.codePointAt(0)], 'ș as ş');
+        assert.strictEqual(fonts.glyph(f, 'Ț'), f.glyphs['Ţ'.codePointAt(0)], 'Ț as Ţ');
+        assert.strictEqual(fonts.glyph(f, 'ở'), f.glyphs['o'.codePointAt(0)], 'ở as o');
+        assert.strictEqual(fonts.glyph(f, '😀'), undefined, 'an emoji: dropped, as before');
+        assert.strictEqual(fonts.measure(f, 'Știri'), fonts.measure(f, 'Ştiri'), 'measured as drawn');
+    });
+    // drawn: the comma-below word is as wide as the cedilla one, and wider than the word without its first letter
+    const cv = new Canvas(400, 60);
+    const w = cv.text('Știri', 0, 40, 32, '#ffffff', { literal: true });
+    assert.strictEqual(w, cv.text('Ştiri', 0, 40, 32, '#ffffff', { literal: true }));
+    assert.ok(w > cv.text('tiri', 0, 40, 32, '#ffffff', { literal: true }));
+});
+
 (async () => {
     await new Promise((r) => server.listen(process.env.MGU_RENDERD_SOCKET, r));
     let failed = 0;

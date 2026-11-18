@@ -4,7 +4,7 @@
 // cwd, uid to <ctl>.log, writes the files as ytfetch.py does, then waits for <ctl> to say done or error.
 // <ctl> at start: "fail" = an error before audio is ready ("gone": a refused video); "head" = audio_head (60 s) before the video, audio_ready
 // after it; "hold" = audio_head, audio_ready only once <ctl> says "full" or "done"; else audio_ready, no head.
-// serve: says warm, then runs the argv list read from stdin (logged with served: true). extract: writes <dir> = info.json.
+// serve: says warm, then runs the argv list read from stdin (logged with served: true). extract: makes <dir>'s folder (as ytfetch.py does), writes <dir> = info.json.
 const fs = require('fs');
 const path = require('path');
 const ctl = process.argv[2];
@@ -20,7 +20,7 @@ function run(args, served) {
 const id = args[args.length - 2], dir = args[args.length - 1];
 if (args[0] === 'extract') {
     fs.writeFileSync(ctl + '.extract', JSON.stringify({ argv: args, served: served }));
-    setTimeout(() => { fs.writeFileSync(dir, JSON.stringify({ id: id })); say({ ev: 'info', id: id }); }, 150);
+    setTimeout(() => { fs.mkdirSync(path.dirname(dir), { recursive: true }); fs.writeFileSync(dir, JSON.stringify({ id: id })); say({ ev: 'info', id: id }); }, 150);
     return;
 }
 const mode = () => { try { return fs.readFileSync(ctl, 'utf8').trim(); } catch (e) { return ''; } };

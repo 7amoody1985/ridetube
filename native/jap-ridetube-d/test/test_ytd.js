@@ -1536,6 +1536,168 @@ async function main() {
         }
     });
 
+    // ---- WP3 socket + security ----
+    const cp = require('child_process');
+    const realChown = fs.chownSync, realSpawnSync = cp.spawnSync;
+    const chowns = [];
+    const recordChown = (fail) => { chowns.length = 0; fs.chownSync = (p, u, g) => { chowns.push([p, u, g]); if (fail) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); }; };
+    const wroot = path.join(tmp, 'wp3'), wcache = path.join(wroot, 'cache'), wlogs = [];
+    const reg = path.join(wroot, 'oap', 'oap_12201', 'data', 'apps', 'jap_ridetube.json');
+    fs.mkdirSync(path.dirname(reg), { recursive: true }); fs.mkdirSync(wcache, { recursive: true });
+    const wsock = path.join(tmp, 'w3.sock');
+    const modeOf = (p) => fs.statSync(p).mode & 0o777;
+    const ds = new Daemon({ someip: { buildProxy: () => new Promise(() => {}) }, srcGen: srcGen, cacheDir: wcache, logDir: wroot, sock: wsock,
+        oapRoot: path.join(wroot, 'oap'), tickMs: 100, noSetuid: !root, spare: false, ytRequest: fakeYt, keep: 20,
+        accountFile: path.join(wroot, 'account.json'), stateDir: path.join(wroot, 'state'), log: (m) => wlogs.push(m) });
+
+    await t('WP3 socket: owner and mode from MainApp\'s registry (<app uid>:root 0600)', async () => {
+        fs.writeFileSync(reg, JSON.stringify({ appId: 'jap_ridetube', userId: 23456 }));
+        recordChown(false);
+        try {
+            ds.start();
+            await waitUntil(() => ds.sockUid === 23456, 2000);
+            assert.deepStrictEqual(chowns.slice(-1)[0], [wsock, 23456, 0]);
+            assert.strictEqual(modeOf(wsock), 0o600);
+            assert.strictEqual(ds.sockShared(), false);
+            assert.ok(wlogs.indexOf('ctl.sock: app uid 23456 only (0600)') >= 0, wlogs.join('\n'));
+        } finally { fs.chownSync = realChown; }
+    });
+
+    await t('WP3 socket: a new app uid (reinstall) re-chowns within one tick', async () => {
+        recordChown(false);
+        try {
+            await sleep(250);
+            assert.deepStrictEqual(chowns, [], 'nothing re-applied while the uid stays');
+            fs.writeFileSync(reg, JSON.stringify({ appId: 'jap_ridetube', userId: 23457 }));
+            await waitUntil(() => chowns.length, 250);
+            assert.deepStrictEqual(chowns, [[wsock, 23457, 0]]);
+            assert.strictEqual(modeOf(wsock), 0o600);
+        } finally { fs.chownSync = realChown; }
+    });
+
+    await t('WP3 socket: no registry entry -> 0660 root:tm_oap_app as before, logged once, sockShared(); a failed chown falls back the same', async () => {
+        recordChown(false);
+        try {
+            fs.unlinkSync(reg);
+            await waitUntil(() => ds.sockUid === null, 250);
+            assert.deepStrictEqual(chowns, [[wsock, 0, 12202]]);
+            assert.strictEqual(modeOf(wsock), 0o660);
+            assert.strictEqual(ds.sockShared(), true);
+            fs.writeFileSync(reg, '{"userId":"root"}');                          // unreadable uid: the same
+            await sleep(350);
+            assert.strictEqual(wlogs.filter((m) => /^ctl\.sock: shared/.test(m)).length, 1, 'logged once');
+            assert.strictEqual(chowns.length, 1);
+            recordChown(true);
+            fs.writeFileSync(reg, JSON.stringify({ userId: 23458 }));
+            await waitUntil(() => chowns.length >= 2, 250);                       // the try, then back to shared
+            assert.strictEqual(modeOf(wsock), 0o660, 'never left root-only: the app could not connect');
+            assert.strictEqual(ds.sockShared(), true);
+            await sleep(250);
+            assert.strictEqual(wlogs.filter((m) => /EPERM: shared with every app/.test(m)).length, 1, 'logged once');
+        } finally {
+            fs.chownSync = realChown;
+            ds.timers.forEach(clearInterval); ds.timers = [];
+            ds.server.close();
+        }
+    });
+
+    await t('WP3 SponsorBlock cache in root\'s cache/.sb: a sb.json symlink in the video folder is never read or written', async () => {
+        const id = 'SBSBSBSBSB1', vdir = path.join(wcache, id), victim = path.join(wroot, 'victim.json');
+        fs.mkdirSync(vdir);
+        const planted = '[{"s":1000,"e":9000,"cat":"sponsor"}]';
+        fs.writeFileSync(victim, planted);
+        fs.symlinkSync(victim, path.join(vdir, 'sb.json'));
+        yt.sb = () => ({ status: 200, body: JSON.stringify([{ videoID: id, segments: [{ category: 'sponsor', actionType: 'skip', segment: [10, 20] }] }]) });
+        yt.calls.length = 0;
+        const cur = { id: id, dir: vdir };
+        ds.cur = cur;
+        await ds.loadSegments(cur);
+        assert.strictEqual(yt.calls.filter((x) => /sponsor/.test(x.url)).length, 1, 'asked SponsorBlock: the planted file is not read');
+        assert.deepStrictEqual(cur.segs, [{ s: 10000, e: 20000, cat: 'sponsor' }]);
+        assert.strictEqual(fs.readFileSync(victim, 'utf8'), planted, 'the symlink target is unchanged');
+        assert.ok(fs.lstatSync(path.join(vdir, 'sb.json')).isSymbolicLink());
+        const f = path.join(wcache, '.sb', id + '.json');
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(f, 'utf8')), [{ s: 10000, e: 20000, cat: 'sponsor' }]);
+        assert.deepStrictEqual([modeOf(path.join(wcache, '.sb')), modeOf(f)], [0o700, 0o600]);
+        await ds.loadSegments(cur);
+        assert.strictEqual(yt.calls.filter((x) => /sponsor/.test(x.url)).length, 1, 'cached');
+        ds.cur = null;
+    });
+
+    await t('WP3 prefetch: root never makes, chowns or prunes info/ (a symlink there reaches nothing); chownFetch refuses deeper paths', async () => {
+        const c2 = path.join(wroot, 'cache2'), ytc = path.join(c2, 'ytdlp'), away = path.join(wroot, 'away');
+        fs.mkdirSync(ytc, { recursive: true }); fs.mkdirSync(away);
+        const old = path.join(away, 'old.json');
+        fs.writeFileSync(old, '{}'); fs.utimesSync(old, new Date(0), new Date(0));
+        fs.symlinkSync(away, path.join(ytc, 'info'));
+        const jobs = [];
+        const di = new Daemon({ someip: someip, srcGen: srcGen, cacheDir: c2, logDir: wroot, noSetuid: false, spare: true, ytRequest: fakeYt,
+            accountFile: path.join(wroot, 'account.json'), stateDir: path.join(wroot, 'state'), log: (m) => wlogs.push(m) });
+        di.fetchUid = 4242;
+        di.spawnJob = (args) => { jobs.push(args); return cp.spawn(process.execPath, ['-e', '']); };
+        recordChown(false);
+        try {
+            di.prefetch('INFOINFOIN1');
+            await di.extracting.done;
+            assert.deepStrictEqual(jobs, [['extract', '--cache-dir', ytc, '--', 'INFOINFOIN1', path.join(ytc, 'info', 'INFOINFOIN1.json')]]);
+            assert.ok(chowns.length > 0 && chowns.every((x) => x[0] === ytc && x[1] === 4242), JSON.stringify(chowns));
+            assert.ok(fs.existsSync(old), 'an old file behind the symlink is not pruned by root');
+            assert.ok(fs.lstatSync(path.join(ytc, 'info')).isSymbolicLink());
+            assert.throws(() => di.chownFetch(path.join(ytc, 'info')), /outside the cache/);
+            assert.throws(() => di.chownFetch(old), /outside the cache/);
+            assert.ok(chowns.every((x) => x[0] === ytc));
+        } finally { fs.chownSync = realChown; }
+        di.account.close();
+    });
+
+    await t('WP3 rmTree: a fetch-owned folder is emptied by its owner (rm -rf as that uid), then root rmdirs it; prune goes through it and skips .sb', async () => {
+        const runs = [], own = (p) => { if (root) cp.execSync('chown -hR 4242:4242 ' + p); };   // as root (Docker): a fetch uid's tree
+        cp.spawnSync = function (cmd, args, o) { runs.push([cmd, args, o]); return realSpawnSync.apply(cp, arguments); };
+        try {
+            const vid = path.join(wcache, 'RMRMRMRMRM1'), away = path.join(wroot, 'away2');
+            fs.mkdirSync(vid); fs.mkdirSync(away);
+            fs.writeFileSync(path.join(vid, 'audio.m4a'), 'a'); fs.writeFileSync(path.join(away, 'keep.txt'), 'k');
+            fs.symlinkSync(away, path.join(vid, 'link'));
+            own(vid);
+            ds.rmTree(vid);
+            assert.deepStrictEqual(runs.map((r) => [r[0], r[1]]), [['/bin/rm', ['-rf', '--', vid]]]);
+            assert.deepStrictEqual([runs[0][2].env, runs[0][2].cwd], [{}, '/']);
+            assert.ok(!fs.existsSync(vid) && fs.existsSync(path.join(away, 'keep.txt')));
+            // prune: every id folder through it; .sb/<id>.json goes with its folder, a protected one stays; .sb itself untouched
+            runs.length = 0;
+            const sbd = path.join(wcache, '.sb');
+            ['PRPRPRPRPR1', 'PRPRPRPRPR2'].forEach((id) => { fs.mkdirSync(path.join(wcache, id)); fs.writeFileSync(path.join(sbd, id + '.json'), '[]'); });
+            fs.writeFileSync(path.join(sbd, 'KEEPKEEPKE1.json'), '[]');
+            ['PRPRPRPRPR1', 'PRPRPRPRPR2', 'SBSBSBSBSB1'].forEach((id) => own(path.join(wcache, id)));
+            ds.opts.keep = 0; ds.preparing = 'KEEPKEEPKE1';
+            const removed = ds.prune();
+            ds.preparing = null;
+            assert.deepStrictEqual(removed.sort(), ['PRPRPRPRPR1', 'PRPRPRPRPR2', 'SBSBSBSBSB1']);
+            assert.deepStrictEqual(runs.map((r) => r[1][2]).sort(), removed.map((id) => path.join(wcache, id)));
+            assert.deepStrictEqual(fs.readdirSync(sbd), ['KEEPKEEPKE1.json']);
+        } finally { cp.spawnSync = realSpawnSync; }
+        // as root: rm runs as the folder's owner (the fetch uid), never root
+        const vid3 = path.join(wroot, 'cache2', 'OWNEROWNER1');
+        fs.mkdirSync(vid3); own(vid3);
+        const st = fs.lstatSync(vid3), seen = [];
+        const di = new Daemon({ cacheDir: path.join(wroot, 'cache2'), noSetuid: false, ytRequest: fakeYt, accountFile: path.join(wroot, 'account.json'), log: () => {} });
+        cp.spawnSync = (cmd, args, o) => { seen.push(o); return { status: 1 }; };
+        try { di.rmTree(vid3); } finally { cp.spawnSync = realSpawnSync; }
+        assert.deepStrictEqual([seen[0].uid, seen[0].gid], [st.uid, st.gid]);
+        assert.ok(!fs.existsSync(vid3), 'root rmdirs the emptied folder');
+        di.account.close();
+    });
+
+    await t('WP3 pruneCache (the plain function): .sb is not a video, never listed or removed', async () => {
+        const lc = path.join(wroot, 'lc');
+        fs.mkdirSync(path.join(lc, '.sb'), { recursive: true });
+        fs.writeFileSync(path.join(lc, '.sb', 'ZZZZZZZZZZ1.json'), '[]');
+        fs.mkdirSync(path.join(lc, 'ZZZZZZZZZZ1'));
+        assert.deepStrictEqual(listCache(lc).map((x) => x.id), ['ZZZZZZZZZZ1']);
+        assert.deepStrictEqual(pruneCache(lc, 0, [], () => {}), ['ZZZZZZZZZZ1']);
+        assert.deepStrictEqual([fs.existsSync(path.join(lc, '.sb')), fs.readdirSync(path.join(lc, '.sb'))], [true, []]);
+    });
+
     c.destroy();
     await d.close();
     console.log(results.join('\n'));

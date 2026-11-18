@@ -256,9 +256,15 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
   mgu-render, and running it under another uid was not tested on a head unit. It reads only the video folder
   the daemon names (`--dir`) and takes commands only from the daemon's pipe. It opens no socket and fetches
   nothing.
-- `/run/jap-ridetube-d/ctl.sock` is 0660 root:`tm_oap_app`. Every app on the head unit shares that group, so any
-  installed app (not only RideTube) can drive the daemon: play, search, read the feeds and the watch history, or
-  sign the account in or out. Install only apps you trust.
+- `/run/jap-ridetube-d/ctl.sock` belongs to RideTube's app alone: the daemon reads the app's uid (`userId`) from
+  MainApp's registry (`/var/opt/public/oap/oap_12201/data/apps/jap_ridetube.json`) and makes the socket
+  `<uid>:root` 0600, checked again every 5 s (a reinstall can change the uid). If that lookup fails it falls back to
+  0660 root:`tm_oap_app` and logs it: then every app on the head unit shares that group, so any installed app can
+  drive the daemon (play, search, read the feeds and the watch history, sign the account in or out).
+- Root never writes, chowns or walks below a folder the fetch uid owns (a symlink planted there would point root
+  anywhere): SponsorBlock answers sit in root's `cache/.sb/` (0700), yt-dlp's `ytdlp/info/` is made and pruned by
+  the fetcher itself, and a video's folder is emptied by its owner (`rm -rf` as that uid) before root removes the
+  empty folder.
 - The cache (`/var/opt/jap-ridetube-d/cache`) is 0711: the fetch uid reaches its own folders, and nobody else can
   list what was watched. Each video's folder is 0711: BMW's media engine (its own uid) opens the audio in it by
   name, and nobody can list it. The thumbnail folder is 0700 and `positions.json` (where each video was left, the

@@ -98,6 +98,8 @@ function withTimeout(p, ms, what) {
         p.then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
     });
 }
+// root-owned trees only: a fetch-uid folder goes through Daemon.rmTree (a symlink swapped in between lstat and
+// readdir would point root elsewhere)
 function rmrf(p) {
     let st;
     try { st = fs.lstatSync(p); } catch (e) { return; }
@@ -151,17 +153,25 @@ function listCache(cacheDir) {
     out.sort(function (a, b) { return b.mtime - a.mtime; });
     return out;
 }
-// Keep the `keep` most recent ids (dir mtime); never the protected ones (playing/preparing).
-function pruneCache(cacheDir, keep, protect, log) {
+// SponsorBlock answers, cache/.sb/<id>.json: root's (0700), never in a video's folder, which the fetch uid owns
+const SB_DIR = '.sb';
+// Keep the `keep` most recent ids (dir mtime); never the protected ones (playing/preparing). rm: how a folder
+// goes (the daemon's rmTree; rmrf by default). .sb/<id>.json (SponsorBlock, root's) goes with its video's folder.
+function pruneCache(cacheDir, keep, protect, log, rm) {
     const items = listCache(cacheDir);
     const removed = [];
     let kept = 0;
     items.forEach(function (it) {
         if (protect.indexOf(it.id) >= 0) { kept++; return; }
         if (kept < keep) { kept++; return; }
-        try { rmrf(path.join(cacheDir, it.id)); removed.push(it.id); } catch (e) { log('lru: ' + it.id + ': ' + e.message); }
+        try { (rm || rmrf)(path.join(cacheDir, it.id)); removed.push(it.id); } catch (e) { log('lru: ' + it.id + ': ' + e.message); }
     });
     if (removed.length) log('lru removed ' + removed.join(','));
+    const sb = path.join(cacheDir, SB_DIR);
+    list(sb).forEach(function (n) {
+        const id = n.replace(/\.json$/, '');
+        if (protect.indexOf(id) < 0 && !fs.existsSync(path.join(cacheDir, id))) { try { fs.unlinkSync(path.join(sb, n)); } catch (e) { /* gone */ } }
+    });
     return removed;
 }
 
@@ -1037,7 +1047,8 @@ Daemon.prototype.spawnFetchUid = function (cmd, args, stdin) {
     const ids = this.opts.noSetuid ? {} : { uid: this.uid(), gid: this.uid() };
     return cp.spawn(cmd[0], cmd.slice(1).concat(args), Object.assign(ids, { cwd: '/', env: {}, stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] }));
 };
-// yt-dlp's cache dir (5 chars: listCache's 11-char id filter skips it), the fetch uid's
+// yt-dlp's cache dir (5 chars: listCache's 11-char id filter skips it), the fetch uid's. Root makes and chowns only
+// this folder (in root's cache/, so it cannot be swapped); everything below it (info/, yt-dlp's files) is the fetcher's
 Daemon.prototype.ytc = function () {
     const ytc = path.join(this.opts.cacheDir, 'ytdlp');
     if (!fs.existsSync(ytc)) fs.mkdirSync(ytc, 0o700);
@@ -1106,7 +1117,8 @@ Daemon.prototype.sendExtras = function () {
     if (c) this.emit({ ev: 'extras', id: c.id, chapters: c.chapters || [], segments: (c.segs || []).map((x) => [x.s, x.e, x.cat]) });
 };
 Daemon.prototype.loadSegments = async function (c) {
-    const f = path.join(c.dir, 'sb.json');
+    // root's own folder: a sb.json in the video's folder (0.3.x) is the fetch uid's to plant a symlink in, never read
+    const sb = path.join(this.opts.cacheDir, SB_DIR), f = path.join(sb, c.id + '.json');
     let segs = readJson(f);
     if (!Array.isArray(segs)) {
         const pre = require('crypto').createHash('sha256').update(c.id).digest('hex').slice(0, 4);
@@ -1123,7 +1135,10 @@ Daemon.prototype.loadSegments = async function (c) {
                     segs.push({ s: Math.round(g.segment[0] * 1000), e: Math.round(g.segment[1] * 1000), cat: g.category });
             });
         } else if (r.status !== 404) return; // 404: none for this video (cached as such); else asked again next play
-        try { fs.writeFileSync(f, JSON.stringify(segs)); } catch (e) { /* the dir went */ }
+        try {
+            if (!fs.existsSync(sb)) fs.mkdirSync(sb, 0o700);
+            fs.writeFileSync(f, JSON.stringify(segs), { mode: 0o600 });
+        } catch (e) { this.log('sponsorblock cache: ' + e.message); }
     }
     if (this.cur !== c) return;
     c.segs = segs.filter((x) => x && x.e - x.s >= 1000).sort((a, b) => a.s - b.s);
@@ -1177,10 +1192,7 @@ Daemon.prototype.prefetch = function (id) {
     if (!ID_RE.test(String(id)) || !this.opts.spare) return undefined;
     if (this.extracting) { if (this.extracting.id !== id) this.nextPrefetch = id; return undefined; }
     if (isPlayable(path.join(this.opts.cacheDir, id)) || this.preparing === id || this.freshInfo(id)) return undefined;
-    const idir = path.dirname(this.infoFile(id));
-    mkdirp(path.join(this.ytc(), 'info'));
-    this.chownFetch(idir);
-    try { fs.readdirSync(idir).forEach((n) => { const f = path.join(idir, n); if (Date.now() - fs.statSync(f).mtime.getTime() > this.opts.infoMaxMs) fs.unlinkSync(f); }); } catch (e) { /* best effort */ }
+    // info/ and its stale files: the fetcher makes and prunes them (extract), root never writes below ytdlp/
     const child = this.spawnJob(['extract', '--cache-dir', this.ytc(), '--', id, this.infoFile(id)]);
     this.keepWarm(); // the play after this lookup finds a spare, not a cold start (the 5 s poll was too late)
     const x = this.extracting = { id: id, child: child, done: null };
@@ -1195,8 +1207,23 @@ Daemon.prototype.prefetch = function (id) {
     readline.createInterface({ input: child.stderr }).on('line', (l) => this.log('ytfetch (prefetch): ' + l));
     return undefined;
 };
+// hands a folder root just made to the fetch uid. chownSync follows symlinks, so only a direct child of root's
+// cache/ (nobody else can swap it); never a path below a fetch-owned folder (a symlink there: any file to the fetch uid)
 Daemon.prototype.chownFetch = function (p) {
+    if (path.dirname(path.resolve(p)) !== path.resolve(this.opts.cacheDir)) throw new Error('chownFetch outside the cache: ' + p);
     if (!this.opts.noSetuid) fs.chownSync(p, this.uid(), this.uid());
+};
+// a folder under cache/: a fetch-uid tree is emptied by its owner (rm -rf runs as that uid, so a symlink in it
+// reaches nothing that uid could not already touch), then root removes the empty folder (rmdir: never follows one).
+// A root-owned tree (or a file) as before. Throws if it stays (logged by the callers), never falls back to root's walk.
+Daemon.prototype.rmTree = function (p) {
+    let st;
+    try { st = fs.lstatSync(p); } catch (e) { return; }
+    if (!st.isDirectory() || st.uid === 0) { rmrf(p); return; }
+    const ids = this.opts.noSetuid ? {} : { uid: st.uid, gid: st.gid };   // the owner: the fetch uid, or one it had before
+    const r = cp.spawnSync('/bin/rm', ['-rf', '--', p], Object.assign(ids, { cwd: '/', env: {}, stdio: 'ignore', timeout: 30000 }));
+    if (r.error) this.log('rm ' + p + ': ' + r.error.message);   // (exit 1 is normal: it cannot remove p itself, root's cache/ holds it)
+    try { fs.rmdirSync(p); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 };
 
 Daemon.prototype.start = async function () {
@@ -1208,6 +1235,7 @@ Daemon.prototype.start = async function () {
     if (this.childFetch && this.fetchUid === null) { try { this.fetchUid = pickFetchUid(this.opts); } catch (e) { this.log('internet uid: ' + e.message); } }
     this.timers.push(setInterval(() => this.guard(() => this.watchdog()), 1000));
     this.timers.push(setInterval(() => this.guard(() => this.keepWarm()), this.opts.tickMs));
+    this.timers.push(setInterval(() => this.guard(() => this.lockSocket()), this.opts.tickMs));   // a reinstall can change the app's uid
     this.keepWarm();
     this.prune();
     // The SOME/IP services may come up after us at boot: retry until the leftover check ran.
@@ -1246,11 +1274,38 @@ Daemon.prototype.listen = function () {
     this.server = net.createServer((c) => this.guard(() => this.onClient(c)));
     this.server.on('error', (e) => this.log('ctl server: ' + e.message));
     this.server.listen(sock, () => {
-        try { fs.chmodSync(sock, 0o660); } catch (e) { this.log('chmod ctl.sock: ' + e.message); }
-        try { fs.chownSync(sock, 0, this.opts.sockGid); } catch (e) { /* not root (tests) */ }
+        this.sockUid = undefined;   // nothing applied yet: lockSocket sets the mode and logs it
+        this.lockSocket();
         this.log('listening on ' + sock);
     });
 };
+// the uid MainApp's registry gives RideTube's app (apps/jap_ridetube.json userId), null if it cannot be read
+Daemon.prototype.appUid = function () {
+    const e = readJson(path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps', 'jap_ridetube.json'));
+    const u = Number(e && e.userId);
+    return e && e.userId !== undefined && isId(u) && u <= MAX_UID ? u : null;
+};
+// ctl.sock belongs to the app's uid alone (<uid>:root 0600): no other app can play, read feeds or sign out. No uid
+// known: 0660 root:tm_oap_app as before, every app can connect (logged at each change). Applied only when it changes.
+// sockUid (read it through sockShared()): the uid it is locked to, null while shared, undefined before listen
+Daemon.prototype.lockSocket = function () {
+    if (!this.server || !this.server.listening) return;
+    const u = this.appUid(), sock = this.opts.sock;
+    if (u === this.sockUid) return;
+    try {
+        if (u === null) { fs.chmodSync(sock, 0o660); fs.chownSync(sock, 0, this.opts.sockGid); }
+        else { fs.chmodSync(sock, 0o600); fs.chownSync(sock, u, 0); }   // closed first, then handed over
+        this.log(u === null ? 'ctl.sock: shared with every app (0660 root:tm_oap_app): no app uid in MainApp\'s registry' : 'ctl.sock: app uid ' + u + ' only (0600)');
+        this.sockUid = u;
+    } catch (e) {
+        if (e.message !== this.sockErr) this.log('ctl.sock: ' + e.message + ': shared with every app (0660 root:tm_oap_app)');
+        this.sockErr = e.message;   // once, not every tick
+        try { fs.chmodSync(sock, 0o660); fs.chownSync(sock, 0, this.opts.sockGid); } catch (e2) { /* not root (tests) */ }
+        this.sockUid = null;
+    }
+};
+// true while any app on the unit can use the socket (health: "socket: shared with other apps")
+Daemon.prototype.sockShared = function () { return typeof this.sockUid !== 'number'; };
 Daemon.prototype.onClient = function (c) {
     if (this.client) {
         this.log('new client replaces the old one');
@@ -1360,7 +1415,7 @@ Daemon.prototype.prune = function () {
     const protect = [];
     if (this.cur) protect.push(this.cur.id);
     if (this.preparing) protect.push(this.preparing);
-    return pruneCache(this.opts.cacheDir, this.opts.keep, protect, this.log);
+    return pruneCache(this.opts.cacheDir, this.opts.keep, protect, this.log, (p) => this.rmTree(p));
 };
 // ---- send_logs {app}: the ring and ytdec.log's tail, redacted (redactLog), to the log relay as the fetch uid
 // -> logs_sent{id} (the code the user quotes) or logs_error{msg: closed|busy|offline|failed}. One at a time.
@@ -1626,7 +1681,7 @@ Daemon.prototype.waitFull = function (ms) {
 // It keeps writing the video (and the rest of the audio) after that, while we play.
 Daemon.prototype.fetchVideo = function (id, dir) {
     return new Promise((resolve, reject) => {
-        rmrf(dir); // a killed fetch's leftovers
+        this.rmTree(dir); // a killed fetch's leftovers
         mkdirp(dir);
         fs.chmodSync(dir, VIDEO_DIR_MODE);
         this.chownFetch(dir);
@@ -1817,7 +1872,7 @@ Daemon.prototype.requality = async function (quality) {
     const c = this.cur;
     if (!c || qualityHeight(quality, readJson(this.opts.leaseFile)) === c.height) return undefined;
     await this.stop(null);
-    rmrf(c.dir);
+    this.rmTree(c.dir);
     return this.play(c.id, c.rect, c.fill, null, quality, c.skip);
 };
 

@@ -477,6 +477,23 @@ class Playable(unittest.TestCase):
         self.assertEqual(r['format_id'], 'v480', 'an https 480p over an HLS 720p')
 
 
+class InfoDir(unittest.TestCase):
+    def test_made_and_pruned_by_the_fetcher(self):
+        tmp = tempfile.mkdtemp(dir=TMP)
+        try:
+            d = os.path.join(tmp, 'ytdlp', 'info')
+            ytfetch.info_dir(os.path.join(d, 'a.json'))
+            self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+            old, new = os.path.join(d, 'old.json'), os.path.join(d, 'new.json')
+            for f in (old, new):
+                open(f, 'w').close()
+            os.utime(old, (0, 0))
+            ytfetch.info_dir(os.path.join(d, 'b.json'))
+            self.assertEqual(sorted(os.listdir(d)), ['new.json'])
+        finally:
+            shutil.rmtree(tmp)
+
+
 def online():
     try:
         socket.create_connection(('www.youtube.com', 443), 3).close()

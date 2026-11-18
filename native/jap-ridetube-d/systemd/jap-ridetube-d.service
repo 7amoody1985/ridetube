@@ -10,7 +10,7 @@ User=root
 ExecStartPre=-/bin/sh -c 'mkdir -p /var/opt/jap-ridetube-d/cache /var/opt/jap-ridetube-d/log /var/opt/jap-ridetube-d/state && chmod 0755 /var/opt/jap-ridetube-d && chmod 0711 /var/opt/jap-ridetube-d/cache && chmod 0700 /var/opt/jap-ridetube-d/state'
 # youtube.com/tv answers with 11 kB of headers; Node 8.14+ refuses more than 8 kB (HPE_HEADER_OVERFLOW)
 ExecStart=/usr/bin/node --max-http-header-size=65536 /var/opt/jap-ridetube-d/current/ytd.js
-# The app (group tm_oap_app) must traverse the dir; ctl.sock itself is 0660 root:tm_oap_app.
+# The app must traverse the dir; ctl.sock itself is <app uid>:root 0600 (0660 root:tm_oap_app if the uid is unknown).
 RuntimeDirectory=jap-ridetube-d
 RuntimeDirectoryMode=0755
 # The daemon starts idle and stays active with no app and no SOME/IP yet

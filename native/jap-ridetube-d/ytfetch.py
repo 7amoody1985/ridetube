@@ -756,9 +756,23 @@ def load_info(path, vid):
     return None
 
 
+def info_dir(path):
+    """extract's folder (cache/ytdlp/info): made and pruned here, as the fetch uid (the daemon, root, never
+    writes below the fetch uid's folders)."""
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    for n in os.listdir(d):
+        try:
+            if time.time() - os.lstat(os.path.join(d, n)).st_mtime > INFO_MAX_S:
+                os.unlink(os.path.join(d, n))
+        except OSError:
+            pass
+
+
 def extract_cmd(a):
     if not ID_RE.match(a.id):
         fail('bad id')
+    info_dir(a.dir)
     install_dns(a.lease)
     yt_dlp = load_ytdlp(a.pyz, a.cache_dir)
     try:

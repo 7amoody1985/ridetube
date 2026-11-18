@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Lays out the MGU Store catalog of this repository in dist/release/: catalog.json, the app's OAP package
-(without node_modules/oap-sdk: the head unit makes it from an app already on the car), the service's tool kit
-and the app icon. jap-node22 (required by jap-ridetube-d) comes from the JustAnotherPU/mgu-apps source. Upload every file of dist/release/ as an asset of a GitHub release tagged `catalog`.
+(without node_modules/oap-sdk: the head unit makes it from an app already on the car), the service's tool kit,
+jap-node22 (which jap-ridetube-d requires) and the app icon. Upload every file of dist/release/ as an asset of a GitHub
+release tagged `catalog`.
+
+jap-node22 is the JustAnotherPU/mgu-apps artifact byte for byte (same id, version, file), so this catalog installs
+RideTube on its own; it is never built here. It is taken from --node22 (a path or an https URL), by default the mgu-apps
+clone next to this one (dist/, as its tools/jap-node22/build.sh leaves it), else the mgu-apps `catalog` release; either
+way it must match the pinned size and sha256 (NODE22) or nothing is written.
 
 Build first:  python3 kit/tools/build.py jap_ridetube                      (dist/jap_ridetube@<v>.tgz)
               (cd native/ytdec && make target)
               (cd native/jap-ridetube-d && MGU_STORE=... ./build.sh)      (its dist/)
-Then:         python3 tools/release.py [--base URL]
+Then:         python3 tools/release.py [--base URL] [--node22 PATH|URL]
 --base: where the car downloads the assets from; default the public release download of the `catalog`
 release. For a private repository, list the assets' API URLs instead (docs/PUBLISHING.md of the Store).
 """
@@ -16,6 +22,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = 'JustAnotherPU/ridetube'
 APP = 'jap_ridetube'
 TOOLS = ('jap-ridetube-d',)
+# mgu-apps' published jap-node22 (its catalog release asset, 2026-11-04) and its catalog entry (release/catalog.js there)
+NODE22 = {'version': '22.23.4', 'size': 49203293, 'sha256': 'c62a8e2a3803b858b4d1020cb19746c8bd9ae8b753145f80c5adf7d781692743',
+          'url': 'https://github.com/JustAnotherPU/mgu-apps/releases/download/catalog/jap-node22%4022.23.4.tgz'}
+NODE22_ENTRY = {'id': 'jap-node22', 'kind': 'tool', 'title': 'Node.js 22',
+                'description': "Node.js 22 LTS for the background services of Moonride and RideTube (BMW's apps keep the system Node 8)",
+                'requires': {'mgu-deploy': '0.7.0'}, 'uninstallable': True, 'mguHmi': ['ID7'], 'optional': True}
 
 
 def sha256(path):
@@ -44,6 +56,28 @@ def strip_sdk(src, dst, mtime):
         assert not any('oap-sdk' in n for n in t.getnames()), 'oap-sdk left in the package'
 
 
+def node22(src, out):
+    """jap-node22's artifact into out/, checked against NODE22 (a download goes to dist/ first); its file name."""
+    name = 'jap-node22@%s.tgz' % NODE22['version']
+    if src is None:
+        local = os.path.join(ROOT, '..', 'mgu-apps', 'dist', name)
+        src = local if os.path.isfile(local) else NODE22['url']
+    if src.startswith('https://'):
+        import urllib.request
+        dl = os.path.join(ROOT, 'dist', name)
+        print('jap-node22: downloading %s' % src)
+        with urllib.request.urlopen(src, timeout=60) as r, open(dl + '.part', 'wb') as f:
+            shutil.copyfileobj(r, f)
+        os.replace(dl + '.part', dl)
+        src = dl
+    if not os.path.isfile(src):
+        sys.exit('release.py: jap-node22: %s missing' % src)
+    if os.path.getsize(src) != NODE22['size'] or sha256(src) != NODE22['sha256']:
+        sys.exit('release.py: jap-node22: %s is not the mgu-apps artifact (size or sha256 differ)' % src)
+    shutil.copy(src, os.path.join(out, name))
+    return name
+
+
 def artifact(path, base):
     name = os.path.basename(path)
     return {'name': name, 'size': os.path.getsize(path), 'sha256': sha256(path), 'url': base + name}
@@ -52,6 +86,7 @@ def artifact(path, base):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base', default='https://github.com/%s/releases/download/catalog/' % REPO)
+    ap.add_argument('--node22', help='jap-node22@%s.tgz: a path or an https URL (default: ../mgu-apps/dist, else NODE22 url)' % NODE22['version'])
     a = ap.parse_args()
     mtime = int(os.environ.get('SOURCE_DATE_EPOCH', '0'))
     out = os.path.join(ROOT, 'dist', 'release')
@@ -60,9 +95,13 @@ def main():
 
     app = json.load(open(os.path.join(ROOT, 'apps', APP, 'app.json')))
     tools = {t: json.load(open(os.path.join(ROOT, 'native', t, 'component.json'))) for t in TOOLS}
+    if tools['jap-ridetube-d']['requires'].get('jap-node22') != NODE22['version']:
+        sys.exit('release.py: jap-ridetube-d requires jap-node22 %s, NODE22 pins %s'
+                 % (tools['jap-ridetube-d']['requires'].get('jap-node22'), NODE22['version']))
     pkg = os.path.join(ROOT, 'dist', '%s@%s.tgz' % (APP, app['version']))
     if not os.path.isfile(pkg):
         sys.exit('release.py: %s missing (python3 kit/tools/build.py %s)' % (pkg, APP))
+    n22 = node22(a.node22, out)   # before the local package goes (below): a refused jap-node22 costs no rebuild
     strip_sdk(pkg, os.path.join(out, os.path.basename(pkg)), mtime)
     # the local build's packages hold BMW's oap-sdk: only dist/release/ is ever uploaded, so they go
     for f in (pkg, pkg[:-4] + '.mgu'):
@@ -88,6 +127,7 @@ def main():
              'artifact': artifact(os.path.join(out, '%s@%s.tgz' % (t, c['version'])), a.base),
              'requires': c.get('requires', {}), 'uninstallable': bool(c.get('uninstallable')), 'mguHmi': c.get('mguHmi', ['ID7'])}
         comps.append(e)
+    comps.append(dict(NODE22_ENTRY, version=NODE22['version'], artifact=artifact(os.path.join(out, n22), a.base)))
     with open(os.path.join(out, 'catalog.json'), 'w') as f:
         json.dump({'schema': 2, 'components': comps}, f, indent=2)
         f.write('\n')

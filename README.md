@@ -120,6 +120,7 @@ node kit/tools/test_runtime.js && node kit/tools/test_life.js && node kit/tools/
   && node kit/tools/test_qr.js
 (cd native/jap-ridetube-d && node test/test_ytd.js && node test/test_thumb.js && python3.12 -I test/test_ytfetch.py)
 (cd native/ytdec && make test && make target)     # make target needs Docker
+tools/check_node8.sh     # the car runs ytd.js and the app on Node 8: node --check in the node:8 image (Docker)
 ```
 
 A release needs an `oap-sdk` folder extracted from a BMW app you own (`node kit/tools/extract_sdk.js
@@ -129,7 +130,7 @@ A release needs an `oap-sdk` folder extracted from a BMW app you own (`node kit/
 python3 kit/tools/build.py jap_ridetube && node kit/tools/test_ridetube.js
 export MGU_STORE=<a clone of the MGU Store>
 (cd native/jap-ridetube-d && ./build.sh)      # jap-node22 is built in github.com/JustAnotherPU/mgu-apps
-python3 tools/release.py      # dist/release/: upload every file to a GitHub release tagged "catalog"
+python3 tools/release.py      # dist/release/ (with mgu-apps' jap-node22, sha256-pinned): upload every file to a GitHub release tagged "catalog"
 ```
 
 The tests need Node 18 or newer, Python 3.12 and ffmpeg.

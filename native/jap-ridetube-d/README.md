@@ -74,32 +74,73 @@ as that uid. `check.sh` is the install `check`: yt-dlp (and `yt_dlp_ejs`) import
 
 The audio head is internal: `time.total` is the video's length, not the head's.
 
-App → daemon:
+App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_ytd.js` checks the two match):
 
 | cmd | |
 |---|---|
+| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its YouTube requests (not used yet: WP1). `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `[]`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
 | `{"cmd":"status"}` | → `state` (and `time` when known) |
-| `{"cmd":"search","q":".."}` | → `results` (InnerTube), or `error` `search offline` |
+| `{"cmd":"search","q":".."}` | → `results` (InnerTube), or `error` `empty search` / `search offline` |
 | `{"cmd":"thumb","id":".."}` | → `thumb` (cache `thumb.rgba` first, else `thumb.js` on the car; nothing if neither works, or if the length is neither 57600 nor 230400) |
-| `{"cmd":"play","id":"..","rect":"WxH","fill":bool}` | cached and ready: plays; else fetches with `ytfetch.py` (`preparing` + pct), plays once playable |
+| `{"cmd":"prefetch","id":".."}` | the stream lookup (`ytfetch.py extract`) ahead of a likely play, while the controller rests on a tile; nothing is answered. Skipped when cached, being prepared or looked up in the last 25 min; one at a time (the last one asked waits) |
+| `{"cmd":"play","id":"..","rect":"WxH","fill":bool,"at":ms,"quality":q,"skip":[cat]}` | cached and ready: plays; else fetches with `ytfetch.py` (`preparing` + pct, `retry` between tries), plays once playable. `at`: YouTube's own resume point (the tile's `start_s`), used when this car has no position for the video; `quality`: `360`, `480`, `720`, else auto (720 on Wi-Fi or no uplink known, 480 on phone data); `skip`: the SponsorBlock categories skipped (default `sponsor`, `selfpromo`, `interaction`, `intro`). Starts where it was left (`positions`) unless finished |
 | `{"cmd":"pause"}` / `{"cmd":"resume"}` | `sendButtonEvent PAUSE/PLAY` + ytdec `pause`/`resume` |
 | `{"cmd":"seek","ms":N}` | absolute; `setTime` + ytdec `seek N` |
 | `{"cmd":"video","on":bool}` | ytdec `video 1/0` (audio unaffected) |
+| `{"cmd":"fill","on":bool}` | zoom while playing: ytdec again at the clock with `--fill` or without; the sound plays on; the same mode: nothing |
+| `{"cmd":"quality","quality":q}` | while playing, at another height (as `play`): the video fetched again from where it is; the same height: nothing |
 | `{"cmd":"stop"}` | STOP, disconnect, ytdec `quit` (SIGKILL after 1 s) |
+| `{"cmd":"positions"}` | → `positions` |
 | `{"cmd":"auth_status"}` | → `auth` |
 | `{"cmd":"auth"}` | signed in, or a code still valid: → that `auth` again; else a new device code → `auth` `code`, then polled until `signed_in`, `signed_out` (expired, denied) or `error` |
 | `{"cmd":"sign_out"}` | deletes the account → `auth` `signed_out` |
-| `{"cmd":"feed","which":"home\|subs\|wl"}` | → `feed` (items, or error `signed out` / `feed offline` / `unknown feed`) |
+| `{"cmd":"feed","which":"home\|subs\|wl"}` | → `feed` (items, or error `signed out` / `feed offline` / `unknown feed`). 0.4.0 adds `hist` (`FEhistory`) and `liked` (`VLLL`), cap `hist` (WP1); until then they answer `unknown feed` |
+| `{"cmd":"channels"}` | → `channels` (every subscription; kept 10 min), or its error as `feed` |
+| `{"cmd":"channel","id":"UC.."}` | → `channel` (its page), or its error as `feed`, or `bad channel` |
 | `{"cmd":"playlists"}` | → `playlists` (the account's playlists, or error as `feed`) |
 | `{"cmd":"playlist","id":".."}` | → `playlist` (its videos, or error as `feed`, or `bad playlist`) |
 | `{"cmd":"send_logs","app":"0.3.12"}` | the recent log, redacted, to the log relay (below, "Log reports") → `logs_sent` or `logs_error`; a second one while one is on its way is ignored |
+| `{"cmd":"health"}` | 0.4.0, cap `health` (WP4): → a stream of `{"ev":"health","key","ok","text"}`, then `{"ev":"health","done":true}`. Not implemented yet: `error` `not implemented health` |
+| `{"cmd":"related","id":".."}` | 0.4.0, cap `related` (WP1): → `{"ev":"related","id","items":[item]}` or `{"ev":"related","id","error"}`. Not implemented yet: `error` `not implemented related` |
+| `{"cmd":"ytdlp","auto":bool}` | 0.4.1, cap `ytdlp` (WP6): `auto` optional (sets the self-update on or off) → `{"ev":"ytdlp","auto","version","bundled","checking"}`. Not implemented yet: `error` `not implemented ytdlp` |
+| `{"cmd":"remote","on":bool}` | 0.5.0, not yet implemented, cap `remote` (WP9): → `{"ev":"remote","on","url","expires"}`; until then `error` `not implemented remote` |
+| `{"cmd":"proxy","mode":"off\|wireproxy\|tailscale"}` | 0.5.0, not yet implemented, cap `proxy` (WP11): → `{"ev":"net","proxy","ok"}`; until then `error` `not implemented proxy` |
 
-Daemon → app: `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`,
-`{"ev":"time","elapsed","total"}` (ms, ≤ 4/s), `{"ev":"results","q","items":[{id,title,channel,duration_s,meta?}]}` (`meta: ["12K views"]` when there is a view count),
-`{"ev":"thumb","id","w","h","rgba":"<base64 w*h*4 bytes>"}` (320x180; 160x90 from caches older than 0.1.6; the size comes from the length; a 320x180 line is ~307 kB), `{"ev":"error","msg"}`,
-`{"ev":"auth","state":"signed_out|code|signed_in|error","code","url","expires" (s left, with code),"msg" (with error)}`,
-`{"ev":"feed","which","items":[item],"shelves":[{title,items:[item]}]}` or `{"ev":"feed","which","error"}` (feed thumbs: `thumb`).
-An item is `{id,title,channel,duration_s,meta}`; `meta` = the texts of the tile's second line as YouTube writes them, without
+A command not in this table: `{"ev":"error","msg":"unknown cmd <cmd>"}`. A command of the table whose package has not
+landed: `{"ev":"error","cmd":"<cmd>","msg":"not implemented <cmd>"}`; the app sends none of them unless `hello` listed its cap.
+
+Daemon → app:
+
+- `{"ev":"hello","service":"0.4.0","caps":[..]}`: the answer to `hello` (above).
+- `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`; 0.5.0 (not yet
+  implemented, cap `stream`) adds `"stored":"ram|flash"`: where the playing video is held.
+- `{"ev":"time","elapsed","total"}` (ms, ≤ 4/s).
+- `{"ev":"results","q","items":[item]}` (`meta: ["12K views"]` when there is a view count).
+- `{"ev":"thumb","id","w","h","rgba":"<base64 w*h*4 bytes>"}` (320x180; 160x90 from caches older than 0.1.6; the size comes
+  from the length; a 320x180 line is ~307 kB).
+- `{"ev":"error","msg"}` (with `cmd` for a command not implemented yet).
+- `{"ev":"retry","id","n","msg"}`: the fetch of the video being prepared failed (the network, not the video), tried again
+  after a wait; `n` counts from 1.
+- `{"ev":"extras","id","chapters":[[ms,title]],"segments":[[ms,ms,category]]}`: the playing video's chapters (yt-dlp's)
+  and SponsorBlock segments (`sponsor`, `selfpromo`, `interaction`, `intro`, `outro`, `music_offtopic`), at the play and
+  again when the segments come in.
+- `{"ev":"skipped","category","ms"}`: a SponsorBlock segment of a `skip` category was skipped (`ms`: its length).
+- `{"ev":"positions","items":[{id,ms,total,done,at,title,channel,duration_s}]}`: where each video played on this car was
+  left, newest first (`at`: when, epoch ms; `done`: within 5 % or 5 s of its end), at most 300.
+- `{"ev":"auth","state":"signed_out|code|signed_in|error","code","url","expires" (s left, with code),"msg" (with error)}`.
+- `{"ev":"feed","which","items":[item],"shelves":[{title,items:[item]}]}` or `{"ev":"feed","which","error"}` (feed thumbs:
+  `thumb`).
+- `{"ev":"channels","items":[{id,title,handle}]}` or `{"ev":"channels","error"}`: the subscriptions, A-Z.
+- `{"ev":"channel","id","items":[item],"shelves":[..]}` or `{"ev":"channel","id","error"}`: a channel's page (Videos,
+  Popular...), as `feed`.
+- `{"ev":"playlists",..}`, `{"ev":"playlist",..}`, `{"ev":"logs_sent",..}`, `{"ev":"logs_error",..}`: below.
+- 0.4.0 / 0.4.1, cap-gated: `{"ev":"health",..}`, `{"ev":"related",..}`, `{"ev":"ytdlp",..}` (shapes in the table).
+- 0.5.0, not yet implemented: `{"ev":"remote","on","url","expires"}`; `{"ev":"remote_do","do":"search|play","q"|"id"}`: a
+  phone action the app carries out itself (the parked rule and the screen stay the app's); `{"ev":"net","proxy","ok"}`.
+
+An item is `{id,title,channel,duration_s,meta}`, plus `watched_pct` (the account's progress on the tile), `start_s` (its
+resume point) and `members: true` (a members-only badge) when the tile has them; `meta` = the texts of the tile's second
+line as YouTube writes them, without
 the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none). `items`: every video tile once, page order, ≤ 50.
 `shelves`: YouTube's rows in page order (≤ 8, ≤ 12 tiles each, video tiles only, deduped per row, empty rows such as Shorts
 dropped); `title` is the row header, else the channel when all its tiles share one (Subscriptions' per-channel rows), else `""`.

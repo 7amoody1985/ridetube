@@ -24,6 +24,10 @@ const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
 const VERSION = '0.3.12';   // component.json's (test_ytd.js checks): sent with a log report
+// what `hello` says this build answers for real. The frozen names: health, related, hist (feed hist|liked), ytdlp,
+// remote, proxy, stream. A package adds its name here (through the integrator) once its command works; none do yet
+const CAPS = [];
+const LANG_RE = /^[a-z]{2}$/, REGION_RE = /^[A-Z]{2}$/;   // hello's lang ("ru") and region ("RU")
 // the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
 const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
 const RING_MAX = 1500, REPORT_MAX = 200 * 1024, OS_MAX = 2048; // log lines kept for a report; its log and os caps (bytes)
@@ -1255,6 +1259,7 @@ Daemon.prototype.onClient = function (c) {
         old.destroy();
     }
     this.client = c;
+    this.hl = this.gl = null;   // hello's lang and region hold for this connection only
     c.setEncoding('utf8');
     let buf = '';
     c.on('data', (d) => {
@@ -1308,9 +1313,31 @@ Daemon.prototype.onLine = function (line) {
     case 'playlists': return this.account.playlists();
     case 'playlist': return this.account.playlist(m.id);
     case 'send_logs': return this.sendLogs(m.app);
+    case 'hello': return this.hello(m);
+    case 'health': return this.health();
+    case 'related': return this.related(m.id);
+    case 'ytdlp': return this.ytdlp(m.auto);
+    case 'remote': return this.remote(m.on);   // 0.5.0
+    case 'proxy': return this.proxy(m.mode);   // 0.5.0
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
     }
 };
+// `hello` {app, lang?, region?} -> hello{service, caps}. A lang or region that does not match is dropped (logged), never
+// refused: the app still learns the caps. Kept for this connection (onClient clears them) as the hl / gl of its requests
+Daemon.prototype.hello = function (m) {
+    this.hl = typeof m.lang === 'string' && LANG_RE.test(m.lang) ? m.lang : null;
+    this.gl = typeof m.region === 'string' && REGION_RE.test(m.region) ? m.region : null;
+    const bad = (m.lang !== undefined && !this.hl ? ' (bad lang dropped)' : '') + (m.region !== undefined && !this.gl ? ' (bad region dropped)' : '');
+    this.log('hello: app ' + (/^\d+(\.\d+){0,3}$/.test(String(m.app)) ? m.app : 'unknown') + ', lang ' + (this.hl || '-') + ', region ' + (this.gl || '-') + bad);
+    return this.emit({ ev: 'hello', service: VERSION, caps: CAPS.slice() });
+};
+// commands of the frozen protocol whose package has not landed: each answers this until its package replaces the body
+Daemon.prototype.notImplemented = function (cmd) { return this.emit({ ev: 'error', cmd: cmd, msg: 'not implemented ' + cmd }); };
+Daemon.prototype.health = function () { return this.notImplemented('health'); };              // WP4
+Daemon.prototype.related = function (id) { return this.notImplemented('related'); };          // WP1
+Daemon.prototype.ytdlp = function (auto) { return this.notImplemented('ytdlp'); };            // WP6
+Daemon.prototype.remote = function (on) { return this.notImplemented('remote'); };            // WP9, 0.5.0
+Daemon.prototype.proxy = function (mode) { return this.notImplemented('proxy'); };            // WP11, 0.5.0
 Daemon.prototype.setState = function (s) {
     this.state = s;
     this.sendState();
@@ -1938,7 +1965,7 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before

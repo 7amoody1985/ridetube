@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, REPORT_URL } = require('../ytd.js');
+const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL } = require('../ytd.js');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ytd-'));
 const cache = path.join(tmp, 'cache');
@@ -1473,6 +1473,67 @@ async function main() {
                 { thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: 40 } }] } },
             onSelectCommand: { watchEndpoint: { videoId: 'AUTOAUTO003', startTimeSeconds: 120 } } } }] };
         assert.strictEqual(feedItems(j)[0].watched_pct, 40); assert.strictEqual(feedItems(j)[0].start_s, 120);
+    });
+
+    // ======== WP0 foundations: the protocol table, hello, the stub commands
+    await t('the README protocol table lists exactly the onLine commands, and every event ytd.js sends', async () => {
+        const src = fs.readFileSync(path.join(__dirname, '..', 'ytd.js'), 'utf8');
+        const body = src.slice(src.indexOf('Daemon.prototype.onLine = '), src.indexOf('\n};', src.indexOf('Daemon.prototype.onLine = ')));
+        const cases = (body.match(/case '[a-z_]+'/g) || []).map((x) => x.slice(6, -1)).sort();
+        const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+        const table = readme.slice(readme.indexOf('App → daemon'), readme.indexOf('Daemon → app:'));
+        const rows = table.split('\n').filter((l) => /^\| `\{"cmd"/.test(l)).map((l) => l.split(' | ')[0]);
+        const documented = [].concat(...rows.map((l) => (l.match(/"cmd":"[a-z_]+"/g) || []).map((x) => x.slice(7, -1)))).sort();
+        assert.ok(cases.length >= 28, 'the switch was found: ' + cases.length);
+        assert.deepStrictEqual(documented, cases, 'README rows vs onLine cases');
+        const sent = Array.from(new Set((src.match(/ev: '[a-z_]+'/g) || []).map((x) => x.slice(5, -1))));
+        const told = readme.slice(readme.indexOf('Daemon → app:'));
+        assert.deepStrictEqual(sent.filter((e) => told.indexOf('"ev":"' + e + '"') < 0), [], 'events sent but not in the README');
+    });
+
+    await t('hello: service version and caps; lang / region kept for the connection; a bad one dropped, never refused', async () => {
+        const FROZEN = ['health', 'related', 'hist', 'ytdlp', 'remote', 'proxy', 'stream'];
+        assert.deepStrictEqual(CAPS, [], 'nothing of the 0.4.0 protocol answers for real yet');
+        assert.ok(CAPS.every((x) => FROZEN.indexOf(x) >= 0), 'caps only from the frozen names');
+        c.clear();
+        c.send({ cmd: 'hello', app: '0.4.0', lang: 'ru', region: 'RU' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'hello'), { ev: 'hello', service: VERSION, caps: CAPS });
+        assert.deepStrictEqual([d.hl, d.gl], ['ru', 'RU']);
+        for (const [lang, region, want] of [['RU', 'ru', [null, null]], ['rus', 'R1', [null, null]], [7, ['RU'], [null, null]],
+            ['de', undefined, ['de', null]], [undefined, 'DE', [null, 'DE']], ['e\n', 'GB\n', [null, null]]]) {
+            c.clear(); logs.length = 0;
+            c.send({ cmd: 'hello', app: '0.4.0', lang: lang, region: region });
+            const e = await c.waitFor((x) => x.ev === 'hello');
+            assert.deepStrictEqual([e.service, e.caps, d.hl, d.gl], [VERSION, CAPS].concat(want), JSON.stringify([lang, region]));
+            const l = logs.find((x) => /^hello: /.test(x));
+            assert.strictEqual(/bad lang/.test(l), lang !== undefined && want[0] === null, l);
+            assert.strictEqual(/bad region/.test(l), region !== undefined && want[1] === null, l);
+        }
+        c.send({ cmd: 'hello', app: '<x>', lang: 'fr', region: 'FR' });
+        await waitUntil(() => d.hl === 'fr');
+        assert.ok(logs.some((x) => x === 'hello: app unknown, lang fr, region FR'), 'an odd app version is not logged as sent');
+        const c2 = await client(d.opts.sock);
+        await waitUntil(() => d.client && d.hl === null && d.gl === null);
+        c = c2;
+        c.send({ cmd: 'status' });
+        await c.waitFor((x) => x.ev === 'state');
+        assert.deepStrictEqual([d.hl, d.gl], [null, null], 'a new connection starts with none');
+    });
+
+    await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before; feed hist|liked: unknown feed', async () => {
+        for (const m of [{ cmd: 'health' }, { cmd: 'related', id: 'DemoVideo01' }, { cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
+            c.clear();
+            c.send(m);
+            assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', cmd: m.cmd, msg: 'not implemented ' + m.cmd });
+        }
+        c.clear();
+        c.send({ cmd: 'bogus' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', msg: 'unknown cmd bogus' });
+        for (const which of ['hist', 'liked']) {
+            c.clear();
+            c.send({ cmd: 'feed', which: which });
+            assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'feed'), { ev: 'feed', which: which, error: 'unknown feed' });
+        }
     });
 
     c.destroy();

@@ -11,16 +11,23 @@
 module.exports = function healthPage(o) {
     const { model, say, fit, t, C, X0, TOP, H, W } = o;   // t: translate; o.message: a sentence with {values}
     const LIT = { literal: true }, LITB = { literal: true, font: 'bold' };
-    const GREEN = '#35d07f';
-    const mark = (cv, x, y, ok) => {
-        cv.circle(x, y, 15, ok ? GREEN : C.red);
+    const GREEN = '#35d07f', GREY = '#5c6380';
+    // the service's keys in the order shown (the rows come as each probe ends); others after them, as they came
+    const ORDER = ['service', 'node', 'node22', 'python', 'ytdlp', 'uid', 'lease', 'dns', 'tls', 'free', 'audio', 'socket'];
+    const rank = (k) => { const i = ORDER.indexOf(k); return i < 0 ? ORDER.length : i; };
+    // "... unknown" (e.g. the socket lock before that package lands): not a failure, a grey dash
+    const unknown = (r) => !r.ok && /\bunknown\b/i.test(r.text);
+    const mark = (cv, x, y, ok, unk) => {
+        cv.circle(x, y, 15, ok ? GREEN : unk ? GREY : C.red);
         if (ok) cv.polyline([[x - 7, y], [x - 2, y + 6], [x + 8, y - 6]], 4, '#ffffff');
+        else if (unk) cv.line(x - 7, y, x + 7, y, 4, '#ffffff');
         else { cv.line(x - 6, y - 6, x + 6, y + 6, 4, '#ffffff'); cv.line(x - 6, y + 6, x + 6, y - 6, 4, '#ffffff'); }
     };
     return function drawHealth(cv) {
         if (!model.connected) return say(cv, o.OFF, o.OFF2);
         const h = model.health || { items: [], loading: false };
-        const bottom = H + (cv.own ? cv.extra : 0), rows = h.items, bad = rows.filter((r) => !r.ok).length;
+        const bottom = H + (cv.own ? cv.extra : 0), rows = h.items.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r.key) - rank(b.r.key) || a.i - b.i).map((x) => x.r);
+        const bad = rows.filter((r) => !r.ok && !unknown(r)).length;
         const head = h.loading ? t('Checking...') : h.error ? t('Health check: ') + h.error
             : !rows.length ? t('No result yet') : bad ? o.message(bad === 1 ? '{count} check failed' : '{count} checks failed', { count: bad }) : t('Everything works');
         const tw = cv.text(t('Health check'), X0, TOP + 44, 30, '#ffffff', LITB);
@@ -30,9 +37,10 @@ module.exports = function healthPage(o) {
         const cols = rows.length > perCol ? 2 : 1, colW = Math.floor((W - X0 - 40) / cols) - 20, room = perCol * cols;
         rows.slice(0, room).forEach((r, i) => {
             const x = X0 + Math.floor(i / perCol) * (colW + 20), y = y0 + (i % perCol) * pitch;
-            mark(cv, x + 15, y - 8, r.ok);
+            const unk = unknown(r);
+            mark(cv, x + 15, y - 8, r.ok, unk);
             const kw = cv.text(fit(cv, r.key, 24, 260, LITB), x + 44, y, 24, C.text, LITB);
-            if (r.text) cv.text(fit(cv, r.text, 22, colW - 64 - kw, LIT), x + 44 + kw + 14, y, 22, r.ok ? C.dim : '#ffb3b3', LIT);
+            if (r.text) cv.text(fit(cv, r.text, 22, colW - 64 - kw, LIT), x + 44 + kw + 14, y, 22, r.ok || unk ? C.dim : '#ffb3b3', LIT);
         });
         if (rows.length > room) cv.text(o.message('+{count} more', { count: rows.length - room }), X0, y0 + perCol * pitch, 22, C.dim, LIT);
         const by = bottom - btnH - 20;

@@ -1156,11 +1156,15 @@ async function wp5Frames(x) {
     await until(() => d.cmds('health').length === 1, 2000, 'health asked');
     await drawn();
     assert.ok(texts.indexOf('Checking...') >= 0 && !tgt('health:run'), 'checking: ' + texts.join('|'));
-    d.send({ ev: 'health', key: 'dns', ok: true, text: 'youtube.com resolves' });
-    d.send({ ev: 'health', key: 'extract', ok: false, text: 'HTTP 403 from the video service' });
+    // (WP4's keys, in the order the probes end; shown in the service's order; "unknown" is not a failure)
+    const HK = ['service', 'node', 'node22', 'python', 'ytdlp', 'uid', 'lease', 'dns', 'tls', 'free', 'audio', 'socket'];
+    d.send({ ev: 'health', key: 'socket', ok: false, text: 'lock state unknown' });
+    d.send({ ev: 'health', key: 'tls', ok: false, text: 'not checked: timeout' });
+    HK.filter((k) => k !== 'socket' && k !== 'tls').reverse().forEach((k) => d.send({ ev: 'health', key: k, ok: true, text: k + ' fine' }));
     d.send({ ev: 'health', done: true });
     await sleep(100); await drawn();
-    ['Health check', '1 check failed', 'dns', 'youtube.com resolves', 'extract', 'HTTP 403 from the video service', 'Run again'].forEach((t) => assert.ok(texts.indexOf(t) >= 0, t + ': ' + texts.join('|')));
+    ['Health check', '1 check failed', 'not checked: timeout', 'lock state unknown', 'Run again'].forEach((t) => assert.ok(texts.indexOf(t) >= 0, t + ': ' + texts.join('|')));
+    assert.deepStrictEqual(texts.filter((t) => HK.indexOf(t) >= 0), HK, 'all 12 rows drawn, in the service\'s order');
     tgt('health:run').run();
     await until(() => d.cmds('health').length === 2, 2000, 'Run again asks again');
     d.send({ ev: 'health', done: true });

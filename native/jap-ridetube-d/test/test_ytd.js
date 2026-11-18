@@ -1389,6 +1389,15 @@ async function main() {
         assert.deepStrictEqual([x.ev.items, x.ev.error], [undefined, 'feed offline'], 'both fail: offline');
     });
 
+    await t('setTime is never 0 (the car\'s player ignores it): the start is asked as 1 ms', async () => {
+        const { Audio } = require('../ytd.js');
+        const got = [];
+        const a = new Audio({ log: () => {} }, {});
+        a.mp = { callMethod: async (m, x) => { got.push([m, x.newTimeElapsed]); return { EntError: 'OK' }; } };
+        await a.seek(0); await a.seek(0.4); await a.seek(25000);
+        assert.deepStrictEqual(got, [['setTime', 1], ['setTime', 1], ['setTime', 25000]]);
+    });
+
     await t('LRU keeps 6 newest, never the playing one', async () => {
         const lru = path.join(tmp, 'lru');
         fs.mkdirSync(lru);

@@ -307,7 +307,8 @@ async function appFrames() {
     // parked: the car reads 0 km/h (the video gate counts no speed as moving)
     let speedH = null;
     let batH = null;
-    hu.ctx.signals = { watch: async (i, n, h) => { if (h && h.statusCarSpeed2) { speedH = h.statusCarSpeed2; speedH({ speedVehicleCentreOfGravity: 0 }); } if (h && h.statusBattery2) batH = h.statusBattery2; return {}; } };
+    let rockerH = null, rockerIface = null;
+    hu.ctx.signals = { watch: async (i, n, h) => { if (h && h.statusCarSpeed2) { speedH = h.statusCarSpeed2; speedH({ speedVehicleCentreOfGravity: 0 }); } if (h && h.statusBattery2) batH = h.statusBattery2; if (h && h.statusSearchSwitch1) { rockerH = h.statusSearchSwitch1; rockerIface = i + '/' + n; } return {}; } };
     // (the stub's ctx predates these: as kit/mgu.js)
     hu.ctx.hideButton = (id, hide) => disp.hideButton(id, hide);
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
@@ -815,6 +816,61 @@ async function appFrames() {
         for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'plvideo0006'); k++) { await sleep(200); await hu.loopFn(); }
         assert.ok(d.cmds('play').some((x) => x.id === 'plvideo0006'), 'the next one in the playlist plays, on the next row');
         console.log('ok   playlists: a playlist plays on past its row of four; members-only videos left out');
+
+        // the steering wheel's skip rocker (SteeringWheelPushButton.statusSearchSwitch1: 2 up = next, 1 down = previous,
+        // 0 released) in the playlist above (shown: 1 3 4 5 6; 5 was played, 6 came after it): a tap past the end does
+        // nothing; previous within 3 s goes to the one before, later back to the start; next goes on again; the same value
+        // again is one press, no signal nothing; held, it seeks; while browsing, a skip plays without showing the player
+        assert.strictEqual(rockerIface, 'de.bmw.infotainment.controlelements.SteeringWheelPushButton/1', 'the rocker watched');
+        const plays = () => d.cmds('play').map((x) => x.id);
+        const rock = (v) => rockerH({ operationPushButtonAudioAutomaticTuningSteeringWheel: v });
+        const wheel = async (b) => { rock(b === 'next' ? 2 : 1); rock(0); await sleep(80); await hu.loopFn(); };
+        const on = async (id, ms) => { d.send({ ev: 'state', state: 'playing', id }); d.send({ ev: 'time', elapsed: ms, total: 60000 }); await sleep(60); };
+        await on('plvideo0006', 1000);
+        let n0 = plays().length;
+        await wheel('next');
+        assert.strictEqual(plays().length, n0, 'next at the end of the list: nothing');
+        await wheel('prev');
+        assert.deepStrictEqual(plays().slice(n0), ['plvideo0005'], 'previous within 3 s: the one before');
+        await on('plvideo0005', 5000);
+        const nSeek0 = d.cmds('seek').length;
+        await wheel('prev');
+        assert.deepStrictEqual(d.cmds('seek').slice(nSeek0), [{ cmd: 'seek', ms: 0 }], 'previous 5 s in: back to the start');
+        await on('plvideo0005', 500);
+        await wheel('prev');
+        assert.deepStrictEqual(plays().slice(n0), ['plvideo0005', 'plvideo0004'], 'and again within 3 s: the one before that');
+        await on('plvideo0004', 500);
+        await wheel('next'); await wheel('next');
+        assert.deepStrictEqual(plays().slice(n0), ['plvideo0005', 'plvideo0004', 'plvideo0005', 'plvideo0006'], 'next, next: back through the list');
+        await on('plvideo0006', 500);
+        const n1 = plays().length;
+        rock('SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS'); rock('SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS'); rock('SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS'); rock(3); rock(0);
+        await sleep(80); await hu.loopFn();
+        assert.deepStrictEqual(plays().slice(n1), ['plvideo0005'], 'a quick press (enum names, the same value again): one step; no signal: nothing');
+        await on('plvideo0005', 500);
+        await wheel('next');
+        // held: it seeks instead (after 600 ms, 10 s a step every 300 ms), one seek once let go, no skip; a "no signal"
+        // in between does not end it; held back: as far back, never before the start
+        await on('plvideo0006', 10000);
+        const nP = plays().length, nS = d.cmds('seek').length;
+        rock(2); await sleep(700); rock(3); await sleep(750); rock(0);    // steps at 600, 900, 1200 ms
+        await sleep(500); await hu.loopFn();
+        let sk = d.cmds('seek').slice(nS);
+        assert.strictEqual(plays().length, nP, 'held: no skip');
+        assert.ok(sk.length === 1 && sk[0].ms >= 30000 && sk[0].ms <= 50000, 'held next: one seek, 20-40 s on: ' + JSON.stringify(sk));
+        await on('plvideo0006', sk[0].ms);
+        rock(1); await sleep(1900); rock(0);                                  // 5 steps back: 50 s, past the start
+        await sleep(500); await hu.loopFn();
+        sk = d.cmds('seek').slice(nS + 1);
+        assert.deepStrictEqual([plays().length, sk], [nP, [{ cmd: 'seek', ms: 0 }]], 'held previous: back to the start at most, no skip');
+        await on('plvideo0006', 500);
+        hu.handlers.BTN_HOME();                                        // browsing, the sound playing on
+        await sleep(100); await hu.loopFn();
+        await wheel('prev');
+        assert.strictEqual(plays().slice(-1)[0], 'plvideo0005', 'while browsing: previous plays');
+        await sleep(100); await hu.loopFn();
+        assert.ok(disp.pageTargets.some((t) => /^rail:/.test(t.key)) && !disp.pageTargets.some((t) => t.key === 'ov:play'), 'and the page stays: ' + disp.pageTargets.map((t) => t.key).slice(0, 6));
+        console.log('ok   steering wheel next / previous: a tap skips through the list (previous to the start after 3 s), held seeks, browsing stays');
     }
     // Send logs to the developer: the menu entry asks first (Send / Cancel), then the code; the error screen's second button
     {

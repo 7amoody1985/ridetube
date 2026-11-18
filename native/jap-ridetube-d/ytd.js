@@ -876,9 +876,11 @@ Audio.prototype.button = function (b) {
     return this.mp.callMethod('sendButtonEvent', { button: b, action: 'PRESS' }, 3000)
         .catch((e) => this.opts.log(b + ' failed: ' + e));
 };
+// setTime(0) is ignored by the car's player (seen on the car: back to the start, the sound plays on where it was and
+// the picture follows it back a second later), so the start is asked as 1 ms
 Audio.prototype.seek = function (ms) {
     if (!this.mp) return Promise.resolve();
-    return this.mp.callMethod('setTime', { newTimeElapsed: ms }, 3000).catch((e) => this.opts.log('setTime failed: ' + e));
+    return this.mp.callMethod('setTime', { newTimeElapsed: Math.max(1, Math.round(ms)) }, 3000).catch((e) => this.opts.log('setTime failed: ' + e));
 };
 // Every exit path ends here. Safe to call twice.
 Audio.prototype.release = async function () {

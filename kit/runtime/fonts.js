@@ -46,10 +46,30 @@ function get(name, size, text) {
     return best;
 }
 
+// A letter the atlas lacks draws as the closest one it has, rather than dropping out of the word: Romanian's
+// comma-below ș ț Ș Ț (U+0218-U+021B) as the cedilla ş ţ Ş Ţ every family has ("Știri" kept "tiri"), and an
+// accented Latin letter outside the baked ranges (Vietnamese ạ ế, Latin Extended-B and Additional) as its base
+// letter. The atlases stay as they are (they are shared between apps by family and size).
+const ALIKE = { 0x218: 0x15e, 0x219: 0x15f, 0x21a: 0x162, 0x21b: 0x163 };
+const NFD = (() => { try { return 'é'.normalize('NFD').length === 2; } catch (e) { return false; } })();   // a Node without ICU data: no base letters
+
+/** The glyph a character draws with in atlas f: its own, else the closest one (above), else undefined (dropped). */
+function glyph(f, ch) {
+    const cp = ch.codePointAt(0);
+    let g = f.glyphs[cp];
+    if (g) return g;
+    if (ALIKE[cp] !== undefined && (g = f.glyphs[ALIKE[cp]])) return g;
+    if (NFD && cp >= 0xc0 && cp < 0x1f00) {
+        const base = ch.normalize('NFD').codePointAt(0);
+        if (base !== cp) return f.glyphs[base];
+    }
+    return undefined;
+}
+
 function measure(f, s) {
     let w = 0;
-    for (const ch of s) { const g = f.glyphs[ch.codePointAt(0)]; if (g) w += g[6]; }   // (no glyph: dropped, as drawn)
+    for (const ch of s) { const g = glyph(f, ch); if (g) w += g[6]; }   // (no glyph: dropped, as drawn)
     return w;
 }
 
-module.exports = { get, measure };
+module.exports = { get, measure, glyph };

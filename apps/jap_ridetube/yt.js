@@ -5,6 +5,7 @@
  *   Ctl    the control socket /run/jap-ridetube-d/ctl.sock: JSON lines, reconnects every 2 s.
  *          App -> daemon: search{q} thumb{id} play{id,rect:"WxH",fill} pause resume seek{ms} stop quality{quality} fill{on} video{on} status
  *                         auth_status auth sign_out feed{which:home|subs|wl} channels channel{id} playlists playlist{id}
+ *                         send_logs{app}: the service's recent log, redacted, to the developer
  *          Daemon -> app: (a played video is deleted from the car once stopped; nothing is kept for offline)
  *                         results{q,items:[{id,title,channel,duration_s,meta?}]} thumb{id,w,h,rgba(base64)}: 160x90 or 320x180
  *                         state{state:idle|preparing|playing|paused|ended|error,pct,id,title} time{elapsed,total} error{msg}
@@ -15,6 +16,7 @@
  *                         channel{id,items,shelves|error}: a channel's page
  *                         playlists{items:[{id,title,count,meta,thumb}]|error}: the account's playlists (thumb: a video id)
  *                         playlist{id,title?,items|error}: a playlist's videos
+ *                         logs_sent{id}: the code to quote in a GitHub issue; logs_error{msg:closed|busy|offline|failed}
  *          Thumbs are asked lazily (Model.wantThumb, from the screens' draw path): only for the tiles drawn.
  *          The daemon signs in itself (TV device sign-in) and keeps the tokens; none come here.
  *          The daemon stops playback within 1 s of this socket closing, so the app keeps it open hidden too.
@@ -31,6 +33,7 @@ const SIZES = ['160x90', '320x180']; // the thumb sizes the daemon sends
 const PL_RE = /^[\w-]{2,64}$/, VID_RE = /^[\w-]{11}$/;   // a playlist id (PL..., LL, OLAK5uy_...), a video id
 const isPl = (x) => typeof x === 'string' && PL_RE.test(x), isVid = (x) => typeof x === 'string' && VID_RE.test(x);
 const PL_MAX = 60, PL_ITEMS = 50;    // the playlists shown, the videos of one
+const LOG_ERRORS = ['closed', 'busy', 'offline', 'failed'];   // logs_error's msg; 'old': a service without send_logs
 
 class Ctl {
     constructor(path, log) {
@@ -114,6 +117,7 @@ class Model {
         this.chan = null;            // the channel page shown: {id, title, items, shelves, loading, error, t}
         this.pls = null;             // the account's playlists: {items:[{id,title,count,meta,thumb}], loading, error, t}
         this.plist = null;           // the playlist shown: {id, title, items, loading, error, t}
+        this.logs = null;            // a log report: {state: confirm|sending|sent|error, code (sent), msg (error), t}
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
@@ -125,6 +129,7 @@ class Model {
             this.searching = false; this.state = 'idle'; this.pending.clear();
             this.auth = { state: 'unknown', code: null, url: null, msg: null };
             Object.keys(this.feeds).forEach((w) => { this.feeds[w].loading = false; });
+            if (this.logs && this.logs.state === 'sending') this.logs = { state: 'error', msg: 'failed' };
         }
         this._changed();
     }
@@ -215,6 +220,10 @@ class Model {
         } else if (m.ev === 'extras') {
             this.extras = { id: String(m.id), chapters: (Array.isArray(m.chapters) ? m.chapters : []).filter((c) => Array.isArray(c) && c[0] >= 0),
                 segments: (Array.isArray(m.segments) ? m.segments : []).filter((c) => Array.isArray(c) && c[1] > c[0]) };
+        } else if (m.ev === 'logs_sent' || m.ev === 'logs_error') {
+            if (!this.logs || this.logs.state !== 'sending') return;
+            this.logs = m.ev === 'logs_sent' && /^[A-Za-z0-9]{4,16}$/.test(String(m.id)) ? { state: 'sent', code: String(m.id) }
+                : { state: 'error', msg: LOG_ERRORS.indexOf(m.msg) >= 0 ? m.msg : 'failed' };
         } else if (m.ev === 'retry') {
             if (m.id === this.id) this.retry = Number(m.n) || 1;   // the fetch failed (the network): the daemon tries again
         } else if (m.ev === 'skipped') {
@@ -229,6 +238,11 @@ class Model {
             // a daemon older than playlists: the Playlists page says so, nothing wrong with playback
             if (/^unknown cmd playlists?$/.test(m.msg)) {
                 [this.pls, this.plist].forEach((p) => { if (p && p.loading) { p.loading = false; p.error = 'unknown cmd playlists'; } });
+                this._changed(); return;
+            }
+            // a service older than send_logs: the logs page says so, nothing wrong with playback
+            if (m.msg === 'unknown cmd send_logs') {
+                if (this.logs && this.logs.state === 'sending') this.logs = { state: 'error', msg: 'old' };
                 this._changed(); return;
             }
             this.error = String(m.msg || 'error');
@@ -394,6 +408,23 @@ class Model {
         if (this.send({ cmd: 'playlist', id })) return true;
         p.loading = false; p.error = 'The RideTube service (jap-ridetube-d) is not running';
         return false;
+    }
+    /** the log report: the confirm step (askLogs), sent with this app's version, dropped; never two at once */
+    askLogs() { if (this.logs && this.logs.state === 'sending') return; this.logs = { state: 'confirm' }; this._changed(); }
+    dropLogs() { if (this.logs && this.logs.state === 'sending') return; this.logs = null; this._changed(); }
+    sendLogs(app) {
+        if (this.logs && this.logs.state === 'sending') return false;
+        const sent = this.send({ cmd: 'send_logs', app });
+        this.logs = sent ? { state: 'sending', t: Date.now() } : { state: 'error', msg: 'failed' };
+        this._changed();
+        return sent;
+    }
+    /** a report with no answer after ms (the service times out at 30 s): failed, never "Sending..." for ever */
+    checkLogs(now, ms) {
+        if (!this.logs || this.logs.state !== 'sending' || now - this.logs.t < ms) return false;
+        this.logs = { state: 'error', msg: 'failed' };
+        this._changed();
+        return true;
     }
     /** video wanted (player on screen and the car parked): tells the daemon when that changes */
     setWantVideo(on) { this.wantVideo = !!on; this._video(); }

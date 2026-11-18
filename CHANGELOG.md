@@ -6,6 +6,17 @@
   the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
   GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
 
+## App 0.3.12, service 0.3.11
+
+- Send logs to the developer: a new menu entry, and a button next to Try again when a video fails. It asks
+  first, then sends the service's recent log and shows a short code to add to your GitHub issue (#10). Account
+  details and the videos you watched are removed before anything leaves the car. If reporting is closed, busy or
+  offline, it says so, and an older service says it needs an update.
+- Service: `send_logs` sends the last 1500 lines of the service log (kept in memory) and the end of ytdec's log to
+  the developer's log relay, only when the app asks. Account values (tokens, client id and secret, sign-in codes),
+  e-mail addresses, VINs, public IP addresses, video titles and channel names are removed, URLs are cut to their
+  host, and video, playlist and channel ids become tags (`v#1a2b`) that change with every report.
+
 ## App 0.3.11
 
 - Cyrillic titles and channel names show every letter. The fonts the app draws with had only Latin letters, so

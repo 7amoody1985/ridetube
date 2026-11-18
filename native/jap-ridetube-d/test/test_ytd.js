@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable } = require('../ytd.js');
+const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, REPORT_URL } = require('../ytd.js');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ytd-'));
 const cache = path.join(tmp, 'cache');
@@ -1044,6 +1044,138 @@ async function main() {
         await d2.account.feed('subs');
         assert.deepStrictEqual(evs.pop(), { ev: 'feed', which: 'subs', error: 'no internet uid on the car (see the log)' });
         assert.ok(!fs.existsSync(flog), 'nothing spawned');
+    });
+
+    await t('the service version is component.json\'s', async () => {
+        assert.strictEqual(VERSION, JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'component.json'), 'utf8')).version);
+    });
+
+    await t('every log line (daemon, Account, Audio) is kept in the ring; send_logs answers on the socket', async () => {
+        ['sign-in: ', 'connect {', 'listening on '].forEach((x) => assert.ok(d.ring.some((l) => l.indexOf(x) > 0), x + ' (Account, Audio, the daemon) not in the ring: ' + d.ring.length));
+        assert.ok(d.ring.every((l) => /^\d{4}-\d\d-\d\dT[\d:.]+Z /.test(l)) && d.ring.length <= 1500);
+        c.clear();
+        c.send({ cmd: 'send_logs', app: '0.3.12' });   // (the fake youtube.com answers 404: the relay is not there)
+        assert.deepStrictEqual(await c.waitFor((x) => /^logs_/.test(x.ev)), { ev: 'logs_error', msg: 'failed' });
+    });
+
+    // ---- send_logs through the real fetch helper to a fake relay on 127.0.0.1 (MGU_YT_REPORT_URL)
+    const relay = { mode: 200, got: [], delay: 0 };
+    const srv = require('http').createServer((req, res) => {
+        let b = '';
+        req.on('data', (x) => { b += x; });
+        req.on('end', () => {
+            relay.got.push({ url: req.url, method: req.method, type: req.headers['content-type'], body: JSON.parse(b) });
+            if (relay.mode === 'hang') return;
+            setTimeout(() => {
+                const ans = { 200: { id: 'ABC123' }, 410: { error: 'closed' }, 429: { error: 'busy' }, 413: { error: 'too big' }, 500: { error: 'x' }, bad: { id: '<b>no</b>' } };
+                res.writeHead(relay.mode === 'bad' ? 200 : relay.mode, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(ans[relay.mode]));
+            }, relay.delay);
+        });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const rdir = path.join(tmp, 'report'), rcache = path.join(rdir, 'cache'), rstate = path.join(rdir, 'state'), retc = path.join(rdir, 'etc');
+    [rdir, rcache, rstate, retc].forEach((x) => fs.mkdirSync(x));
+    const FAKE = { cid: '777-fakeclient.apps.googleusercontent.com', sec: 'FaKeSeCrEt99', access: 'ya29.FAKE-ACCESS-TOKEN', refresh: '1//FAKEREFRESHTOKEN0123456789abcd', exp: 1999999999123 };
+    fs.writeFileSync(path.join(rstate, 'account.json'), JSON.stringify(FAKE));
+    fs.writeFileSync(path.join(retc, 'os-release'), ['NAME="MGU"', 'VERSION="22w45"', 'ID=mgu', 'A=1', 'B=2', 'C=3', 'D=4'].join('\n'));
+    const kdir = path.join(rcache, 'KnownVid001');
+    fs.mkdirSync(kdir);
+    fs.writeFileSync(path.join(kdir, 'meta.json'), JSON.stringify({ id: 'KnownVid001', title: 'My Secret Holiday Video', channel: 'Private Channel Name', duration_s: 60 }));
+    fs.writeFileSync(path.join(rcache, 'positions.json'), JSON.stringify({ PosVideo002: { ms: 1, total: 9, title: 'Another Watched Title', channel: 'Some Other Channel', at: 1 } }));
+    fs.writeFileSync(path.join(rdir, 'ytdec.log'), Array.from({ length: 400 }, (_, i) => 'ytdec line ' + i + ' dir=' + rcache + '/KnownVid001').join('\n') + '\n');
+    process.env.MGU_YT_REPORT_URL = 'http://127.0.0.1:' + srv.address().port;
+    const rlogs = [], revs = [];
+    const dr = new Daemon({ someip: someip, srcGen: srcGen, cacheDir: rcache, logDir: rdir, stateDir: rstate, accountFile: path.join(rstate, 'account.json'),
+        etcDir: retc, noSetuid: !root, fetchCmd: [process.execPath, path.join(__dirname, '..', 'ytd.js'), '--fetch'], reportTimeoutMs: 400, log: (m) => rlogs.push(m) });
+    delete process.env.MGU_YT_REPORT_URL;
+    dr.fetchUid = me;
+    dr.emit = (o) => revs.push(o);
+    const send = async () => { revs.length = 0; await dr.sendLogs('0.3.12'); return revs.pop(); };
+    dr.account.pending = { cid: 'PendingClientId.apps', sec: 'PendingSecret42', device: 'DEVICE-CODE-777', code: 'USR-CDE-XYZ', timer: null };
+    dr.onLine(JSON.stringify({ cmd: 'prefetch', id: 'SeenThumb03' }));      // an id the app sent (spare off: nothing runs)
+    dr.onLine(JSON.stringify({ cmd: 'playlist', id: 'PLseenplaylist0042' }));
+    [
+        'sign-in: odd answer ' + FAKE.sec + ' / ' + FAKE.access + ' / ' + FAKE.refresh + ' / ' + FAKE.cid + ' exp ' + FAKE.exp,
+        'sign-in poll: client_secret=PendingSecret42 device DEVICE-CODE-777 code USR-CDE-XYZ for PendingClientId.apps',
+        'fetch KnownVid001: ERROR: [youtube] KnownVid001: Video unavailable',
+        'ytfetch: GET https://rr3---sn-abc.googlevideo.com/videoplayback?ip=81.82.83.84&sig=XYZ&id=o-AB',
+        "ytfetch: HTTPSConnectionPool(host='rr3---sn-abc.googlevideo.com', port=443): Max retries exceeded with url: /videoplayback?expire=1&ip=2a02%3A1810%3Aabcd%3A%3A1&sig=QQQ (Caused by timeout)",
+        'ytfetch: odd ip=81.82.83.85 alone',
+        'thumb UnknownId04: timeout', 'lru removed UnknownId05,KnownVid001', 'ytdec --dir ' + rcache + '/UnknownId06 --rect 1280x720',
+        'ytfetch: [youtube] UnknownId07: Downloading webpage', 'playlist list=PLsecretplaylist123 and PLseenplaylist0042', 'positions PosVideo002 SeenThumb03',
+        'meta My Secret Holiday Video by Private Channel Name; Another Watched Title', 'channel UCabcdefghijklmnopqrstuv', 'mail someone.private@example.com',
+        'vin WBA12345678901234', 'uplink 81.82.83.84 via 192.168.1.1, 10.0.0.2, 172.20.1.1, 127.0.0.1, 8.8.4.4 and 2a02:1810:abcd::1',
+        'hdr Authorization: Bearer abc.def-ghi and access_token=zzz123456&x=1', 'Cookie: SAPISID=abc; YSC=def',
+        'playback error {"code":3,"path":"' + rcache + '/UnknownId08/audio.m4a"}',
+        'internet uid: 30000', 'audio: head -> full at 1234 (waiting)', 'clientVersion 7.20251101.10.00'
+    ].forEach((l) => dr.log(l));
+
+    await t('send_logs: one POST to MGU_YT_REPORT_URL/v1/report as the fetch helper -> logs_sent with the relay\'s id', async () => {
+        assert.strictEqual(dr.opts.reportUrl, 'http://127.0.0.1:' + srv.address().port, 'the env override');
+        assert.strictEqual(new Daemon({ reportUrl: 'https://x.example' }).opts.reportUrl, 'https://x.example', 'the option wins');
+        assert.strictEqual(new Daemon({}).opts.reportUrl, REPORT_URL, 'else the constant');
+        assert.deepStrictEqual(await send(), { ev: 'logs_sent', id: 'ABC123' });
+        const g = relay.got.pop();
+        assert.deepStrictEqual([g.method, g.url, g.type], ['POST', '/v1/report', 'application/json']);
+        assert.deepStrictEqual([g.body.app, g.body.service], ['0.3.12', VERSION]);
+        assert.strictEqual(g.body.os, 'NAME="MGU"\nVERSION="22w45"\nID=mgu\nA=1\nB=2', 'the first 5 lines of os-release');
+        const ytl = g.body.log.split('\n').filter((l) => /^ytdec line/.test(l));
+        assert.deepStrictEqual([ytl.length, ytl[0].split(' dir=')[0], ytl[299].split(' dir=')[0]], [300, 'ytdec line 100', 'ytdec line 399'], 'ytdec.log: its last 300 lines');
+        relay.last = g.body.log;
+    });
+
+    await t('send_logs redaction: account values, ids (tagged, one tag per id in a report), titles, URLs, IPs, e-mail, VIN, tokens', async () => {
+        const log = relay.last;
+        [FAKE.cid, FAKE.sec, FAKE.access, FAKE.refresh, String(FAKE.exp), 'FAKE-ACCESS', 'FAKEREFRESH', 'PendingSecret42', 'DEVICE-CODE-777', 'USR-CDE-XYZ', 'PendingClientId',
+            'KnownVid001', 'PosVideo002', 'SeenThumb03', 'UnknownId04', 'UnknownId05', 'UnknownId06', 'UnknownId07', 'UnknownId08', 'PLsecretplaylist123', 'PLseenplaylist0042',
+            'UCabcdefghijklmnopqrstuv', 'My Secret Holiday Video', 'Private Channel Name', 'Another Watched Title', 'someone.private', 'example.com', 'WBA12345678901234',
+            '81.82.83.84', '81.82.83.85', '8.8.4.4', '2a02:1810', '2a02%3A', 'expire=', 'sig=QQQ', 'videoplayback', 'sig=XYZ', 'abc.def-ghi', 'zzz123456', 'SAPISID=abc', 'YSC=def']
+            .forEach((x) => assert.ok(log.indexOf(x) < 0, x + ' left in:\n' + log.split('\n').filter((l) => l.indexOf(x) >= 0).join('\n')));
+        Object.keys(FAKE).forEach((key) => assert.ok(log.indexOf(String(FAKE[key])) < 0, 'account.' + key));
+        const line = (re) => log.split('\n').find((l) => re.test(l)) || '';
+        const k1 = /^fetch (v#[0-9a-f]{4}): ERROR: \[youtube\] (v#[0-9a-f]{4}): Video/.exec(line(/ fetch v#/).slice(25));
+        assert.ok(k1 && k1[1] === k1[2], 'a known id: v# + 4 hex, the same each time: ' + line(/ fetch v#/));
+        assert.ok(line(/lru removed/).indexOf(',' + k1[1]) > 0 && line(/ytdec line 399/).indexOf(rcache + '/' + k1[1]) > 0, 'the same tag in the LRU line and in ytdec.log');
+        assert.ok(/thumb v#[0-9a-f]{4}: timeout/.test(log) && /--dir \S+\/v#[0-9a-f]{4} --rect/.test(log) && /\[youtube\] v#[0-9a-f]{4}: Downloading/.test(log), 'ids by context');
+        assert.ok(/list=p#[0-9a-f]{4} and p#[0-9a-f]{4}/.test(log) && /channel c#[0-9a-f]{4}/.test(log), 'playlists p#, channels c#');
+        assert.ok(log.indexOf('GET https://rr3---sn-abc.googlevideo.com\n') > 0, 'a URL: scheme and host');
+        assert.ok(log.indexOf('with url: /[path] (Caused by timeout)') > 0 && log.indexOf('odd ip=[ip] alone') > 0, 'a bare path with a query, a lone ip=');
+        assert.ok(log.indexOf('meta [title] by [title]; [title]') > 0 && log.indexOf('mail [email]') > 0 && log.indexOf('vin [vin]') > 0);
+        assert.ok(log.indexOf('uplink [ip] via 192.168.1.1, 10.0.0.2, 172.20.1.1, 127.0.0.1, [ip] and [ip]') > 0, line(/uplink/));
+        assert.ok(log.indexOf('Bearer [secret]') > 0 && log.indexOf('access_token=[secret]') > 0 && log.indexOf('Cookie: [secret]') > 0);
+        ['internet uid: 30000', 'audio: head -> full at 1234 (waiting)', 'clientVersion 7.20251101.10.00', 'sign-in poll: client_secret=[secret]']
+            .forEach((x) => assert.ok(log.indexOf(x) > 0, 'kept: ' + x));
+        assert.ok(rlogs.join('\n').indexOf('ABC123') < 0, 'the code is not logged');
+        await send();
+        const k2 = /fetch (v#[0-9a-f]{4}):/.exec(relay.got.pop().body.log);
+        assert.ok(k2 && k2[1] !== k1[1], 'another report, another salt: ' + k2[1]);
+    });
+
+    await t('send_logs: closed, busy, too big, a bad answer, no answer, nobody there; one at a time', async () => {
+        for (const [mode, msg] of [[410, 'closed'], [429, 'busy'], [413, 'failed'], [500, 'failed'], ['bad', 'failed'], ['hang', 'offline']]) {
+            relay.mode = mode;
+            assert.deepStrictEqual(await send(), { ev: 'logs_error', msg: msg }, String(mode));
+        }
+        relay.mode = 200; relay.delay = 300; relay.got.length = 0; revs.length = 0;
+        const p1 = dr.sendLogs('0.3.12');
+        await dr.sendLogs('0.3.12');                 // while the first is in flight: ignored
+        await p1;
+        assert.deepStrictEqual([relay.got.length, revs], [1, [{ ev: 'logs_sent', id: 'ABC123' }]]);
+        relay.delay = 0;
+        assert.strictEqual(relay.got.pop().body.app, '0.3.12');
+        revs.length = 0; await dr.sendLogs('1.0; rm -rf');
+        assert.strictEqual(relay.got.pop().body.app, 'unknown', 'a bad app version is not sent');
+        await new Promise((r) => srv.close(r));
+        assert.deepStrictEqual(await send(), { ev: 'logs_error', msg: 'offline' }, 'connection refused');
+    });
+
+    await t('send_logs: the log is capped at 200 KB, the newest lines kept; the ring at 1500 lines', async () => {
+        for (let i = 0; i < 3000; i++) dr.log('filler ' + i + ' ' + 'x'.repeat(200));
+        assert.strictEqual(dr.ring.length, 1500);
+        const b = dr.report('0.3.12');
+        assert.ok(Buffer.byteLength(b.log) <= 200 * 1024 && Buffer.byteLength(b.log) > 190 * 1024, 'size ' + Buffer.byteLength(b.log));
+        assert.ok(/filler 2999 x+$/.test(b.log) && b.log.indexOf('filler 1500 ') < 0, 'the newest kept, the oldest dropped');
     });
 
     await t('no token, secret or device code in the log', async () => {

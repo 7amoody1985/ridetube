@@ -23,6 +23,10 @@ const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
 const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
+const VERSION = '0.3.11';   // component.json's (test_ytd.js checks): sent with a log report
+// the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
+const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
+const RING_MAX = 1500, REPORT_MAX = 200 * 1024, OS_MAX = 2048; // log lines kept for a report; its log and os caps (bytes)
 
 function defaults() {
     const env = process.env;
@@ -36,6 +40,8 @@ function defaults() {
         sock: env.MGU_YT_SOCK || '/run/jap-ridetube-d/ctl.sock',
         sockGid: 12202, // tm_oap_app
         accountFile: env.MGU_YT_ACCOUNT || '/var/opt/jap-ridetube-d/state/account.json',
+        reportUrl: env.MGU_YT_REPORT_URL || REPORT_URL,
+        reportTimeoutMs: 30000,
         ytRequest: null,     // null: each request in a child as the fetch uid (fetchRequest)
         // the fetch uid's pick (pickFetchUid) and the helper it runs
         stateDir: env.MGU_YT_STATE || '/var/opt/jap-ridetube-d/state',
@@ -300,7 +306,9 @@ function ytRequest(method, url, headers, body, timeoutMs, lookup) {
         if (data) { h['Content-Type'] = 'application/json'; h['Content-Length'] = data.length; }
         let done = false, size = 0;
         const fail = function (e) { if (!done) { done = true; clearTimeout(timer); reject(e); } };
-        const req = https.request({ hostname: u.hostname, port: u.port, path: u.path, method: method, headers: h, lookup: lookup }, function (res) {
+        // plain http only to this machine (a test's fake relay); any other http: URL still goes out as TLS
+        const loop = u.protocol === 'http:' && /^(127\.0\.0\.1|localhost)$/.test(u.hostname);
+        const req = (loop ? require('http') : https).request({ hostname: u.hostname, port: u.port, path: u.path, method: method, headers: h, lookup: lookup }, function (res) {
             const chunks = [];
             res.on('data', function (c) {
                 size += c.length;
@@ -869,10 +877,85 @@ Audio.prototype.release = async function () {
     }
 };
 
+// ---------------------------------------------------------------- log reports: what leaves the car (send_logs)
+// text -> the same text with nothing that names the account, the car, the user or what was watched. k: what the daemon
+// knows {secrets, titles, ids: {id: 'v'|'p'|'c'}}; salt: one report's, so a video keeps one tag (v#1a2b) in it, and
+// reports can't be matched to each other. Node 8: no lookbehind, no named groups, no replaceAll.
+function redactLog(text, k, salt, cacheDir) {
+    const tag = (kind, id) => kind + '#' + crypto.createHash('sha256').update(salt + id).digest('hex').slice(0, 4);
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const longest = (a, min) => a.filter((x, i) => typeof x === 'string' && x.length >= min && a.indexOf(x) === i).sort((x, y) => y.length - x.length);
+    let s = String(text);
+    // what the daemon knows, word for word (min lengths: a short value would shred ordinary words)
+    longest(k.secrets || [], 6).forEach((x) => { s = s.split(x).join('[secret]'); });
+    longest(k.titles || [], 6).forEach((x) => { s = s.split(x).join('[title]'); });
+    const ids = k.ids || {};
+    longest(Object.keys(ids), 10).forEach((x) => { s = s.split(x).join(tag(ids[x], x)); });
+    // tokens, cookies, e-mails
+    s = s.replace(/\b(Bearer|OAuth)\s+[\w.~+\/-]+=*/gi, '$1 [secret]')
+        .replace(/\bya29\.[\w.-]+/g, '[secret]').replace(/\b1\/\/[\w.-]{20,}/g, '[secret]')
+        .replace(/\b((?:access_token|refresh_token|device_code|user_code|client_secret|id_token)["']?\s*[:=]\s*["']?)[^"'&\s,;}]+/gi, '$1[secret]')
+        .replace(/\b(Set-Cookie|Cookie)\b\s*[:=].*/gi, '$1: [secret]')
+        .replace(/\b(SAPISID|APISID|HSID|SSID|SID|LOGIN_INFO|VISITOR_INFO1_LIVE|YSC|__Secure-[\w-]+)=[^;\s"']+/g, '$1=[secret]')
+        .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]');
+    // a URL: its scheme and host only (googlevideo URLs carry ip= and signatures; paths carry ids)
+    s = s.replace(/\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\/\s"'<>@]*@)?([^\/\s"'<>?#]+)[^\s"'<>]*/gi, '$1$2')
+        // a path with a query and no scheme (urllib3's "with url: /videoplayback?...&ip=..."), a lone ip= value
+        .replace(/\/[^\s"'()<>?]*\?[^\s"'()<>]+/g, '/[path]').replace(/\bip=[^&\s"'()]+/gi, 'ip=[ip]');
+    // ids by their context: a cache path, the log lines that name one, yt-dlp's "[youtube] <id>:", JSON keys
+    if (cacheDir) {
+        s = s.replace(new RegExp(esc(cacheDir) + '([^\\s"\']*)', 'g'),
+            (x, rest) => cacheDir + rest.replace(/\/([\w-]{11})(?=[\/.]|$)/g, (y, id) => '/' + tag('v', id)));
+    }
+    s = s.replace(/((?:\bv=|\bwatch\/|\/vi\/|youtu\.be\/|\/shorts\/|\/embed\/|\[youtube\]\s+|\b(?:fetch|thumb|prefetch|play|lru:)\s+|"(?:id|videoId|video_id)"\s*:\s*"))([\w-]{11})(?![\w-])/g,
+        (x, pre, id) => pre + tag('v', id))
+        .replace(/(lru removed )([\w#,-]+)/g, (x, pre, l) => pre + l.split(',').map((id) => (ID_RE.test(id) ? tag('v', id) : id)).join(','))
+        .replace(/((?:\blist=|"playlistId"\s*:\s*"))([\w-]{2,64})/g, (x, pre, id) => pre + tag('p', id))
+        .replace(/\bUC[\w-]{22}(?![\w-])/g, (id) => tag('c', id));
+    // the car's VIN (17 characters, a letter among them), public IP addresses (v4: not 127/8, 10/8, 172.16/12, 192.168/16)
+    s = s.replace(/\b[A-HJ-NPR-Z0-9]{17}\b/g, (x) => (/[A-Z]/.test(x) ? '[vin]' : x))
+        .replace(/\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g, (x, a, b) => {
+            a = Number(a); b = Number(b);
+            const own = a === 127 || a === 10 || a === 0 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+            return own || x.split('.').some((n) => Number(n) > 255) ? x : '[ip]';
+        })
+        .replace(/\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){3,7}\b/gi, (x) => (/^(fe80|fc|fd)/i.test(x) ? x : '[ip]'));
+    return s;
+}
+// the newest lines that fit in max bytes (a line on its own past max: none)
+function lastBytes(ls, max) {
+    let size = 0, i = ls.length;
+    while (i > 0 && size + Buffer.byteLength(ls[i - 1]) + 1 <= max) size += Buffer.byteLength(ls[--i]) + 1;
+    return ls.slice(i);
+}
+// a file's last n lines (from its last 256 KiB); [] when it can't be read
+function tailLines(f, n) {
+    try {
+        const fd = fs.openSync(f, 'r');
+        try {
+            const size = fs.fstatSync(fd).size, len = Math.min(size, 256 << 10), b = Buffer.alloc(len);
+            fs.readSync(fd, b, 0, len, size - len);
+            const ls = b.toString('utf8').split('\n');
+            if (len < size) ls.shift();   // cut mid-line
+            return ls.filter(Boolean).slice(-n);
+        } finally { fs.closeSync(fd); }
+    } catch (e) { return []; }
+}
+
 // ---------------------------------------------------------------- daemon
 function Daemon(o) {
     this.opts = Object.assign(defaults(), o || {});
+    // every log line (the daemon's, Account's, Audio's: they all log through opts.log) also goes to a ring for send_logs
+    const out = this.opts.log;
+    this.ring = [];
+    this.opts.log = (m) => {
+        this.ring.push(new Date().toISOString() + ' ' + m);
+        if (this.ring.length > RING_MAX) this.ring.shift();
+        out(m);
+    };
     this.log = this.opts.log;
+    this.seen = {};        // video/playlist/channel ids the app sent: a log report tags them (see report)
+    this.reporting = false;
     this.state = 'idle';
     this.cur = null;      // {id, title, dir, rect, fill, gen}
     this.gen = 0;         // bumps on every play/stop: stale async work checks it
@@ -1179,6 +1262,7 @@ Daemon.prototype.onLine = function (line) {
     try { m = JSON.parse(line); } catch (e) { return this.emit({ ev: 'error', msg: 'bad json' }); }
     if (!m || typeof m.cmd !== 'string') return this.emit({ ev: 'error', msg: 'no cmd' });
     this.usedAt = Date.now();
+    if (typeof m.id === 'string') this.see(m.cmd === 'playlist' ? 'p' : m.cmd === 'channel' ? 'c' : 'v', m.id);
     switch (m.cmd) {
     case 'prefetch': return this.prefetch(m.id);
     case 'positions': return this.sendPositions();
@@ -1201,6 +1285,7 @@ Daemon.prototype.onLine = function (line) {
     case 'channel': return this.account.channel(m.id);
     case 'playlists': return this.account.playlists();
     case 'playlist': return this.account.playlist(m.id);
+    case 'send_logs': return this.sendLogs(m.app);
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
     }
 };
@@ -1227,6 +1312,67 @@ Daemon.prototype.prune = function () {
     if (this.cur) protect.push(this.cur.id);
     if (this.preparing) protect.push(this.preparing);
     return pruneCache(this.opts.cacheDir, this.opts.keep, protect, this.log);
+};
+// ---- send_logs {app}: the ring and ytdec.log's tail, redacted (redactLog), to the log relay as the fetch uid
+// -> logs_sent{id} (the code the user quotes) or logs_error{msg: closed|busy|offline|failed}. One at a time.
+Daemon.prototype.see = function (kind, id) {
+    if (!/^[\w-]{2,64}$/.test(id) || this.seen[id]) return;
+    this.seen[id] = kind;
+    const all = Object.keys(this.seen);
+    if (all.length > 2000) delete this.seen[all[0]];
+};
+// what a report must not carry: the account (the file, and a sign-in under way), titles and ids the daemon knows
+Daemon.prototype.known = function () {
+    const secrets = [], titles = [], ids = Object.assign({}, this.seen);
+    const walk = (o) => {
+        if (typeof o === 'string' || typeof o === 'number') secrets.push(String(o));
+        else if (o && typeof o === 'object') Object.keys(o).forEach((key) => { if (key !== 'timer') walk(o[key]); });
+    };
+    walk(readJson(this.opts.accountFile));
+    walk(this.account.cred);
+    walk(this.account.pending);
+    const vid = (id) => { if (ID_RE.test(String(id))) ids[id] = 'v'; };
+    const meta = (m) => { [m.title, m.channel].forEach((x) => { if (typeof x === 'string' && x !== m.id) titles.push(x); }); };
+    if (this.cur) { vid(this.cur.id); meta(this.cur); }
+    [this.preparing, this.nextPrefetch, this.extracting && this.extracting.id].forEach(vid);
+    listCache(this.opts.cacheDir).forEach((it) => { vid(it.id); meta(it); });
+    const pos = this.positions();
+    Object.keys(pos).forEach((id) => { vid(id); meta(Object.assign({ id: id }, pos[id])); });
+    list(path.join(this.opts.cacheDir, 'thumbs')).concat(list(path.join(this.opts.cacheDir, 'ytdlp', 'info'))).forEach((n) => vid(n.split('.')[0]));
+    return { secrets: secrets, titles: titles, ids: ids };
+};
+Daemon.prototype.report = function (app) {
+    const k = this.known(), salt = crypto.randomBytes(16).toString('hex');
+    const red = (ls) => redactLog(ls.join('\n'), k, salt, this.opts.cacheDir).split('\n');
+    const ytdec = tailLines(path.join(this.opts.logDir, 'ytdec.log'), 300);
+    const log = ['--- ytdec.log, last ' + ytdec.length + ' lines'].concat(ytdec, ['--- jap-ridetube-d ' + VERSION + ', last ' + this.ring.length + ' lines'], this.ring);
+    return { app: /^[\d.]{1,12}$/.test(String(app)) ? String(app) : 'unknown', service: VERSION,
+        os: lastBytes(red(lines(path.join(this.opts.etcDir, 'os-release')).slice(0, 5)), OS_MAX).join('\n'),
+        log: lastBytes(red(log), REPORT_MAX).join('\n') };
+};
+Daemon.prototype.sendLogs = async function (app) {
+    if (this.reporting) return undefined;
+    this.reporting = true;
+    try {
+        const body = this.report(app);
+        this.log('logs: sending ' + body.log.length + ' characters');
+        const r = await this.opts.ytRequest('POST', String(this.opts.reportUrl).replace(/\/+$/, '') + '/v1/report',
+            { 'User-Agent': 'jap-ridetube-d/' + VERSION }, body, this.opts.reportTimeoutMs);
+        let id = null;
+        try { id = JSON.parse(r.body).id; } catch (e) { /* not JSON */ }
+        if (r.status === 200 && /^[A-Za-z0-9]{4,16}$/.test(String(id))) {
+            this.log('logs: sent');
+            return this.emit({ ev: 'logs_sent', id: String(id) });
+        }
+        this.log('logs: relay ' + r.status);
+        return this.emit({ ev: 'logs_error', msg: r.status === 410 ? 'closed' : r.status === 429 ? 'busy' : 'failed' });
+    } catch (e) {
+        this.log('logs: ' + e.message);
+        // no answer at all (no network, no internet uid, the relay down): offline; else something on our side
+        return this.emit({ ev: 'logs_error', msg: e.noUid || /timeout|\bE[A-Z]{3,}\b|socket hang up/.test(e.message) ? 'offline' : 'failed' });
+    } finally {
+        this.reporting = false;
+    }
 };
 // ---- search / thumbs
 // TVHTML5 search: signed in when we can (as feed), anonymous otherwise (it answers lockupViewModels)
@@ -1770,7 +1916,7 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before

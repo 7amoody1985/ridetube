@@ -86,6 +86,7 @@ App → daemon:
 | `{"cmd":"feed","which":"home\|subs\|wl"}` | → `feed` (items, or error `signed out` / `feed offline` / `unknown feed`) |
 | `{"cmd":"playlists"}` | → `playlists` (the account's playlists, or error as `feed`) |
 | `{"cmd":"playlist","id":".."}` | → `playlist` (its videos, or error as `feed`, or `bad playlist`) |
+| `{"cmd":"send_logs","app":"0.3.12"}` | the recent log, redacted, to the log relay (below, "Log reports") → `logs_sent` or `logs_error`; a second one while one is on its way is ignored |
 
 Daemon → app: `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`,
 `{"ev":"time","elapsed","total"}` (ms, ≤ 4/s), `{"ev":"results","q","items":[{id,title,channel,duration_s,meta?}]}` (`meta: ["12K views"]` when there is a view count),
@@ -102,6 +103,9 @@ order, each once, Watch later left out (`feed` `wl` has it). `count` is the tile
 its other texts (`["Private","Updated today"]`), `thumb` the video whose picture the tile shows (ask it with `thumb`; null when
 none). `{"ev":"playlist","id","title","items":[item]}` or `{"ev":"playlist","id","error"}`: a playlist's videos (≤ 50), `title`
 its name (`""` when the page has none).
+`{"ev":"logs_sent","id":"ABC123"}`: the relay took the report, `id` is the code the user quotes in a GitHub issue.
+`{"ev":"logs_error","msg":"closed|busy|offline|failed"}`: reporting switched off at the relay (410), too many reports
+(429), no answer (no network, no internet uid, the relay down), anything else; never the relay's own text.
 
 `state` carries `buffering` (bool; true while playback waits for the fetch), and `preparing`'s `pct`
 is the fetch's progress to playable (0-100).
@@ -120,7 +124,8 @@ Feeds: `POST /youtubei/v1/browse` as `TVHTML5`, `FEwhat_to_watch` (home), `FEsub
 Playlists: the TV Playlists page `FEplaylist_aggregation`, its playlist tiles (when it refuses: the Save to playlist list,
 `playlist/get_add_to_playlist`, without counts or pictures); a playlist: `VL` + its id, as Watch later.
 The account (tokens and the scraped secret) is `/var/opt/jap-ridetube-d/state/account.json`, 0600 in the
-0700 state dir, written atomically; nothing secret goes on the socket or into the log. `sign_out` wins
+0700 state dir, written atomically; nothing secret goes on the socket or into the log (and a log report is
+redacted again before it leaves, below). `sign_out` wins
 over work in flight: a refresh, device-code request or poll started before it saves, shows and
 re-arms nothing. Asks for a feed while its browse is in flight share that browse.
 
@@ -130,7 +135,8 @@ re-arms nothing. Asks for a feed while its browse is in flight share that browse
 `node --max-http-header-size=65536 ytd.js --fetch`, spawned as the daemon's own fetch uid (gid the same
 number, empty env, cwd `/`). The request, with the secret, tokens and body, goes on the child's stdin
 (never argv or env: `ps` shows those); `{status, body}` or `{error}` comes back on its stdout. 10 s
-timeout (the child is killed 1 s after), 8 MiB body. The child never touches the account file.
+timeout (a log report: 30 s; the child is killed 1 s after), 8 MiB body. Plain `http:` only to 127.0.0.1 or
+localhost (the tests' fake relay); any other URL goes out over TLS. The child never touches the account file.
 
 The uid is picked as mgu-updater's `js/uids.js` picks its own, at start and on first need:
 
@@ -149,6 +155,35 @@ It is written to `state/internet-uids` (component.json `"internet": true, "uids"
 "state/internet-uids"`: the deploy tool copies it into `/var/opt/mgu-uplink/uids.d/jap-ridetube-d`) and,
 while the uplink is installed, straight into that drop-in (the uplink rescans every 5 s). The unit
 starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB.
+
+## Log reports (`send_logs`)
+
+The user taps "Send logs to the developer" in the app (its menu, or the playback error screen) and confirms; the
+daemon then posts one report and the app shows the code the relay answers. Nothing is sent otherwise.
+
+- Where: `POST <REPORT_URL>/v1/report`, JSON, as the fetch uid. `REPORT_URL` is one constant in `ytd.js`;
+  `MGU_YT_REPORT_URL` or the `reportUrl` option override it. 30 s timeout.
+- What: `{"app","service","os","log"}`: the app's version (as the app sends it, digits and dots, else
+  `unknown`), the service's, the first 5 lines of `/etc/os-release` (≤ 2 KB), and a log (≤ 200 KB, the newest
+  lines kept): the last 300 lines of `ytdec.log`, then the daemon's last 1500 log lines (a ring in memory fed by
+  every log line, so nothing extra is written to disk).
+- Redacted first, the whole of it (`redactLog`, tested in `test_ytd.js`):
+  - every value in the account file, and of a sign-in under way (client id and secret, tokens, device and user
+    codes): `[secret]`; `Bearer` / `OAuth` tokens, `access_token`, `refresh_token`, `device_code`,
+    `user_code`, `client_secret`, cookies: `[secret]`;
+  - video ids: `v#` and 4 hex of sha256(salt + id), playlists `p#`, channels `c#`, with a new salt per report:
+    one id keeps one tag through a report, and two reports can't be matched. Ids are found by what the daemon
+    knows (the ids the app sent, the playing and preparing video, the cache, `positions.json`, thumbs, yt-dlp's
+    info files) and by context (`v=`, `watch/`, `/vi/`, `youtu.be/`, `list=`, `[youtube] <id>`, `fetch <id>`,
+    `thumb <id>`, `lru removed a,b`, paths under the cache dir as ytdec's `--dir` and `dir=`), never as any
+    11-character word;
+  - titles and channel names the daemon knows (the cache's `meta.json`, `positions.json`, the playing video):
+    `[title]`;
+  - URLs cut to `scheme://host`, a path with a query but no scheme (`with url: /videoplayback?...`) to
+    `/[path]`, any `ip=` value to `[ip]`; e-mail addresses `[email]`; 17-character VIN-like strings `[vin]`; public
+    IP addresses `[ip]` (IPv4 but 127/8, 10/8, 172.16/12, 192.168/16; IPv6 but fe80, fc, fd).
+- Known values shorter than 6 characters are not replaced word for word (they would shred ordinary words);
+  the patterns above still apply.
 
 ## Rules
 
@@ -199,4 +234,4 @@ Requires (catalog `requires`, installed first): mgu-deploy 0.7.0, mgu-python 1.0
 mgu-render 0.6.11 (the video layer).
 
 Overrides (tests): `MGU_YT_SOMEIP`, `MGU_YT_SRCGEN`, `MGU_YT_YTDEC`, `MGU_YT_CACHE`,
-`MGU_YT_LOGDIR`, `MGU_YT_SOCK`, `MGU_YT_STATE`, `MGU_YT_ACCOUNT`, or the `Daemon` constructor options.
+`MGU_YT_LOGDIR`, `MGU_YT_SOCK`, `MGU_YT_STATE`, `MGU_YT_ACCOUNT`, `MGU_YT_REPORT_URL`, or the `Daemon` constructor options.

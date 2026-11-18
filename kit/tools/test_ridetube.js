@@ -752,6 +752,64 @@ async function appFrames() {
         assert.ok(d.cmds('play').some((x) => x.id === 'plvideo0006'), 'the next one in the playlist plays, on the next row');
         console.log('ok   playlists: a playlist plays on past its row of four; members-only videos left out');
     }
+    // Send logs to the developer: the menu entry asks first (Send / Cancel), then the code; the error screen's second button
+    {
+        const ASK = 'Send RideTube\'s recent logs to the developer?', tgt = (k) => disp.pageTargets.find((x) => x.key === k);
+        const sends = () => d.cmds('send_logs').length;
+        const APP = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'jap_ridetube', 'app.json'), 'utf8')).version;
+        hu.handlers.BTN_LOGS();
+        await drawn();
+        assert.ok(texts.indexOf(ASK) >= 0 && texts.indexOf('Account details and the videos you watched are removed first.') >= 0, texts.join('|'));
+        assert.strictEqual(sends(), 0, 'nothing sent before the confirm');
+        if (own) {
+            assert.ok(tgt('logs:send') && tgt('logs:cancel'), 'Send and Cancel: ' + keys());
+            tgt('logs:cancel').run();
+            await drawn();
+            assert.ok(texts.indexOf(ASK) < 0 && sends() === 0, 'Cancel: back, nothing sent');
+            hu.handlers.BTN_LOGS();
+            await drawn();
+            hu.handlers.BTN_LOGS();             // the menu entry again where Send is drawn: still just the question
+            await sleep(50);
+            assert.strictEqual(sends(), 0, 'the menu entry pressed twice does not skip Send / Cancel');
+            disp.onPageFocus('logs:send'); disp.onScroll(100);   // the controller on Send, a turn: no throw
+            await drawn();
+            tgt('logs:send').run();
+        } else hu.handlers.BTN_LOGS();          // (the HMI's own screen: the menu entry again)
+        await until(() => sends() === 1, 2000, 'send_logs sent');
+        assert.deepStrictEqual(d.cmds('send_logs')[0], { cmd: 'send_logs', app: APP }, 'with the app\'s version');
+        await drawn();
+        assert.ok(texts.indexOf('Sending...') >= 0, texts.join('|'));
+        d.send({ ev: 'logs_sent', id: 'ABC123' });
+        await sleep(100); await drawn();
+        assert.ok(texts.indexOf('Sent. Add this code to your GitHub issue:') >= 0 && texts.indexOf('ABC123') >= 0, texts.join('|'));
+        // an error from the service: its sentence; an older service: says so, and no playback error from it
+        hu.handlers.BTN_LOGS();
+        if (own) { await drawn(); tgt('logs:send').run(); } else hu.handlers.BTN_LOGS();
+        await until(() => sends() === 2, 2000, 'second report');
+        d.send({ ev: 'logs_error', msg: 'busy' });
+        await sleep(100); await drawn();
+        assert.ok(texts.indexOf('Too many reports right now - try again later') >= 0, texts.join('|'));
+        if (own) { tgt('logs:send').run(); await until(() => sends() === 3, 2000, 'Try again sends again'); } else { hu.handlers.BTN_LOGS(); hu.handlers.BTN_LOGS(); await until(() => sends() === 3, 2000, 'again'); }
+        d.send({ ev: 'error', msg: 'unknown cmd send_logs' });
+        await sleep(100); await drawn();
+        assert.ok(texts.indexOf('Sending logs needs a newer jap-ridetube-d tool on the car') >= 0, texts.join('|'));
+        if (own) {
+            // the player's error screen: Send logs beside Try again opens the same page
+            d.send({ ev: 'state', state: 'error', id: 'lib1' });
+            d.send({ ev: 'error', msg: 'fetch: audio failed at 99 %' });
+            hu.handlers.BTN_NOW();
+            await sleep(100); await drawn();
+            assert.ok(tgt('ov:play') && tgt('ov:logs') && texts.indexOf('Send logs') >= 0 && texts.indexOf('Try again') >= 0, 'Try again and Send logs: ' + keys());
+            tgt('ov:logs').run();
+            await drawn();
+            assert.ok(texts.indexOf(ASK) >= 0 && tgt('logs:send'), 'the logs page asks');
+            tgt('logs:cancel').run();
+            await drawn();
+            assert.ok(tgt('ov:logs'), 'Cancel: back on the error screen');
+            d.send({ ev: 'state', state: 'idle' });
+        }
+        console.log('ok   send logs: asked first, Cancel sends nothing, Sending..., the code; the service\'s errors; the error screen\'s button');
+    }
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
 }
@@ -778,6 +836,32 @@ function extrasModel() {
     console.log('ok   extras: Continue watching, positions, chapters, the skipped toast');
 }
 
+// the log report's states: one at a time, the service's answers, an older service, no answer, the service gone
+function logsModel() {
+    const sent = [];
+    let up = true;
+    const m = new Model((o) => { if (!up) return false; sent.push(o); return true; });
+    m.connected = true;
+    m.askLogs(); assert.deepStrictEqual(m.logs, { state: 'confirm' });
+    m.dropLogs(); assert.strictEqual(m.logs, null);
+    assert.ok(m.sendLogs('0.3.12')); assert.deepStrictEqual(sent.pop(), { cmd: 'send_logs', app: '0.3.12' });
+    assert.ok(!m.sendLogs('0.3.12') && !sent.length, 'one at a time');
+    m.askLogs(); m.dropLogs(); assert.strictEqual(m.logs.state, 'sending', 'not dropped while on its way');
+    m.onMsg({ ev: 'logs_sent', id: 'ABC123' }); assert.deepStrictEqual(m.logs, { state: 'sent', code: 'ABC123' });
+    m.onMsg({ ev: 'logs_sent', id: 'XYZ999' }); assert.strictEqual(m.logs.code, 'ABC123', 'an answer nobody waits for: ignored');
+    [['closed', 'closed'], ['busy', 'busy'], ['offline', 'offline'], ['failed', 'failed'], ['<raw relay text>', 'failed']].forEach(([msg, want]) => {
+        m.sendLogs('0.3.12'); m.onMsg({ ev: 'logs_error', msg }); assert.deepStrictEqual(m.logs, { state: 'error', msg: want }, msg);
+    });
+    m.sendLogs('0.3.12'); m.onMsg({ ev: 'logs_sent', id: '<b>x</b>' }); assert.deepStrictEqual(m.logs, { state: 'error', msg: 'failed' }, 'an odd code is not shown');
+    m.sendLogs('0.3.12'); m.onMsg({ ev: 'error', msg: 'unknown cmd send_logs' });
+    assert.deepStrictEqual([m.logs.msg, m.error], ['old', null], 'an older service: said on the page, not a playback error');
+    m.sendLogs('0.3.12');
+    assert.ok(!m.checkLogs(Date.now() + 1000, 45000) && m.checkLogs(Date.now() + 46000, 45000) && m.logs.msg === 'failed', 'no answer in 45 s: failed');
+    m.sendLogs('0.3.12'); m.setConnected(false); assert.deepStrictEqual(m.logs, { state: 'error', msg: 'failed' }, 'the service gone');
+    up = false; assert.ok(!m.sendLogs('0.3.12') && m.logs.msg === 'failed', 'not connected: not sent');
+    console.log('ok   log report states: one at a time, closed / busy / offline / failed, an older service, no answer');
+}
+
 function channelSearch() {
     const m = new Model(() => true);
     m.auth.state = 'signed_in';
@@ -794,4 +878,4 @@ function channelSearch() {
     console.log('ok   channel search: a letter = the names starting with it, a word = the names (or handles) holding it');
 }
 
-clientAndModel().then(appFrames).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+clientAndModel().then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });

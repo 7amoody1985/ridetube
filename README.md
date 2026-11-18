@@ -35,6 +35,9 @@ the car, over the car's own internet connection:
   deleted: expect the video's whole size on your data plan, even if you stop early. The download stops if the
   head unit's storage gets low.
 - Signed in, what you watch goes to your YouTube history, as on a TV.
+- **Send logs to the developer** (in the menu, and on the error screen when a video fails) sends RideTube's
+  recent service log once, after you confirm, with the account details and the videos you watched removed. You
+  get a short code to add to your GitHub issue. Nothing is sent otherwise.
 
 ## Requirements
 

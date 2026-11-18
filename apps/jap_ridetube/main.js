@@ -31,7 +31,10 @@
  *         while something plays), so the pages reach the screen's bottom. Where the HMI runs the screen: all five
  *         (Play/Pause, -10 s, +10 s, the list / Now playing, Search), and the header has the page tabs (G.frame).
  *   MAIN  HMI menu (Search): the HMI's speller, Now playing, Results, Home, Subscriptions, Watch later, Playlists, recent
- *         searches / suggestions, then Sign in / Sign out (pressed twice).
+ *         searches / suggestions, then Sign in / Sign out (pressed twice), Send logs to the developer.
+ *   logs  (a VIEW page) Send logs to the developer: from the menu or the player's error screen. Asks first (Send /
+ *         Cancel; where the HMI runs the screen, the menu entry pressed again sends), then "Sending...", then the
+ *         code the service's log relay answered (to quote in a GitHub issue) or why it was not sent.
  *
  * Video only while parked (kit parked.js), unless the "Video while driving" setting is on (for a car coded
  * for video in motion): driving off turns the picture off (daemon `video off`,
@@ -44,10 +47,15 @@ const path = require('path');
 const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const QR = require('./kit/qr');
-const { t: translate } = require('./kit/i18n');
+const { t: translate, dict } = require('./kit/i18n');
 
 function message(key, values) {
     return translate(key).replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
+}
+// a sentence the catalog has as a whole, else the English one (never translate()'s word-by-word mix of the two)
+function whole(key, values) {
+    const s = Object.prototype.hasOwnProperty.call(dict, key) ? translate(key) : key;
+    return values ? s.replace(/\{(\w+)\}/g, (_, name) => String(values[name])) : s;
 }
 const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
@@ -71,6 +79,10 @@ const TABS = ['home', 'subs', 'wl', 'pl'];
 const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Playlists', list: 'Playlist', results: 'Results' };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
+const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
+const LOGS_MS = 45000;                                   // a log report with no answer by then failed (the service gives up at 31 s)
+const LOGS_ERR = { closed: 'Log reporting is closed for now', busy: 'Too many reports right now - try again later',
+    offline: 'No connection - try again later', failed: 'Sending failed - try again later', old: 'Sending logs needs a newer jap-ridetube-d tool on the car' };
 
 process.on('uncaughtException', (e) => { try { mgu.log.error('uncaught', e); } catch (x) { /* nothing left to log with */ } });
 
@@ -107,7 +119,7 @@ mgu.run({
         function show(m) {
             if (m !== mode) { dirty = true; if (laid.mode === mode && laid.where[focusKey]) backKey[mode] = focusKey; }   // (a tile of this page)
             mode = m;
-            if (m !== 'player') browse = m; else wake();
+            if (m !== 'player' && m !== 'logs') browse = m; else if (m === 'player') wake();
             openFeed(); sync(); labels();
         }
         function goBack(m) {
@@ -162,6 +174,16 @@ mgu.run({
         ui.onClick('BTN_CLOSE', () => { closeVideo(); info(); });
         ui.onClick('BTN_RESULTS', () => { show('results'); ui.open('VIEW'); });
         [['BTN_HOME', 'home'], ['BTN_SUBS', 'subs'], ['BTN_WL', 'wl'], ['BTN_PL', 'pl']].forEach(([b, m]) => ui.onClick(b, () => { show(m); ui.open('VIEW'); }));
+        // Send logs to the developer: the logs page asks first; pressed again there (the HMI's own screen has no Send button), sends
+        let logsFrom = 'home';
+        function openLogs() {
+            const hmiScreen = !(ctx.display && ctx.display.own && ctx.display.own());   // (no Send button drawn there)
+            if (hmiScreen && mode === 'logs' && model.logs && model.logs.state === 'confirm') { model.sendLogs(APP_VERSION); return; }
+            if (mode !== 'logs') logsFrom = mode;
+            model.askLogs();
+            show('logs');
+        }
+        ui.onClick('BTN_LOGS', () => { openLogs(); ui.open('VIEW'); });
         // Sign in: the Home tab shows how (after a failed try, asks again). Sign out: pressed twice within 5 s
         let signOutArmed = null;
         ui.onClick('BTN_ACCOUNT', () => {
@@ -183,7 +205,7 @@ mgu.run({
             ui.text('MAIN_INFO', s, 0, 'Text', { literal: true });
         }
         info();
-        setInterval(() => { try { model.checkSearch(Date.now(), SEARCH_MS); model.checkFeeds(Date.now(), FEED_MS); if (ui.isVisible('MAIN')) info(); } catch (e) { log.error('info', e); } }, 1000);
+        setInterval(() => { try { model.checkSearch(Date.now(), SEARCH_MS); model.checkFeeds(Date.now(), FEED_MS); model.checkLogs(Date.now(), LOGS_MS); if (ui.isVisible('MAIN')) info(); } catch (e) { log.error('info', e); } }, 1000);
 
         /* ---------- playing ---------- */
         // the decoder's picture size. Full-screen layout: the whole screen, for the full view (ytdec fits, or
@@ -739,6 +761,31 @@ mgu.run({
             cv.text(hint, tx, 392 + dy, 26, C.dim, LIT);
             cv.text(translate('The account stays on the car; this app never sees a password'), tx, 440 + dy, 20, '#717171', LIT);
         }
+        // Send logs to the developer: the question (Send / Cancel), Sending..., the code, or why not
+        function drawLogs(cv) {
+            if (!model.connected) return say(cv, OFF, OFF2);
+            const l = model.logs || { state: 'confirm' };
+            const btn = (x, label, key, fn, accent) => {
+                const w = 300, h = 76, y = 400;
+                cv.roundRect(x - w / 2, y, w, h, 38, key === focusKey ? '#ffffff' : accent ? C.red : C.card);
+                cv.text(whole(label), x, y + 49, 30, key === focusKey ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
+                if (cv.own) cv.target(x - w / 2, y, w, h, () => { fn(); dirty = true; }, key, 38);
+            };
+            const send = () => model.sendLogs(APP_VERSION), back = () => { model.dropLogs(); goBack(logsFrom); };
+            if (l.state === 'sending') return say(cv, whole('Sending...'));
+            if (l.state === 'sent') {
+                say(cv, whole('Sent. Add this code to your GitHub issue:'));
+                cv.text(l.code, MID, 360, 54, '#ffffff', { literal: true, font: 'bold', spacing: 6, align: 'center' });
+                if (cv.own) btn(MID, 'Close', 'logs:close', back);
+                return undefined;
+            }
+            if (l.state === 'error') say(cv, whole(LOGS_ERR[l.msg] || LOGS_ERR.failed));
+            else say(cv, whole('Send RideTube\'s recent logs to the developer?'), whole('Account details and the videos you watched are removed first.'));
+            if (!cv.own) return cv.text(whole('To send them, press Send logs to the developer in the menu again'), MID, 390, 24, C.dim, { literal: true, align: 'center' });
+            btn(MID - 180, l.state === 'error' ? 'Try again' : 'Send', 'logs:send', send, true);
+            btn(MID + 180, 'Cancel', 'logs:cancel', back);
+            return undefined;
+        }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
             cv.fillRect(BOX.x, BOX.y, BOX.w, BOX.h, '#000000');
@@ -969,8 +1016,12 @@ mgu.run({
                 });
                 cv.text(translate(fl ? 'Unzoom' : 'Zoom'), zx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
             } else if (model.state === 'error' && model.id && model.connected) {
-                ctl('ov:play', cx, cy, 58, again, (c) => retryGlyph(cv, cx, cy, 26, c));
-                cv.text(translate('Try again'), cx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
+                const tx = cx - 105, lx = cx + 105; // the pair centred under the title
+                ctl('ov:play', tx, cy, 58, again, (c) => retryGlyph(cv, tx, cy, 26, c));
+                cv.text(translate('Try again'), tx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
+                // beside it: the logs page (an arrow going up, out of the car)
+                ctl('ov:logs', lx, cy, 42, openLogs, (c) => { cv.line(lx, cy + 15, lx, cy - 14, 5, c); cv.polyline([[lx - 12, cy - 2], [lx, cy - 14], [lx + 12, cy - 2]], 5, c); });
+                cv.text(whole('Send logs'), lx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
             }
             if (mid) cv.text(fit(cv, mid, 30, SW - 2 * LX, LIT), cx, model.state === 'preparing' || live || up || (model.state === 'error' && model.id) ? cy + 150 : cy + 10, 30, '#ffffff', { literal: true, align: 'center' });
             // bottom: the progress bar (the track, the part played, the scrubber) and the times
@@ -1026,7 +1077,7 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
-                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

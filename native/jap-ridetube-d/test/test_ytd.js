@@ -1265,10 +1265,9 @@ async function main() {
         d3.emit = (o) => evs.push(o);
         const sizes = () => evs.map((e) => [e.id, e.w, e.h, Buffer.from(e.rgba, 'base64').length]);
         const put = (vid, n) => { fs.mkdirSync(path.join(cache, vid)); fs.writeFileSync(path.join(cache, vid, 'thumb.rgba'), Buffer.alloc(n, 1)); };
-        put('TTTTTTTTTT1', 57600); put('TTTTTTTTTT2', 230400); put('TTTTTTTTTT3', 1234);
-        await d3.thumb('TTTTTTTTTT1'); await d3.thumb('TTTTTTTTTT2'); await d3.thumb('TTTTTTTTTT3');
+        put('TTTTTTTTTT1', 57600); put('TTTTTTTTTT2', 230400);
+        await d3.thumb('TTTTTTTTTT1'); await d3.thumb('TTTTTTTTTT2');
         assert.deepStrictEqual(sizes(), [['TTTTTTTTTT1', 160, 90, 57600], ['TTTTTTTTTT2', 320, 180, 230400]]);
-        assert.ok(logs.some((m) => /TTTTTTTTTT3: 1234 bytes/.test(m)), 'odd size logged');
         assert.ok(!fs.existsSync(tlog), 'cached thumbs: no helper');
         fs.mkdirSync(tdir);
         for (let i = 0; i < 150; i++) {
@@ -1294,7 +1293,7 @@ async function main() {
         assert.ok(!fs.existsSync(tlog), 'from thumbs/: no helper');
         assert.ok(listCache(cache).every((x) => x.id !== 'thumbs'), 'thumbs/ is not a video');
         fs.readdirSync(tdir).forEach((n) => fs.unlinkSync(path.join(tdir, n))); fs.rmdirSync(tdir);
-        ['TTTTTTTTTT1', 'TTTTTTTTTT2', 'TTTTTTTTTT3'].forEach((v) => { fs.unlinkSync(path.join(cache, v, 'thumb.rgba')); fs.rmdirSync(path.join(cache, v)); });
+        ['TTTTTTTTTT1', 'TTTTTTTTTT2'].forEach((v) => { fs.unlinkSync(path.join(cache, v, 'thumb.rgba')); fs.rmdirSync(path.join(cache, v)); });
     });
 
     await t('channels: the FEchannels tiles -> id, name, @handle; videos, playlists and repeats skipped', async () => {
@@ -1540,14 +1539,17 @@ async function main() {
     const cp = require('child_process');
     const realChown = fs.chownSync, realSpawnSync = cp.spawnSync;
     const chowns = [];
-    const recordChown = (fail) => { chowns.length = 0; fs.chownSync = (p, u, g) => { chowns.push([p, u, g]); if (fail) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); }; };
+    const recordChown = (fail) => { chowns.length = 0; fs.chownSync = (p, u, g) => { chowns.push([p, u, g]); if (fail === true || fail === u) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); }; };
     const wroot = path.join(tmp, 'wp3'), wcache = path.join(wroot, 'cache'), wlogs = [];
     const reg = path.join(wroot, 'oap', 'oap_12201', 'data', 'apps', 'jap_ridetube.json');
     fs.mkdirSync(path.dirname(reg), { recursive: true }); fs.mkdirSync(wcache, { recursive: true });
     const wsock = path.join(tmp, 'w3.sock');
     const modeOf = (p) => fs.statSync(p).mode & 0o777;
+    const wmain = [{ root: path.join(wroot, 'mainapp'), hmi: 'HmiMain3D' }];   // app uids 20000-29999
+    fs.mkdirSync(path.join(wroot, 'mainapp', 'config'), { recursive: true });
+    fs.writeFileSync(path.join(wroot, 'mainapp', 'config', 'base.json'), JSON.stringify({ usableUidsAndGids: { min: 20000, max: 29999 } }));
     const ds = new Daemon({ someip: { buildProxy: () => new Promise(() => {}) }, srcGen: srcGen, cacheDir: wcache, logDir: wroot, sock: wsock,
-        oapRoot: path.join(wroot, 'oap'), tickMs: 100, noSetuid: !root, spare: false, ytRequest: fakeYt, keep: 20,
+        oapRoot: path.join(wroot, 'oap'), mainapps: wmain, tickMs: 100, noSetuid: !root, spare: false, ytRequest: fakeYt, keep: 20,
         accountFile: path.join(wroot, 'account.json'), stateDir: path.join(wroot, 'state'), log: (m) => wlogs.push(m) });
 
     await t('WP3 socket: owner and mode from MainApp\'s registry (<app uid>:root 0600)', async () => {
@@ -1575,30 +1577,117 @@ async function main() {
         } finally { fs.chownSync = realChown; }
     });
 
-    await t('WP3 socket: no registry entry -> 0660 root:tm_oap_app as before, logged once, sockShared(); a failed chown falls back the same', async () => {
+    await t('WP3 socket: registry gone, unreadable or not an app uid -> the last uid kept (logged once), never shared; a failed chown keeps the previous owner', async () => {
         recordChown(false);
         try {
             fs.unlinkSync(reg);
-            await waitUntil(() => ds.sockUid === null, 250);
-            assert.deepStrictEqual(chowns, [[wsock, 0, 12202]]);
-            assert.strictEqual(modeOf(wsock), 0o660);
-            assert.strictEqual(ds.sockShared(), true);
-            fs.writeFileSync(reg, '{"userId":"root"}');                          // unreadable uid: the same
             await sleep(350);
-            assert.strictEqual(wlogs.filter((m) => /^ctl\.sock: shared/.test(m)).length, 1, 'logged once');
-            assert.strictEqual(chowns.length, 1);
-            recordChown(true);
-            fs.writeFileSync(reg, JSON.stringify({ userId: 23458 }));
-            await waitUntil(() => chowns.length >= 2, 250);                       // the try, then back to shared
-            assert.strictEqual(modeOf(wsock), 0o660, 'never left root-only: the app could not connect');
-            assert.strictEqual(ds.sockShared(), true);
+            assert.deepStrictEqual([ds.sockUid, chowns, modeOf(wsock), ds.sockShared()], [23457, [], 0o600, false]);
+            ['{"userId":"root"}', '{"userId":true}', '{"userId":5}', '{"userId":23999}', '{"userId":23456.5}', '{'].forEach((txt) => {
+                ds.fetchUid = 23999;   // the fetch uid is never the app's
+                fs.writeFileSync(reg, txt);
+                ds.lockSocket();
+            });
+            ds.fetchUid = null;
             await sleep(250);
-            assert.strictEqual(wlogs.filter((m) => /EPERM: shared with every app/.test(m)).length, 1, 'logged once');
+            assert.deepStrictEqual([ds.sockUid, chowns, modeOf(wsock)], [23457, [], 0o600]);
+            assert.strictEqual(wlogs.filter((m) => /kept 23457$/.test(m)).length, 1, 'logged once');
+            assert.ok(!wlogs.some((m) => /^ctl\.sock: shared/.test(m)), wlogs.join('\n'));
+            recordChown(23458);
+            fs.writeFileSync(reg, JSON.stringify({ userId: 23458 }));
+            await waitUntil(() => chowns.length >= 2, 250);                       // the try, then the previous owner back
+            assert.deepStrictEqual(chowns.slice(0, 2), [[wsock, 23458, 0], [wsock, 23457, 0]]);
+            assert.deepStrictEqual([ds.sockUid, modeOf(wsock), ds.sockShared()], [23457, 0o600, false]);
+            await sleep(250);
+            assert.strictEqual(wlogs.filter((m) => /EPERM: kept app uid 23457/.test(m)).length, 1, 'logged once');
+            recordChown(true);                                                    // the old owner cannot be put back either: root only
+            await waitUntil(() => ds.sockUid === 0, 350);
+            assert.deepStrictEqual([modeOf(wsock), ds.sockShared()], [0o600, false]);
+            recordChown(false);
+            await waitUntil(() => ds.sockUid === 23458, 350);
         } finally {
             fs.chownSync = realChown;
             ds.timers.forEach(clearInterval); ds.timers = [];
             ds.server.close();
         }
+    });
+
+    // a daemon on its own socket and state, listening only (lockSocket by hand)
+    const wds = [];
+    const sockDaemon = async (name, state) => {
+        const x = new Daemon({ someip: someip, srcGen: srcGen, cacheDir: wcache, logDir: wroot, sock: path.join(tmp, name + '.sock'),
+            oapRoot: path.join(wroot, 'oap'), mainapps: wmain, noSetuid: true, spare: false, ytRequest: fakeYt, keep: 20,
+            accountFile: path.join(wroot, 'account.json'), stateDir: state || path.join(wroot, 'st-' + name), log: (m) => wlogs.push(m) });
+        wds.push(x);
+        x.listen();
+        await waitUntil(() => x.sockUid !== undefined, 1000);
+        return x;
+    };
+
+    await t('WP3 socket: the last app uid is kept in state/app-uid.json (0600): a restart with no registry entry stays locked to it', async () => {
+        recordChown(false);
+        try {
+            const f = path.join(wroot, 'state', 'app-uid.json');
+            assert.deepStrictEqual([JSON.parse(fs.readFileSync(f, 'utf8')), modeOf(f)], [{ uid: 23458 }, 0o600]);
+            fs.unlinkSync(reg);
+            const x = await sockDaemon('restart', path.join(wroot, 'state'));
+            assert.deepStrictEqual([x.sockUid, chowns.slice(-1)[0], modeOf(x.opts.sock)], [23458, [x.opts.sock, 23458, 0], 0o600]);
+            fs.writeFileSync(f, JSON.stringify({ uid: 5 }));            // not an app uid: not trusted either
+            const y = await sockDaemon('restart2', path.join(wroot, 'state'));
+            assert.strictEqual(y.sockUid, null);
+        } finally { fs.chownSync = realChown; }
+    });
+
+    await t('WP3 socket: shared (0660) only while no app uid was ever known; once known, never shared again', async () => {
+        recordChown(false);
+        try {
+            try { fs.unlinkSync(reg); } catch (e) { /* none */ }
+            const x = await sockDaemon('fresh');
+            assert.deepStrictEqual([x.sockUid, modeOf(x.opts.sock), x.sockShared()], [null, 0o660, true]);
+            fs.writeFileSync(reg, JSON.stringify({ userId: 23460 }));
+            x.lockSocket();
+            assert.deepStrictEqual([x.sockUid, modeOf(x.opts.sock), x.sockShared()], [23460, 0o600, false]);
+            fs.unlinkSync(reg);
+            x.lockSocket();
+            assert.deepStrictEqual([x.sockUid, modeOf(x.opts.sock)], [23460, 0o600]);
+        } finally { fs.chownSync = realChown; }
+    });
+
+    await t('WP3 socket: an owner change drops the connected client (made under the old mode); its reconnect stays', async () => {
+        recordChown(false);
+        try {
+            try { fs.unlinkSync(reg); } catch (e) { /* none */ }
+            const x = await sockDaemon('drop');
+            assert.strictEqual(x.sockUid, null);
+            fs.chmodSync(x.opts.sock, 0o600);   // (as the test's own user: connecting needs the owner bit, chown is stubbed)
+            const c1 = await client(x.opts.sock);
+            await waitUntil(() => x.client, 1000);
+            const gone = new Promise((r) => c1.on('close', r));
+            fs.writeFileSync(reg, JSON.stringify({ userId: 23461 }));
+            x.lockSocket();
+            assert.strictEqual(await Promise.race([gone.then(() => 'closed'), sleep(1000).then(() => 'open')]), 'closed');
+            assert.ok(wlogs.some((m) => /owner changed: the connected client is dropped/.test(m)));
+            const c2 = await client(x.opts.sock);
+            await waitUntil(() => x.client, 1000);
+            const closed = [];
+            c2.on('close', () => closed.push(1));
+            x.lockSocket(); x.lockSocket();
+            await sleep(100);
+            assert.deepStrictEqual([closed, x.sockUid], [[], 23461], 'same uid: kept');
+            c2.destroy();
+        } finally { fs.chownSync = realChown; }
+    });
+
+    await t('WP3 appUid: an integer or digits inside MainApp\'s ranges, never the fetch uid; ranges unknown: range not checked', async () => {
+        const x = wds[0], cases = [[true, null], [1, null], [19999, null], [30000, null], ['23462', 23462], [23462, 23462], [23462.5, null], ['2e4', null], [null, null], [0, null]];
+        cases.forEach((cv) => { fs.writeFileSync(reg, JSON.stringify({ userId: cv[0] })); assert.strictEqual(x.appUid(), cv[1], JSON.stringify(cv)); });
+        x.fetchUid = 23462;
+        assert.strictEqual(x.appUid(), null, 'the fetch uid');
+        x.fetchUid = null;
+        const y = new Daemon({ oapRoot: path.join(wroot, 'oap'), mainapps: [], ytRequest: fakeYt, accountFile: path.join(wroot, 'account.json'), log: () => {} });
+        fs.writeFileSync(reg, JSON.stringify({ userId: 40000 }));
+        assert.strictEqual(y.appUid(), 40000);
+        y.account.close();
     });
 
     await t('WP3 SponsorBlock cache in root\'s cache/.sb: a sb.json symlink in the video folder is never read or written', async () => {
@@ -1683,7 +1772,7 @@ async function main() {
         const di = new Daemon({ cacheDir: path.join(wroot, 'cache2'), noSetuid: false, ytRequest: fakeYt, accountFile: path.join(wroot, 'account.json'), log: () => {} });
         cp.spawnSync = (cmd, args, o) => { seen.push(o); return { status: 1 }; };
         try { di.rmTree(vid3); } finally { cp.spawnSync = realSpawnSync; }
-        assert.deepStrictEqual([seen[0].uid, seen[0].gid], [st.uid, st.gid]);
+        assert.deepStrictEqual([seen[0].uid, seen[0].gid], [st.uid, st.uid], 'gid = uid, as every fetch spawn');
         assert.ok(!fs.existsSync(vid3), 'root rmdirs the emptied folder');
         di.account.close();
     });
@@ -1697,6 +1786,70 @@ async function main() {
         assert.deepStrictEqual(pruneCache(lc, 0, [], () => {}), ['ZZZZZZZZZZ1']);
         assert.deepStrictEqual([fs.existsSync(path.join(lc, '.sb')), fs.readdirSync(path.join(lc, '.sb'))], [true, []]);
     });
+
+    await t('WP3 rmTree: a folder owned by one of MainApp\'s app uids is refused (thrown, left), rm never runs', async () => {
+        const vid = path.join(wcache, 'APPUIDAPPU1'), runs = [], realLstat = fs.lstatSync;
+        fs.mkdirSync(vid);
+        fs.lstatSync = function (p) { const st = realLstat.apply(fs, arguments); if (p === vid) st.uid = 20500; return st; };
+        cp.spawnSync = function () { runs.push(arguments); return realSpawnSync.apply(cp, arguments); };
+        try {
+            assert.throws(() => wds[0].rmTree(vid), /owned by app uid 20500/);
+        } finally { fs.lstatSync = realLstat; cp.spawnSync = realSpawnSync; }
+        assert.deepStrictEqual([runs.length, fs.existsSync(vid)], [0, true]);
+        fs.rmdirSync(vid);
+    });
+
+    await t('WP3 root reads in a video folder: a FIFO meta.json does not hang, symlinks and wrong sizes are missing', async () => {
+        const fifo = path.join(wroot, 'fifo'), fv = path.join(fifo, 'FIFOFIFOFI1');
+        fs.mkdirSync(fv, { recursive: true });
+        cp.execSync('mkfifo ' + path.join(fv, 'meta.json'));
+        const r = cp.spawnSync(process.execPath, ['-e', 'console.log(JSON.stringify(require(process.argv[1]).listCache(process.argv[2])))',
+            path.join(__dirname, '..', 'ytd.js'), fifo], { timeout: 3000, encoding: 'utf8' });
+        assert.ok(!r.error && r.status === 0, 'listCache returned: ' + (r.error && r.error.message));
+        assert.strictEqual(JSON.parse(r.stdout)[0].title, 'FIFOFIFOFI1');
+        const away = path.join(wroot, 'away3');
+        fs.mkdirSync(away);
+        fs.writeFileSync(path.join(away, 'meta.json'), JSON.stringify({ title: 'Planted' }));
+        fs.writeFileSync(path.join(away, 'thumb.rgba'), Buffer.alloc(57600, 3));
+        const lc = path.join(wroot, 'reads'), big = path.join(lc, 'BIGBIGBIGB1'), sym = path.join(lc, 'SYMSYMSYMS1');
+        fs.mkdirSync(big, { recursive: true }); fs.mkdirSync(sym);
+        fs.writeFileSync(path.join(big, 'meta.json'), JSON.stringify({ title: 'Big', pad: 'x'.repeat(70 << 10) }));
+        fs.symlinkSync(path.join(away, 'meta.json'), path.join(sym, 'meta.json'));
+        assert.deepStrictEqual(listCache(lc).map((x) => x.title).sort(), ['BIGBIGBIGB1', 'SYMSYMSYMS1'], 'over 64 KiB / a symlink: no meta');
+        fs.writeFileSync(path.join(big, 'meta.json'), JSON.stringify({ title: 'Small' }));
+        assert.ok(listCache(lc).some((x) => x.title === 'Small'), 'a plain meta.json is read');
+        // thumbs: a symlinked thumb.rgba and an odd size are missing (the helper is asked instead)
+        const asked = [], evs = [], x = wds[0];
+        x.opts.cacheDir = lc;
+        x.thumbFetch = (id) => { asked.push(id); return Promise.reject(new Error('offline')); };
+        x.emit = (o) => evs.push(o);
+        fs.symlinkSync(path.join(away, 'thumb.rgba'), path.join(sym, 'thumb.rgba'));
+        fs.writeFileSync(path.join(big, 'thumb.rgba'), Buffer.alloc(1234, 1));
+        await x.thumb('SYMSYMSYMS1'); await x.thumb('BIGBIGBIGB1');
+        assert.deepStrictEqual([evs, asked], [[], ['SYMSYMSYMS1', 'BIGBIGBIGB1']]);
+        fs.writeFileSync(path.join(big, 'thumb.rgba'), Buffer.alloc(57600, 1));
+        await x.thumb('BIGBIGBIGB1');
+        assert.deepStrictEqual(evs.map((e) => [e.id, e.w, e.h]), [['BIGBIGBIGB1', 160, 90]]);
+        x.opts.cacheDir = wcache;
+    });
+
+    await t('WP3 cache dir at start: a symlink or a foreign owner refuses to start; group/other writable is fixed to 0711 and logged', async () => {
+        const real = path.join(wroot, 'cdreal'), link = path.join(wroot, 'cdlink'), realLstat = fs.lstatSync;
+        fs.mkdirSync(real); fs.chmodSync(real, 0o777);
+        fs.symlinkSync(real, link);
+        const x = wds[0];
+        x.opts.cacheDir = link;
+        const r = await Promise.race([x.start().then(() => 'started', (e) => e), sleep(1000).then(() => 'still running')]);
+        assert.ok(r instanceof Error && r.refuse && /is not a folder/.test(r.message), String(r));
+        x.opts.cacheDir = real;
+        fs.lstatSync = function (p) { const st = realLstat.apply(fs, arguments); if (p === real) st.uid = process.getuid() + 1; return st; };
+        try { assert.throws(() => x.checkCacheDir(), /owned by uid/); } finally { fs.lstatSync = realLstat; }
+        x.checkCacheDir();
+        assert.strictEqual(modeOf(real), 0o711);
+        assert.ok(wlogs.some((m) => /^SECURITY: cache dir .* was 777/.test(m)), wlogs.join('\n'));
+        x.opts.cacheDir = wcache;
+    });
+    wds.forEach((x) => { x.server.close(); x.account.close(); });
 
     c.destroy();
     await d.close();

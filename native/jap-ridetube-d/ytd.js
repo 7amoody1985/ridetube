@@ -117,9 +117,30 @@ function mkdirp(p) {
 }
 
 // ---------------------------------------------------------------- playback cache (no downloads: a played video goes)
+// a file in a folder the fetch uid owns, read by root: no symlink (last component), only a regular file (a FIFO would
+// block root, a device feed it forever), ok(size) true; read from that fd. null on anything else (treated as missing)
+function readFetchFile(f, ok) {
+    let fd = null;
+    try {
+        fd = fs.openSync(f, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const st = fs.fstatSync(fd);
+        if (!st.isFile() || !ok(st.size)) return null;
+        const b = Buffer.alloc(st.size);
+        let n = 0, r = 1;
+        while (n < b.length && r > 0) { r = fs.readSync(fd, b, n, b.length - n, n); n += r; }
+        return n === b.length ? b : null;
+    } catch (e) {
+        return null;
+    } finally {
+        if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* closed */ } }
+    }
+}
+const META_MAX = 64 << 10;
 function readMeta(dir, id) {
     try {
-        const m = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); // ytfetch writes it
+        const b = readFetchFile(path.join(dir, 'meta.json'), (n) => n <= META_MAX); // ytfetch writes it
+        if (!b) throw new Error('no meta');
+        const m = JSON.parse(b.toString('utf8'));
         return { id: id, title: m.title || id, channel: m.channel || '', duration_s: m.duration_s || null };
     } catch (e) { return { id: id, title: id, channel: '', duration_s: null }; }
 }
@@ -187,6 +208,7 @@ const lines = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n'); } ca
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return null; } };
 const list = (d) => { try { return fs.readdirSync(d); } catch (e) { return []; } };
 const isId = (n) => n > 0 && n === Math.floor(n);
+const inRanges = (cfg, u) => !!cfg && cfg.ranges.some((r) => u >= r.min && u <= r.max);
 
 // MainApp's app uid ranges [{min,max}] and own uids, from the config of the MainApp the unit runs; null unknown
 function mainappRanges(o) {
@@ -238,7 +260,7 @@ function writeIfChanged(file, text, mode) {
 function pickFetchUid(o) {
     const kept = Number((readJson(path.join(o.stateDir, 'uids.json')) || {}).fetch);
     const cfg = mainappRanges(o);
-    const inRange = (u) => !!cfg && cfg.ranges.some((r) => u >= r.min && u <= r.max);
+    const inRange = (u) => inRanges(cfg, u);
     let uid = null;
     if (isId(kept) && !takenIds(o, cfg, false)[kept] && !inRange(kept)) uid = kept;
     else if (cfg) {
@@ -1219,16 +1241,35 @@ Daemon.prototype.chownFetch = function (p) {
 Daemon.prototype.rmTree = function (p) {
     let st;
     try { st = fs.lstatSync(p); } catch (e) { return; }
-    if (!st.isDirectory() || st.uid === 0) { rmrf(p); return; }
-    const ids = this.opts.noSetuid ? {} : { uid: st.uid, gid: st.gid };   // the owner: the fetch uid, or one it had before
+    if (!st.isDirectory() || st.uid === 0) { rmrf(p); return; }   // root's own: rm never runs as root
+    if (inRanges(this.appRanges(), st.uid)) throw new Error('rm ' + p + ': owned by app uid ' + st.uid + ', left alone');
+    // the owner (the fetch uid, or one it had before); its gid as every fetch spawn's: the same number
+    const ids = this.opts.noSetuid ? {} : { uid: st.uid, gid: st.uid };
     const r = cp.spawnSync('/bin/rm', ['-rf', '--', p], Object.assign(ids, { cwd: '/', env: {}, stdio: 'ignore', timeout: 30000 }));
     if (r.error) this.log('rm ' + p + ': ' + r.error.message);   // (exit 1 is normal: it cannot remove p itself, root's cache/ holds it)
     try { fs.rmdirSync(p); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 };
 
+// cache/ must be root's own real folder, else a swapped one points every root step in it elsewhere: refuse to start.
+// 0711: the fetch uid reaches its own folders in it, nobody else can list what was watched (a wider mode is fixed)
+Daemon.prototype.checkCacheDir = function () {
+    const dir = this.opts.cacheDir, me = process.getuid();   // root on the car (a test: its own uid)
+    try { mkdirp(dir); } catch (e) { this.log('cache dir: ' + e.message); }
+    const refuse = (why) => Object.assign(new Error('cache dir ' + dir + ' ' + why + ': not starting'), { refuse: true });
+    let st;
+    try { st = fs.lstatSync(dir); } catch (e) { throw refuse(e.message); }
+    if (!st.isDirectory()) throw refuse('is not a folder (a symlink?)');
+    if (st.uid !== me) throw refuse('is owned by uid ' + st.uid + ', not ' + me);
+    if (st.mode & 0o022) this.log('SECURITY: cache dir ' + dir + ' was ' + (st.mode & 0o777).toString(8) + ' (group/other writable): set to 711');
+    fs.chmodSync(dir, 0o711);
+};
+// MainApp's app uid ranges (mainappRanges), kept once read: they do not change while it runs. null: unknown
+Daemon.prototype.appRanges = function () {
+    if (!this.ranges) this.ranges = mainappRanges(this.opts);
+    return this.ranges;
+};
 Daemon.prototype.start = async function () {
-    // 0711: the fetch uid reaches its own folders in it, nobody else can list what was watched
-    try { mkdirp(this.opts.cacheDir); fs.chmodSync(this.opts.cacheDir, 0o711); } catch (e) { this.log('cache dir: ' + e.message); }
+    this.checkCacheDir();
     try { mkdirp(this.opts.logDir); } catch (e) { this.log('log dir: ' + e.message); }
     this.listen();
     // the uplink learns our fetch uid at start (its 5 s rescan), before anyone signs in
@@ -1279,29 +1320,71 @@ Daemon.prototype.listen = function () {
         this.log('listening on ' + sock);
     });
 };
-// the uid MainApp's registry gives RideTube's app (apps/jap_ridetube.json userId), null if it cannot be read
+// the uid MainApp's registry gives RideTube's app (apps/jap_ridetube.json userId), null if it cannot be read or is
+// not an app's: an integer (or all-digit string) inside MainApp's app uid ranges (unchecked while those are unknown),
+// never the fetch uid
 Daemon.prototype.appUid = function () {
     const e = readJson(path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps', 'jap_ridetube.json'));
-    const u = Number(e && e.userId);
-    return e && e.userId !== undefined && isId(u) && u <= MAX_UID ? u : null;
+    const v = e && e.userId;
+    const u = typeof v === 'number' || typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN;
+    return this.okAppUid(u) ? u : null;
 };
-// ctl.sock belongs to the app's uid alone (<uid>:root 0600): no other app can play, read feeds or sign out. No uid
-// known: 0660 root:tm_oap_app as before, every app can connect (logged at each change). Applied only when it changes.
-// sockUid (read it through sockShared()): the uid it is locked to, null while shared, undefined before listen
+Daemon.prototype.okAppUid = function (u) {
+    const cfg = this.appRanges();
+    return isId(u) && u <= MAX_UID && u !== this.fetchUid && (!cfg || inRanges(cfg, u));
+};
+// the last good app uid, kept in state/app-uid.json (root's): a failed registry read keeps it, a restart too
+Daemon.prototype.knownAppUid = function () {
+    const f = path.join(this.opts.stateDir, 'app-uid.json');
+    if (this.lastAppUid === undefined) {
+        const k = Number((readJson(f) || {}).uid);
+        this.lastAppUid = this.okAppUid(k) ? k : null;
+    }
+    const u = this.appUid();
+    if (u === null) {
+        if (this.lastAppUid !== null && !this.regBad) this.log('ctl.sock: no valid app uid in MainApp\'s registry: kept ' + this.lastAppUid);
+        this.regBad = true;
+        return this.lastAppUid;
+    }
+    this.regBad = false;
+    if (u !== this.lastAppUid) {
+        this.lastAppUid = u;
+        try {
+            if (!fs.existsSync(this.opts.stateDir)) { mkdirp(path.dirname(this.opts.stateDir)); fs.mkdirSync(this.opts.stateDir, 0o700); }
+            writeIfChanged(f, JSON.stringify({ uid: u }) + '\n', 0o600);
+        } catch (e) { this.log('app uid: ' + e.message); }
+    }
+    return u;
+};
+// ctl.sock belongs to the app's uid alone (<uid>:root 0600): no other app can play, read feeds or sign out. Shared
+// (0660 root:tm_oap_app, every app can connect) only while no app uid was ever known (a fresh install whose registry
+// cannot be read). Applied only when it changes, logged then; a connection made before a change is dropped (the app
+// reconnects every 2 s under the new owner). A failed chown keeps the previous owner (root only if none), never shared.
+// sockUid (read it through sockShared()): the uid it is locked to, 0 root only, null while shared, undefined before listen
 Daemon.prototype.lockSocket = function () {
     if (!this.server || !this.server.listening) return;
-    const u = this.appUid(), sock = this.opts.sock;
-    if (u === this.sockUid) return;
+    const u = this.knownAppUid(), sock = this.opts.sock, was = this.sockUid;
+    if (u === was) return;
     try {
         if (u === null) { fs.chmodSync(sock, 0o660); fs.chownSync(sock, 0, this.opts.sockGid); }
         else { fs.chmodSync(sock, 0o600); fs.chownSync(sock, u, 0); }   // closed first, then handed over
-        this.log(u === null ? 'ctl.sock: shared with every app (0660 root:tm_oap_app): no app uid in MainApp\'s registry' : 'ctl.sock: app uid ' + u + ' only (0600)');
+        this.log(u === null ? 'ctl.sock: shared with every app (0660 root:tm_oap_app): no app uid known' : 'ctl.sock: app uid ' + u + ' only (0600)');
         this.sockUid = u;
+        this.sockErr = null;
     } catch (e) {
-        if (e.message !== this.sockErr) this.log('ctl.sock: ' + e.message + ': shared with every app (0660 root:tm_oap_app)');
+        if (u === null) {
+            this.sockUid = null;   // shared anyway (0660); the group is best effort (not root: tests)
+        } else {
+            let back = 0;
+            try { if (typeof was === 'number' && was > 0) { fs.chownSync(sock, was, 0); back = was; } } catch (e2) { /* root only */ }
+            this.sockUid = back;
+        }
+        if (e.message !== this.sockErr) this.log('ctl.sock: ' + e.message + (u === null ? ': shared with every app (0660 root:tm_oap_app)' : this.sockUid ? ': kept app uid ' + this.sockUid : ': root only (0600)'));
         this.sockErr = e.message;   // once, not every tick
-        try { fs.chmodSync(sock, 0o660); fs.chownSync(sock, 0, this.opts.sockGid); } catch (e2) { /* not root (tests) */ }
-        this.sockUid = null;
+    }
+    if (this.sockUid !== was && was !== undefined && this.client) {
+        this.log('ctl.sock: owner changed: the connected client is dropped');
+        this.client.destroy();
     }
 };
 // true while any app on the unit can use the socket (health: "socket: shared with other apps")
@@ -1500,7 +1583,7 @@ Daemon.prototype.search = async function (q) {
 Daemon.prototype.thumb = async function (id) {
     if (!ID_RE.test(String(id))) return this.emit({ ev: 'error', msg: 'bad id' });
     const tdir = path.join(this.opts.cacheDir, 'thumbs'), tf = path.join(tdir, id + '.rgba');
-    const read = (f) => { try { return fs.readFileSync(f); } catch (e) { return null; } };
+    const read = (f) => readFetchFile(f, (n) => !!THUMB_SIZES[n]);   // the video folder's is the fetch uid's
     let data = read(path.join(this.opts.cacheDir, id, 'thumb.rgba')) || read(tf);
     if (!data) {
         // at most 3 helpers at once: each is a Node 22 process, and a page asks for 20 thumbs
@@ -2058,5 +2141,9 @@ if (require.main === module && process.argv[2] === '--fetch') {
         setTimeout(() => process.exit(0), 4000); // TimeoutStopSec=5
         d.close().then(() => process.exit(0), () => process.exit(0));
     }));
-    d.start().catch((e) => d.fault(e));
+    d.start().catch((e) => {
+        if (!(e && e.refuse)) return d.fault(e);
+        d.log(e.message);
+        process.exit(1);
+    });
 }

@@ -5,6 +5,13 @@
 - Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
   the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
   GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
+- The progress bar follows a finger, in the player and in the podcast view while driving: dragged, the bar, the
+  time and a bubble with the time it goes to (and its chapter) follow it, and the video goes there when it lets
+  go; a tap on the bar jumps there. Pressing the controller on the bar still plays or pauses, and turning it still
+  seeks 10 s a detent.
+- A double tap on the left or right third of the video goes back or forward 10 s, each further quick tap 10 s
+  more ("« 20 s"), as one seek once the taps stop. A single tap still shows or hides the controls, and a tap on a
+  control is the control's. The podcast view while driving keeps its big buttons only.
 
 ## App 0.3.12, service 0.3.11
 

@@ -277,7 +277,73 @@ mgu.run({
             clearTimeout(pendT);
             pendT = setTimeout(() => { const ms = pend; pend = 0; model.skip(ms); dirty = true; }, 350);
         }
-        const shownAt = () => Math.max(0, Math.min(model.total > 0 ? model.total : Infinity, model.elapsed + pend));
+        // a finger on the progress bar (where the kit runs the screen): pressed or dragged, the bar, the time and a
+        // bubble follow it; one seek where it lets go. seekBar: where the last frame drew the bar (overlay px, its
+        // touch band, the overlay's scale); scrub: {ms, bar} while a finger holds it
+        let seekBar = null, scrub = null;
+        const barMs = (b, sx) => Math.round(Math.max(0, Math.min(1, (sx / b.s - b.x0) / b.w)) * model.total);
+        // a double tap on the picture's left or right third: -10 s / +10 s, each further quick tap 10 s more (one seek
+        // once they stop, as the knob). A single tap still shows or hides the controls, a tap on a control is the
+        // control's. picArea: the video player's last frame {SW, s, ctls: the controls shown (overlay px)};
+        // taps: the last tap counted {dir, t, x, y, n, ctls: the controls shown at the first}; tapFx: the hint drawn
+        let picArea = null, taps = null, tapFx = null, tapHeld = false, downAt = null;
+        const TAP_MS = 400;
+        const live = () => model.state === 'playing' || model.state === 'paused';
+        const third = (a, x) => (x < a.SW * 0.35 ? -1 : x > a.SW * 0.65 ? 1 : 0);
+        const onCtl = (ctls, x, y) => ctls.some((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+        function tapDown(sx, sy) {
+            const a = picArea, now = Date.now();
+            downAt = { sx, sy, t: now };
+            if (!a || mode !== 'player' || !live() || !taps || now - taps.t > TAP_MS) return false;
+            const x = sx / a.s, y = sy / a.s, dir = third(a, x);
+            // the first tap's side, near it, and not on a control that was there then (one it showed doesn't count)
+            if (dir !== taps.dir || Math.abs(x - taps.x) > 240 || Math.abs(y - taps.y) > 240 || onCtl(taps.ctls, x, y)) return false;
+            Object.assign(taps, { t: now, x, y, n: taps.n + 1 });
+            turnSeek(dir);
+            tapFx = { dir, n: taps.n, until: now + 900 };
+            tapHeld = true;
+            wake();
+            return true;
+        }
+        // a tap the page got (short, not moved): counted when it was on the picture's left or right third, off the controls
+        function tapUp(sx, sy) {
+            const a = picArea, d = downAt, now = Date.now();
+            downAt = null; taps = null;
+            if (!a || !d || mode !== 'player' || !live() || now - d.t > 300 || Math.abs(sx - d.sx) > 30 || Math.abs(sy - d.sy) > 30) return;
+            const x = sx / a.s, y = sy / a.s, dir = third(a, x);
+            if (dir && !onCtl(a.ctls, x, y)) taps = { dir, t: now, x, y, n: 0, ctls: a.ctls };
+        }
+        if (ctx.onTouch) ctx.onTouch((phase, sx, sy) => {
+            if (phase === 1) {
+                scrub = null; tapHeld = false;
+                const b = seekBar, x = b ? sx / b.s : 0, y = b ? sy / b.s : 0;
+                const onBar = b && mode === 'player' && model.total > 0 && live() && x >= b.x0 - 24 && x <= b.x0 + b.w + 24 && y >= b.y0 && y <= b.y1;
+                if (!onBar) return tapDown(sx, sy);
+                taps = null;
+                clearTimeout(pendT); pend = 0;                     // (a knob seek not sent yet: the finger wins)
+                scrub = { ms: barMs(b, sx), bar: b };
+                wake();
+                return true;
+            }
+            if (tapHeld) { if (phase === 3) tapHeld = false; return true; }
+            if (!scrub) { if (phase === 3) tapUp(sx, sy); return false; }
+            scrub.ms = barMs(scrub.bar, sx);
+            if (phase === 3) { const ms = scrub.ms; scrub = null; model.skip(ms - model.elapsed); }
+            wake();
+            return true;
+        });
+        const shownAt = () => (scrub ? scrub.ms : Math.max(0, Math.min(model.total > 0 ? model.total : Infinity, model.elapsed + pend)));
+        // while a finger holds the bar: the time it would go to (and its chapter) in a bubble over the scrubber
+        function scrubBubble(cv, fx, y) {
+            if (!scrub) return;
+            const ex = model.extras && model.extras.id === model.id ? model.extras : null;
+            let ch = null;
+            if (ex) ex.chapters.forEach((k) => { if (k[0] <= scrub.ms) ch = k[1]; });
+            const t = clock(scrub.ms) + (ch ? '  ·  ' + ch : ''), tw = Math.min(520, cv.textWidth(t, 26, LITB) + 36);
+            const bx = Math.max(16, Math.min(fx - tw / 2, (cv.place ? cv.place.w / cv.place.scale : W) - tw - 16));
+            cv.roundRect(bx, y - 62, tw, 46, 12, '#000000e0');
+            cv.text(fit(cv, t, 26, tw - 36, LITB), bx + 18, y - 30, 26, '#ffffff', LITB);
+        }
         // preparing: its percentage, or the network lost and the daemon trying again
         const prepText = () => (model.retry ? message('No connection - trying again ({count})...', { count: model.retry }) : message('Preparing... {percent} %', { percent: Math.round(model.pct || 0) }));
         // a failed play: Try again (the same video, the queue kept)
@@ -320,7 +386,7 @@ mgu.run({
         let ovUntil = 0, qrUntil = 0;   // qrUntil: the On phone QR card shows until then
         function wake() { ovUntil = Date.now() + OVERLAY_MS; dirty = true; }
         // it stays while there is no moving picture to look at
-        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg();
+        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || !!scrub;
         const overlay = () => pinned() || Date.now() < ovUntil || Date.now() < qrUntil;
         // a tap beside the controls (no target): hides them
         if (ctx.onTap) ctx.onTap(() => { if (mode === 'player' && !pinned() && overlay()) { ovUntil = 0; dirty = true; } });
@@ -870,8 +936,10 @@ mgu.run({
                 if (ex) sbSegs(ex).forEach((g) => cv.fillRect(at(g[0]), by, Math.max(4, at(g[1]) - at(g[0])), 10, sbColor(g)));
                 if (ex) ex.chapters.forEach((k) => { if (k[0] > 0) cv.fillRect(at(k[0]) - 2, by, 4, 10, C.bg); });
                 if (bf) cv.circle(at(el), by + 5, 24, '#3ea6ff');
-                cv.circle(at(el), by + 5, bf ? 18 : 14, C.red);
+                cv.circle(at(el), by + 5, bf || scrub ? 18 : 14, C.red);
                 tg(x0 - 10, by - 36, bw + 20, 80, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                seekBar = { x0, w: bw, y0: by - 40, y1: by + 50, s: cv.place.scale };
+                scrubBubble(cv, at(el), by - 6);
                 cv.text(clock(el), x0, by + 50, 26, C.dim, LIT);
                 cv.text('-' + clock(tot - el), x0 + bw, by + 50, 26, C.dim, { literal: true, align: 'right' });
             } else if (model.state === 'preparing') cv.text(prepText(), x0, by + 50, 26, C.dim, LIT);
@@ -925,11 +993,18 @@ mgu.run({
             cv.chrome = null;              // no header or bar composed over it (display.js present)
             // read: the page stays placed as the browsing pages (reaching down), so oy, and the targets with it, hold
             void cv.extra;
-            const tg = (x, y, w, h, run, key, r, turn) => cv.target(x - dx, y - dy, w, h, run, key, r, turn);
+            const ctls = [];                               // the controls this frame shows (a double tap on them is theirs)
+            const tg = (x, y, w, h, run, key, r, turn) => { ctls.push({ x, y, w, h }); return cv.target(x - dx, y - dy, w, h, run, key, r, turn); };
             cv.xf(1, 0, 0).fillRect(0, 0, pl.w, pl.h, '#000000');
+            seekBar = null;                                // (set again where this frame draws the bar)
             const pod = model.active() && noVideo();   // driving: podcast mode (no picture, big controls, always shown)
+            picArea = pod ? null : { SW, s, ctls };        // double taps: the video player only (podcast mode has its big buttons)
             if (videoShown && !pod) cv.video(VID, 0, 0, pl.w, pl.h, 0);
-            if (!overlay() && !pod) { cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined)); return; }
+            if (!overlay() && !pod) {
+                cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined));
+                picArea.ctls = [];                         // (hidden: those keys only wake it, no control under a tap)
+                return;
+            }
             cv.xf(s, 0, 0);
             const LX = HMI.left / s, act = model.active(), live = model.state === 'playing' || model.state === 'paused';
             const cx = SW / 2, cy = SH / 2 - 6, run = (fn) => () => { fn(); wake(); };
@@ -1034,8 +1109,10 @@ mgu.run({
                 if (ex) sbSegs(ex).forEach((g) => cv.fillRect(at(g[0]), y, Math.max(3, at(g[1]) - at(g[0])), 6, sbColor(g)));   // SponsorBlock: skipped green, asked yellow
                 if (ex) ex.chapters.forEach((c) => { if (c[0] > 0) cv.fillRect(at(c[0]) - 2, y, 4, 6, '#000000'); });
                 if (bf) cv.circle(fx, y + 3, 18, '#ffffff');
-                cv.circle(fx, y + 3, bf ? 14 : 10, C.red);
+                cv.circle(fx, y + 3, bf || scrub ? 14 : 10, C.red);
                 tg(x0 - 10, y - 34, w + 20, 70, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                seekBar = { x0, w, y0: y - 40, y1: y + 40, s };
+                scrubBubble(cv, fx, y - 8);
                 const tt0 = clock(el) + ' / ' + clock(model.total), tw = cv.textWidth(tt0, 24, LITB), chap = model.chapter();
                 cv.text(tt0, x0, SH - 22, 24, '#ffffff', LITB);
                 if (chap) cv.text(fit(cv, '·  ' + chap, 24, w - tw - 20, LIT), x0 + tw + 14, SH - 22, 24, '#dddddd', LIT);
@@ -1051,6 +1128,13 @@ mgu.run({
                 cv.roundRect(sx, sy, w2, 60, 30, f ? '#ffffff' : '#3a3a3ae6');
                 cv.text(tt, sx + 35, sy + 40, 28, f ? '#0f0f0f' : '#ffffff', LITB);
                 tg(sx, sy, w2, 60, run(sbJump(ask)), 'ov:sbskip', 30);
+            }
+            // a double tap's hint on its side: « 10 s / 20 s » (10 s a tap after the first)
+            if (tapFx && Date.now() < tapFx.until) {
+                const t = (tapFx.dir < 0 ? '«  ' : '') + tapFx.n * 10 + ' s' + (tapFx.dir > 0 ? '  »' : ''), tw = cv.textWidth(t, 34, LITB) + 56;
+                const hx = tapFx.dir < 0 ? LX + 60 : SW - 60 - tw, hy = cy - 150;
+                cv.roundRect(hx, hy, tw, 64, 32, '#000000b0');
+                cv.text(t, hx + tw / 2, hy + 44, 34, '#ffffff', { literal: true, font: 'bold', align: 'center' });
             }
             hmiIcons(cv);
         }

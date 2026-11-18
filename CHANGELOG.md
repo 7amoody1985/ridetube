@@ -2,14 +2,17 @@
 
 ## Unreleased
 
+- Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
+  the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
+  GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
+
+## App 0.3.14
+
 - Romanian titles and channel names keep every letter. The fonts have the cedilla ş ţ Ş Ţ but not the comma-below
   ș ț Ș Ț that Romanian is written with, so "Știri și Țara" drew as "tiri i ara". A letter an atlas lacks now
   draws as the closest one it has: ș ț Ș Ț as ş ţ Ş Ţ, and an accented Latin letter outside the baked ranges
   (Vietnamese ạ ở, Latin Extended-B and Additional) as its base letter. The atlases are unchanged; an emoji or
   another script is still left out.
-- Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
-  the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
-  GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
 
 ## App 0.3.13, service 0.3.12
 

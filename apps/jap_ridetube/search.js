@@ -1,7 +1,7 @@
 'use strict';
 /**
  * The Search page (the rail's Search; the page idea after marilykinson-glitch's fork, written anew): a row of
- * tiles - Type a search (the HMI's speller, parked only: driving, the tile says why and a press does nothing),
+ * tiles - Type a search (the HMI's speller, parked only: driving, the tile says why and main.js's type() opens nothing),
  * Menu (the HMI menu: the account, Settings, Send logs; the rail's Search opened it before), the recent searches
  * (newest first, a press runs one again), Clear recent searches - then the last search's results as a grid, or
  * what became of it.
@@ -25,6 +25,7 @@ module.exports = function searchPage(o) {
         try { list = clean(JSON.parse(fs.readFileSync(o.legacy, 'utf8'))); } catch (e) { list = null; }
         list = list || [];
         if (list.length) settings.set('recent', list);
+        try { fs.unlinkSync(o.legacy); } catch (e) { /* none */ }   // (no old searches left behind a Clear)
     }
     const save = () => settings.set('recent', list.slice());
     function add(q) {
@@ -38,7 +39,7 @@ module.exports = function searchPage(o) {
     function sections(shown) {
         const moving = o.moving(), g = o.glyphs();
         const type = { id: '::type', title: t('Type a search'), sub: moving ? t('Typing works only while parked') : t('Opens the keyboard'), glyph: g.KEYS,
-            act: () => (o.moving() ? o.flash(t('Typing works only while parked')) : o.type()) };
+            act: o.type };                                    // (type: parked only, else the note why)
         const recents = list.map((q, i) => ({ id: '::recent' + i, title: q, glyph: LENS, act: () => o.run(q) }));
         const clr = list.length ? [{ id: '::clear', title: t('Clear recent searches'), glyph: g.X, act: () => { clear(); o.changed(); } }] : [];
         const menu = { id: '::menu', title: t('Menu'), sub: t('Account, settings, logs'), glyph: g.ALL, act: o.menu };

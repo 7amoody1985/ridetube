@@ -1469,7 +1469,7 @@ function wp10Unit() {
     moving = true;
     assert.strictEqual(typeTile().sub, 'Typing works only while parked', 'driving: the tile says why');
     typeTile().act();
-    assert.deepStrictEqual([typed, flashed], [1, ['Typing works only while parked']], 'driving: no keyboard, the note');
+    assert.deepStrictEqual([typed, flashed], [2, []], 'driving: the press goes to type(), which says why (main.js, the frame test)');
     page.sections((x) => x)[0].items[1].act();
     assert.strictEqual(ran.slice(-1)[0], 'MENU', 'Menu: the HMI menu');
     // the results row: searching, an error, nothing found, results (shown() applied)
@@ -1576,13 +1576,15 @@ async function wp10Frames(x) {
     tgt('r:0:::recent1').run();
     await until(() => d.cmds('search').slice(-1)[0].q === 'birds', 2000, 'a recent runs while driving');
     assert.strictEqual(wp5.spells, sp, 'still no keyboard');
+    hu.handlers.BTN_SEARCH(); await sleep(50);
+    assert.deepStrictEqual([wp5.spells, hmi.MAIN_INFO], [sp, 'Typing works only while parked'], 'the menu\'s Search too: no keyboard, why in the info line');
     // Menu: the HMI menu (the account, Settings, Send logs)
     tgt('r:0:::menu').run();
     await sleep(50);
     assert.strictEqual(opened.slice(-1)[0], 'MAIN', 'Menu opens the HMI menu');
     speed(0);
     hu.ui.open = oo; hu.ui.text = ot;
-    console.log('ok   WP10 search page: from the rail, Clear, typed parked (saved, results, the controller on the first), cancelled, error, nothing found, driving: no keyboard, Menu');
+    console.log('ok   WP10 search page: from the rail, Clear, typed parked (saved, results, the controller on the first), cancelled, error, nothing found, driving: no keyboard (page and menu), Menu');
 }
 
 // ======== WP12 Controller: every target of every page reached by turning the knob (the kit's own path, Display._ccu),

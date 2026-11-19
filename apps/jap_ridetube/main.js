@@ -215,9 +215,14 @@ mgu.run({
             ui.open('VIEW');
             return true;
         }
-        // the HMI's speller: from the menu (an error there in its info line), or the Search page (parked only; left
-        // without a search: back on the page)
+        // the HMI's speller, parked only: from the menu (an error or why not in its info line), or the Search page
+        // (left without a search: back on the page)
         function typeSearch(fromPage) {
+            if (parked.moving()) {
+                if (fromPage) flash(translate('Typing works only while parked'));
+                else ui.text('MAIN_INFO', translate('Typing works only while parked'), 0, 'Text', { literal: true });
+                return Promise.resolve();
+            }
             return spell(ctx.app, translate('Search videos'))
                 .then((t) => { if (!search(t) && fromPage) ui.open('VIEW'); })
                 .catch((e) => {
@@ -583,7 +588,7 @@ mgu.run({
             if (mode === 'channel' && edge) { goBack(chanFrom); return true; }
             if (mode === 'list' && edge) { goBack('pl'); return true; }
             // the question pages: as their Cancel (logs, Video while driving: the setting off) or OK (the clock warning)
-            if (mode === 'logs') { model.dropLogs(); goBack(logsFrom); return true; }
+            if (mode === 'logs') { if (!model.logs || model.logs.state !== 'sending') { model.dropLogs(); goBack(logsFrom); } return true; }   // (sending: stays for the code)
             if (mode === 'risk') { goBack(riskFrom); return true; }
             if (mode === 'clock') { goBack(clockFrom); return true; }
             return false;

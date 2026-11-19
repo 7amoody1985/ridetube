@@ -287,7 +287,7 @@ function pickUid(o, key) {
     const inRange = (u) => inRanges(cfg, u);
     const taken = (procs) => { const t = takenIds(o, cfg, procs); others.forEach((u) => { t[u] = true; }); return t; };
     let uid = null;
-    if (isId(kept) && kept <= MAX_UID && !taken(false)[kept] && !inRange(kept)) uid = kept;
+    if (isId(kept) && (key === 'fetch' || kept <= MAX_UID) && !taken(false)[kept] && !inRange(kept)) uid = kept;   // (a fetch uid kept from before 0.5.0 may sit above)
     else if (cfg) {
         const all = taken(true), up = key === 'fetch', step = up ? 1 : -1, low = Math.max.apply(null, cfg.ranges.map((r) => r.max)) + 1;
         let u = up ? low : MAX_UID;
@@ -1740,7 +1740,7 @@ Daemon.prototype.onLine = function (line) {
     case 'health': return this.health();
     case 'related': return this.related(m.id);
     case 'ytdlp': return this.ytdlp(m.auto);
-    case 'remote': return this.remote(m.on);   // 0.5.0
+    case 'remote': return this.remote(m.on, m.lang);   // 0.5.0
     case 'proxy': return this.proxy(m.mode);   // 0.5.0
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
     }
@@ -1788,7 +1788,7 @@ Daemon.prototype.related = async function (id) {
 };
 Daemon.prototype.ytdlp = function (auto) { return this.notImplemented('ytdlp'); };            // WP6
 // `remote` {on} -> remote{on, url, expires} (remote.js; on not a bool: only the state). WP9, 0.5.0
-Daemon.prototype.remote = function (on) { return this.rc.set(on); };
+Daemon.prototype.remote = function (on, lang) { return this.rc.set(on, lang); };
 // the web uid (remote.js's server): its own, never the fetch uid nor an app's; throws when there is none
 Daemon.prototype.remoteUid = function () {
     if (this.opts.noSetuid) return process.getuid() || 1;   // (tests, not root: the child runs as ourselves)
@@ -2566,8 +2566,9 @@ Daemon.prototype.close = async function () {
     [this.spare, this.extracting].forEach((x) => { if (x) { try { x.child.kill('SIGKILL'); } catch (e) { /* gone */ } } });
     this.spare = this.extracting = null;
     this.account.close();
-    await this.rc.close();   // the phone remote off and its firewall rule removed (nft has 2 s: within the 4 s exit)
+    const rc = this.rc.close();   // the phone remote off and its rule removed, alongside the audio release (4 s exit)
     await this.stop(null);
+    await rc;
     if (this.client) this.client.destroy();
     if (this.server) this.server.close();
 };

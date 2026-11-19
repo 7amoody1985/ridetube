@@ -6,7 +6,7 @@
  * car. Node 8. The design follows the MGU Store's phone page (mgu-updater js/web.js, GPL-3.0-or-later), reimplemented.
  *
  * In the daemon (root):  const rc = new Remote(opts, hooks)
- *   rc.set(true)   a new 128-bit token; remote.sock (<web uid>:root 0600); the HTTP child as the web uid; the firewall
+ *   rc.set(true, lang)  a new 128-bit token; the phone page in lang (one of LANGS: the app's own language, else en); remote.sock (<web uid>:root 0600); the HTTP child as the web uid; the firewall
  *                  rule. While on, `remote` is said again whenever the URL or the time left changes.
  *   rc.set(false)  the child stopped, remote.sock removed, the rule removed. rc.set(<not a bool>): only says the state.
  *   rc.off(why)    the same, from the daemon: the app went away, the time ran out, the child died
@@ -31,11 +31,14 @@
  *     GET  /api/status          {state, id, title, elapsed, total}
  *     POST /api/send {"text"}   JSON only, 16 KiB at most: a YouTube video link -> play its id; another link -> 400;
  *                               any other text -> a search (at most 200 characters)
- *   An address with 10 wrong tokens gets 429 until the remote is turned off (the next one has a new token anyway).
+ *   The right token always passes. An address with 10 wrong tokens gets 429 for anything else until the remote is
+ *   turned off (the next one has a new token anyway). Root refuses a phone action less than 1 s after the last one.
+ *   Every word the phone shows is an English key of remote-strings.json, shown in the page's language.
  *
- * Firewall: the unit's input chain (table ip filter) drops what it does not accept. While on, one rule at its top accepts
- * the port from the hotspot interface, tagged with a comment; every on, off, start and exit removes tagged rules first,
- * and it is checked every 30 s (a ruleset reload removes it). Replies leave through the output chain's established
+ * Firewall: the unit's input chain (table ip filter) drops what it does not accept. While on and while the child holds
+ * the port on the hotspot address, one rule at its top accepts the port from the hotspot interface, tagged with a
+ * comment; every on, off, start and exit removes tagged rules first, and it is checked every 30 s (a ruleset reload
+ * removes it). A removal that fails (nft busy, timed out) is tried again every 5 s until it works. Replies leave through the output chain's established
  * accept. `nft`, as the Store's phone page on the same units.
  */
 const fs = require('fs');
@@ -53,6 +56,7 @@ const TOKEN_RE = /^Bearer ([0-9a-f]{32})$/;
 const IFACE_RE = /^[A-Za-z0-9_.-]{1,15}$/;
 const Q_MAX = 200, TEXT_MAX = 2048, BODY_MAX = 16 * 1024, LINE_MAX = 4096, FAIL_MAX = 10;
 const ASK_MS = 5000;
+const LANGS = ['en', 'fr', 'nl', 'de', 'es', 'it', 'pt', 'ru', 'zh-CN'];   // RideTube's languages (the app's catalogs)
 // the hosts a pasted link may name, and the paths that carry a video id
 const HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtube-nocookie.com', 'youtube-nocookie.com'];
 const ID_PATHS = ['shorts', 'live', 'embed', 'v'];
@@ -62,20 +66,24 @@ function defaults(o) {
         remoteSock: '/run/jap-ridetube-d/remote.sock',
         remotePort: 8471,                 // (the Store's phone page has 8470)
         remoteIface: 'wlan_bridge',       // the car's own hotspot
-        remoteMs: 30 * 60000,             // off by itself this long after it was turned on or last used
+        remoteMs: 60 * 60000,             // off by itself this long after it was turned on or last used
         remotePollMs: 5000,               // the hotspot's address looked at this often
         remoteRuleMs: 30000,              // the firewall rule checked this often
+        remoteRetryMs: 5000,              // a failed rule removal tried again this often
+        remoteActMs: 1000,                // phone actions at most this often
         nft: ['nft'],
         remoteCmd: [process.execPath, __filename, 'serve'],
         remotePage: path.join(__dirname, 'remote.html'),
+        remoteStrings: path.join(__dirname, 'remote-strings.json'),
         interfaces: () => os.networkInterfaces()
     };
 }
 
-// a search as typed: control characters and runs of spaces made one space; null when empty or too long
+// a search as typed: control characters, zero-width and direction marks (it ends up in the HMI's recent-search labels)
+// and runs of spaces made one space; null when empty or too long
 function cleanQuery(q) {
     if (typeof q !== 'string') return null;
-    const s = q.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const s = q.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim();
     return s && s.length <= Q_MAX ? s : null;
 }
 // what a pasted text is: undefined (no web link: a search), null (a link, but to no YouTube video) or the video id.
@@ -109,25 +117,40 @@ Remote.prototype.nft = function (args) {
     const cmd = this.o.nft;
     return new Promise((resolve, reject) => {
         // 2 s: removal must fit in the daemon's 4 s exit
-        cp.execFile(cmd[0], cmd.slice(1).concat(args), { timeout: 2000, maxBuffer: 1 << 20, env: {} }, (err, out, errout) => {
+        cp.execFile(cmd[0], cmd.slice(1).concat(args), { timeout: 2000, maxBuffer: 1 << 20, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin' } }, (err, out, errout) => {
             if (err) reject(new Error('nft ' + args.join(' ') + ': ' + String(errout || err.message).trim()));
             else resolve(String(out));
         });
     });
 };
-// the handles of our tagged rules in ip filter input; null when that chain cannot be listed (no unit firewall here)
+// the handles of our tagged rules in ip filter input; null when there is no such chain or no nft (no unit firewall
+// here). Any other failure (nft busy, timed out) rejects: a rule may be there
 Remote.prototype.handles = function () {
     return this.nft(['-a', 'list', 'chain', 'ip', 'filter', 'input']).then((out) => out.split('\n')
         .filter((l) => l.indexOf('comment "' + TAG + '"') >= 0)
         .map((l) => /# handle (\d+)\s*$/.exec(l)).filter(Boolean).map((m) => m[1]), (e) => {
+        if (!/No such file or directory|ENOENT/.test(e.message)) throw e;
         if (e.message !== this.listError) this.h.log('remote: ' + e.message + ' (no rule needed or possible)');
         this.listError = e.message;
         return null;
     });
 };
+// a failure leaves the port maybe open: tried again until it works (while the remote is off: on, the rule is ensureRule's)
 Remote.prototype.removeRules = function () {
+    clearTimeout(this.retry);
     return this.handles().then((hs) => (hs || []).reduce((p, h) =>
-        p.then(() => this.nft(['delete', 'rule', 'ip', 'filter', 'input', 'handle', h])), Promise.resolve()));
+        p.then(() => this.nft(['delete', 'rule', 'ip', 'filter', 'input', 'handle', h])), Promise.resolve()))
+        .then(() => { this.removeError = null; }, (e) => {
+            if (e.message !== this.removeError) this.h.log('remote: rule not removed, tried again: ' + e.message);
+            this.removeError = e.message;
+            this.retry = setTimeout(() => { if (!this.run) this.queued(() => this.removeRules()); }, this.o.remoteRetryMs);
+            if (this.retry.unref) this.retry.unref();
+        });
+};
+// F4: the port opened only while our child holds it on the hotspot address; else no rule
+Remote.prototype.rule = function (r) {
+    if (this.run !== r) return undefined;
+    return r.addr && r.listening.indexOf(r.addr) >= 0 ? this.ensureRule(r.iface, r.port) : this.removeRules();
 };
 Remote.prototype.ensureRule = function (iface, port) {
     return this.handles().then((hs) => {
@@ -157,9 +180,10 @@ Remote.prototype.state = function () {
 };
 Remote.prototype.say = function () { this.h.emit(this.state()); };
 
-Remote.prototype.set = function (on) {
+Remote.prototype.set = function (on, lang) {
     if (on !== true && on !== false) { this.say(); return this.q; }
     this.lastError = null;
+    this.lang = LANGS.indexOf(lang) >= 0 ? lang : 'en';
     if (!on) {
         if (this.run) this.h.log('remote: off');
         this.stop();
@@ -176,7 +200,7 @@ Remote.prototype.off = function (why) {
     return this.queued(() => this.removeRules());
 };
 Remote.prototype.cleanup = function () { return this.queued(() => this.removeRules()); };
-Remote.prototype.close = function () { this.stop(); return this.queued(() => this.removeRules()); };
+Remote.prototype.close = function () { this.stop(); clearTimeout(this.retry); return this.queued(() => this.removeRules()); };
 
 Remote.prototype.start = function () {
     this.stop();   // on again: a new token, the old one dead
@@ -193,7 +217,7 @@ Remote.prototype.start = function () {
     try { uid = this.h.uid(); } catch (e) { return fail(e.message); }
     if (!(uid > 0)) return fail('no web uid');
     const r = { token: crypto.randomBytes(16).toString('hex'), uid, port, iface, addr: null, listening: [], child: null,
-        server: null, client: null, timers: [], expiry: null, until: 0 };
+        server: null, client: null, timers: [], expiry: null, until: 0, acted: 0 };
     this.run = r;
     try { this.listenSock(r); } catch (e) { this.stop(); return fail('remote.sock: ' + e.message); }
     r.addr = this.addr(iface);
@@ -204,11 +228,12 @@ Remote.prototype.start = function () {
         r.addr = a;
         this.send(r, { addr: a });
         this.say();
+        this.queued(() => this.rule(r));
     }, o.remotePollMs));
-    r.timers.push(setInterval(() => this.queued(() => (this.run === r ? this.ensureRule(iface, port) : undefined)), o.remoteRuleMs));
+    r.timers.push(setInterval(() => this.queued(() => this.rule(r)), o.remoteRuleMs));
     this.touch(r);
     this.h.log('remote: on, port ' + port + ' on ' + iface + (r.addr ? '' : ' (no address yet)'));
-    return this.queued(() => this.removeRules()).then(() => this.queued(() => (this.run === r ? this.ensureRule(iface, port) : undefined)));
+    return this.queued(() => this.removeRules()).then(() => this.queued(() => this.rule(r)));
 };
 // the time left starts again (turned on, a phone action)
 Remote.prototype.touch = function (r) {
@@ -250,14 +275,15 @@ Remote.prototype.onPhone = function (r, c) {
     let buf = '';
     c.on('data', (d) => {
         buf += d;
-        if (buf.length > LINE_MAX) { this.h.log('remote: remote.sock line too long'); c.destroy(); return; }
         let i;
         while ((i = buf.indexOf('\n')) >= 0) {
             const line = buf.slice(0, i);
             buf = buf.slice(i + 1);
             if (this.run !== r) return;
+            if (line.length > LINE_MAX) { this.h.log('remote: remote.sock line too long'); c.destroy(); return; }
             try { this.onLine(r, c, line); } catch (e) { this.h.log('remote: ' + e.message); }
         }
+        if (buf.length > LINE_MAX) { this.h.log('remote: remote.sock line too long'); c.destroy(); }
     });
     c.on('error', () => { /* close follows */ });
     c.on('close', () => { if (r.client === c) r.client = null; });
@@ -268,26 +294,29 @@ Remote.prototype.onLine = function (r, c, line) {
     try { m = JSON.parse(line); } catch (e) { /* bad: answered below */ }
     const rid = m && typeof m.rid === 'number' && m.rid >= 0 && m.rid === Math.floor(m.rid) ? m.rid : null;
     const reply = (x) => c.write(JSON.stringify(Object.assign({ rid }, x)) + '\n');
-    if (!m || typeof m !== 'object') return reply({ error: 'bad request' });
+    if (!m || typeof m !== 'object') return reply({ error: 'Not allowed' });
     const idRe = this.h.idRe || ID_RE;
     switch (m.cmd) {
     case 'search': {
         const q = cleanQuery(m.q);
-        return q ? this.act(r, reply, { ev: 'remote_do', do: 'search', q }) : reply({ error: 'bad search' });
+        return q ? this.act(r, reply, { ev: 'remote_do', do: 'search', q }) : reply({ error: 'Type a search (at most 200 characters)' });
     }
     case 'play':
-        return typeof m.id === 'string' && idRe.test(m.id) ? this.act(r, reply, { ev: 'remote_do', do: 'play', id: m.id }) : reply({ error: 'bad id' });
+        return typeof m.id === 'string' && idRe.test(m.id) ? this.act(r, reply, { ev: 'remote_do', do: 'play', id: m.id }) : reply({ error: 'That link is not a YouTube video' });
     case 'status': {
         const s = this.h.status();
         return reply({ status: { state: s.state, id: s.id || null, title: s.title || null, elapsed: s.elapsed || 0, total: s.total || 0 } });
     }
     default:
         this.h.log('remote: refused ' + (/^\w{1,20}$/.test(String(m.cmd)) ? m.cmd : '?'));
-        return reply({ error: 'not allowed' });
+        return reply({ error: 'Not allowed' });
     }
 };
 Remote.prototype.act = function (r, reply, ev) {
     if (!this.h.hasApp()) return reply({ error: 'RideTube is not open on the car' });
+    const now = Date.now();
+    if (now - r.acted < this.o.remoteActMs) return reply({ error: 'Too fast: wait a moment' });   // each search costs a fetch
+    r.acted = now;
     this.h.log('remote: phone ' + ev.do);   // (never the query or the id)
     this.h.emit(ev);
     this.touch(r);
@@ -324,7 +353,7 @@ Remote.prototype.spawn = function (r) {
             else if (Array.isArray(m.listening) && this.run === r) {
                 const before = JSON.stringify(this.state());
                 r.listening = m.listening.filter((a) => typeof a === 'string');
-                if (JSON.stringify(this.state()) !== before) this.say();
+                if (JSON.stringify(this.state()) !== before) { this.say(); this.queued(() => this.rule(r)); }
             }
         }
     });
@@ -337,12 +366,25 @@ Remote.prototype.spawn = function (r) {
     };
     child.on('error', (e) => gone(e.message));
     child.on('exit', (code, sig) => gone(sig || 'exit ' + code));
-    this.send(r, { token: r.token, port: r.port, sock: this.o.remoteSock, page: this.o.remotePage });
+    this.send(r, { token: r.token, port: r.port, sock: this.o.remoteSock, page: this.o.remotePage, strings: this.o.remoteStrings, lang: this.lang || 'en' });
     this.send(r, { addr: r.addr });
     return true;
 };
 
 /* ---- the server (child, the web uid) ------------------------------------------------------------------------ */
+
+// the page in one language: its words (remote-strings.json: language -> English key -> text) in a JSON block the
+// page's script reads (not run: no CSP hash needed), html lang set; the CSP carries the hash of the script as served
+function buildPage(html, strings, lang) {
+    const l = LANGS.indexOf(lang) >= 0 ? lang : 'en';
+    const words = strings && typeof strings[l] === 'object' ? strings[l] : {};
+    const block = '<script type="application/json" id="words">' + JSON.stringify(words).replace(/</g, '\\u003c') + '</script>';
+    const page = String(html).replace('<html lang="en">', '<html lang="' + l + '">').replace('<!--words-->', block);
+    const script = (/<script>([\s\S]*?)<\/script>/.exec(page) || [null, ''])[1];
+    const csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-" + crypto.createHash('sha256').update(script).digest('base64') +
+        "'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+    return { page, csp };
+}
 
 function serve() {
     const emit = (o) => process.stdout.write(JSON.stringify(o) + '\n');
@@ -374,15 +416,15 @@ function serve() {
         s.on('error', () => { /* close follows */ });
         s.on('close', () => {
             if (sock === s) sock = null;
-            pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error('the car did not answer')); });
+            pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error('The car did not answer')); });
             pending.clear();
             setTimeout(connect, 1000);
         });
     };
     const ask = (req) => new Promise((resolve, reject) => {
-        if (!sock) { reject(new Error('the car did not answer')); return; }
+        if (!sock) { reject(new Error('The car did not answer')); return; }
         const id = ++rid;
-        const timer = setTimeout(() => { pending.delete(id); reject(new Error('the car did not answer')); }, ASK_MS);
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error('The car did not answer')); }, ASK_MS);
         pending.set(id, { resolve, reject, timer });
         sock.write(JSON.stringify(Object.assign({}, req, { rid: id })) + '\n');
     });
@@ -421,32 +463,33 @@ function serve() {
             reply(res, 200, 'text/html; charset=utf-8', page, { 'Content-Security-Policy': csp });
             return;
         }
-        if (p !== '/api/status' && p !== '/api/send') { json(res, 404, { error: 'not found' }); return; }
-        const ip = String(req.socket.remoteAddress);
-        if (lockedOut(ip)) { json(res, 429, { error: 'too many wrong codes: turn the phone remote off and on in the car' }); return; }
+        if (p !== '/api/status' && p !== '/api/send') { json(res, 404, { error: 'Not found' }); return; }
+        // the token first: the right one always passes (a flood of wrong ones never locks the passenger out)
         if (!authorised(req)) {
+            const ip = String(req.socket.remoteAddress);
+            if (lockedOut(ip)) { json(res, 429, { error: 'Too many wrong codes: turn the phone remote off and on in the car' }); return; }
             if (req.headers.authorization) failed(ip);   // a wrong token; a request without one guesses nothing
-            json(res, 401, { error: 'scan the code on the car\'s screen' });
+            json(res, 401, { error: 'Scan the code on the car\'s screen' });
             return;
         }
         const fail = (e) => json(res, 503, { error: e.message });
         if (p === '/api/status' && req.method === 'GET') {
-            ask({ cmd: 'status' }).then((m) => (m.status ? json(res, 200, m.status) : json(res, 502, { error: 'no status' })), fail);
+            ask({ cmd: 'status' }).then((m) => (m.status ? json(res, 200, m.status) : json(res, 502, { error: 'The car did not answer' })), fail);
         } else if (p === '/api/send' && req.method === 'POST') {
-            if (!/^application\/json\b/.test(req.headers['content-type'] || '')) { json(res, 415, { error: 'JSON only' }); return; }
+            if (!/^application\/json\b/.test(req.headers['content-type'] || '')) { json(res, 415, { error: 'Only JSON is accepted' }); return; }
             readBody(req, (err, text) => {
-                if (err) { json(res, 413, { error: 'too large' }); return; }
+                if (err) { json(res, 413, { error: 'Too long' }); return; }
                 let b = null;
                 try { b = JSON.parse(text); } catch (e) { /* below */ }
                 const t = b && typeof b === 'object' && typeof b.text === 'string' && b.text.length <= TEXT_MAX ? b.text : null;
-                if (t === null) { json(res, 400, { error: 'send {"text"}' }); return; }
+                if (t === null) { json(res, 400, { error: 'Paste a YouTube link or type a search' }); return; }
                 const id = parseLink(t), q = id === undefined ? cleanQuery(t) : null;
-                if (id === null) { json(res, 400, { error: 'not a YouTube video link' }); return; }
-                if (id === undefined && !q) { json(res, 400, { error: 'type a search (at most ' + Q_MAX + ' characters)' }); return; }
+                if (id === null) { json(res, 400, { error: 'That link is not a YouTube video' }); return; }
+                if (id === undefined && !q) { json(res, 400, { error: 'Type a search (at most 200 characters)' }); return; }   // (Q_MAX)
                 const req2 = id ? { cmd: 'play', id } : { cmd: 'search', q };
-                ask(req2).then((m) => (m.ok ? json(res, 200, { ok: true, did: req2.cmd }) : json(res, 422, { error: String(m.error || 'refused') })), fail);
+                ask(req2).then((m) => (m.ok ? json(res, 200, { ok: true, did: req2.cmd }) : json(res, 422, { error: String(m.error || 'Not allowed') })), fail);
             });
-        } else json(res, 405, { error: 'method not allowed' });
+        } else json(res, 405, { error: 'Not allowed' });
     };
 
     /* -- listening: 127.0.0.1 always, the hotspot address while there is one -- */
@@ -487,10 +530,11 @@ function serve() {
             if (!cfg) {
                 cfg = m;
                 tokenHash = hash(cfg.token);
-                try { page = fs.readFileSync(cfg.page, 'utf8'); } catch (e) { page = '<!doctype html><title>RideTube</title><p>The page is missing.'; say('page: ' + e.message); }
-                const script = (/<script>([\s\S]*?)<\/script>/.exec(page) || [null, ''])[1];
-                csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-" + crypto.createHash('sha256').update(script).digest('base64') +
-                    "'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+                let html = '<!doctype html><title>RideTube</title><p>The page is missing.', strings = null;
+                try { html = fs.readFileSync(cfg.page, 'utf8'); } catch (e) { say('page: ' + e.message); }
+                try { strings = JSON.parse(fs.readFileSync(cfg.strings, 'utf8')); } catch (e) { say('strings: ' + e.message); }
+                const built = buildPage(html, strings, cfg.lang);
+                page = built.page; csp = built.csp;
                 connect();
                 sync();
             } else if (m.addr !== undefined) {
@@ -502,6 +546,6 @@ function serve() {
     process.stdin.on('end', () => process.exit(0));
 }
 
-module.exports = { Remote, parseLink, cleanQuery, TAG, Q_MAX };
+module.exports = { Remote, parseLink, cleanQuery, buildPage, TAG, Q_MAX, LANGS };
 
 if (require.main === module && process.argv[2] === 'serve') serve();

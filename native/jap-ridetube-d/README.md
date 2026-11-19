@@ -118,7 +118,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 | `{"cmd":"health"}` | 0.4.0, cap `health`: → one `{"ev":"health","key","ok","text"}` per check as each one ends, then `{"ev":"health","done":true}`, all within about 8 s. The 12 keys: `service`, `node`, `node22`, `python`, `ytdlp`, `uid`, `lease`, `dns`, `tls`, `free`, `audio`, `socket` (`ytdlp`, `dns` and `tls` from `ytfetch.py check --json`, run as the fetch uid). Every key is answered; a check that could not run says `not checked: <why>`. `text` is one short line with no address (IP, MAC), video id or title |
 | `{"cmd":"related","id":".."}` | 0.4.0, cap `related`: → `{"ev":"related","id","items":[item]}` (the TVHTML5 watch-next tiles, the video itself left out, ≤ 100; kept 10 min per video and language) or `{"ev":"related","id","error"}` (`bad id`, `related offline`) |
 | `{"cmd":"ytdlp","auto":bool}` | 0.4.1, cap `ytdlp` (WP6): `auto` optional (sets the self-update on or off) → `{"ev":"ytdlp","auto","version","bundled","checking"}`. Not implemented yet: `error` `not implemented ytdlp` |
-| `{"cmd":"remote","on":bool}` | 0.5.0, cap `remote` (WP9): the phone remote on or off (below, "Phone remote") → `{"ev":"remote","on","url","expires"}`: `url` `http://<hotspot address>:8471/#<token>` while on and the hotspot has an address, else null; `expires` the seconds left; `error` (with `on` false) when it could not be turned on. `on` not a bool: only that event. Off by default; off again after 30 min unused, when the app goes away, when its server stops and at exit |
+| `{"cmd":"remote","on":bool,"lang"?}` | 0.5.0, cap `remote` (WP9): the phone remote on or off (below, "Phone remote"); `lang` the app's language for the phone page (`en fr nl de es it pt ru zh-CN`, anything else: `en`) → `{"ev":"remote","on","url","expires"}`: `url` `http://<hotspot address>:8471/#<token>` while on and the hotspot has an address, else null; `expires` the seconds left; `error` (with `on` false) when it could not be turned on. `on` not a bool: only that event. Off by default; off again after 1 hour with no phone action, when the app goes away, when its server stops and at exit |
 | `{"cmd":"proxy","mode":"off\|wireproxy\|tailscale"}` | 0.5.0, not yet implemented, cap `proxy` (WP11): → `{"ev":"net","proxy","ok"}`; until then `error` `not implemented proxy` |
 
 A command not in this table: `{"ev":"error","msg":"unknown cmd <cmd>"}`. A command of the table whose package has not
@@ -331,28 +331,35 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
   name, and nobody can list it. The thumbnail folder is 0700 and `positions.json` (where each video was left, the
   watch history) 0600. The account tokens live in `state/` (0700).
 
-## Phone remote (`remote.js`, `remote.html`)
+## Phone remote (`remote.js`, `remote.html`, `remote-strings.json`)
 
 A passenger's phone on the car's own Wi-Fi hotspot opens a page the car serves and sends a YouTube link (played) or a
 search; nothing is hosted outside the car. The design follows the MGU Store's phone page (mgu-updater `js/web.js`).
-`remote.js` has the protocol details in its header. The trust boundaries:
+`remote.js` has the protocol details in its header. The page and every word it shows (the server's errors too) are in
+the app's language: the app sends its language (its Language setting; Auto: the car's) with `on`, root keeps it only
+if it is one of RideTube's nine, and the server puts that language's words (`remote-strings.json`, English keys) in a
+JSON block of the page that its script reads. The trust boundaries:
 
 - **The hotspot to the HTTP server.** The server is a child (`node remote.js serve`) under its own **web uid**
   (`state/uids.json` `web`, picked from 60000 down, never the fetch uid nor an app's, never written for the uplink: it
   has no internet), no supplementary groups, `env {}`, cwd `/`. It listens on 127.0.0.1 and on `wlan_bridge`'s IPv4
   address only, port 8471, only while the remote is on. The unit's firewall gets one rule (`nft insert rule ip filter
-  input iifname "wlan_bridge" tcp dport 8471 accept comment "jap-ridetube-d-remote"`) while on; tagged rules are removed
-  at off, at start and at exit, and the rule is put back every 30 s if a ruleset load dropped it.
+  input iifname "wlan_bridge" tcp dport 8471 accept comment "jap-ridetube-d-remote"`) only while the child holds the
+  port on the hotspot address; tagged rules are removed at off, at start and at exit (a failed removal, nft busy or
+  timed out, is tried again every 5 s), and the rule is put back every 30 s if a ruleset load dropped it.
 - **The phone to the API.** `GET /` is a static page (no external assets, CSP with its script's hash, no-store, no
   referrer). Every API call needs `Authorization: Bearer <token>`: 128 random bits, new at each on, carried in the
-  QR code's URL fragment (never sent in a request line, never logged), compared in constant time (sha256 of both). An
-  address with 10 wrong tokens gets 429 until the remote is off. Bodies: JSON only, 16 KiB at most; the text 2 KiB,
+  QR code's URL fragment (never sent in a request line, never logged), compared in constant time (sha256 of both). The
+  right token always passes; an address with 10 wrong tokens gets 429 for wrong or missing ones until the remote is off. Bodies: JSON only, 16 KiB at most; the text 2 KiB,
   a search 200 characters; a link must be a YouTube video link (parsed to its id), any other link is refused.
 - **The web uid to root.** The child reaches the daemon only through `/run/jap-ridetube-d/remote.sock` (made 0600
   under umask, then `<web uid>:root`), separate from `ctl.sock` and handled by its own three-command allowlist:
   `search`, `play`, `status`. Root checks the id (`ID_RE`) and the query again; nothing else (auth, sign_out, feed,
-  positions, send_logs, stop...) is answered. `status` gives the state, id, title and times only.
-- **Root to the app.** A phone action reaches the app as `remote_do`; the app decides (the parked rule, the screen).
+  positions, send_logs, stop...) is answered. `status` gives the state, id, title and times only. A phone action less
+  than 1 s after the last one is refused (each search costs a fetch). Queries lose control characters, zero-width and
+  direction marks (they end up in the HMI's recent-search labels).
+- **Root to the app.** A phone action reaches the app as `remote_do`; the app checks it again (only while on, the id,
+  200 characters) and carries it out as a tap would (the parked rule, the screen).
   The remote cannot be turned on while `ctl.sock` is shared with every app (else any app could open the port).
 
 ## Build and test

@@ -582,6 +582,10 @@ mgu.run({
             if (mode === 'player') { goBack(browse); return true; }
             if (mode === 'channel' && edge) { goBack(chanFrom); return true; }
             if (mode === 'list' && edge) { goBack('pl'); return true; }
+            // the question pages: as their Cancel (logs, Video while driving: the setting off) or OK (the clock warning)
+            if (mode === 'logs') { model.dropLogs(); goBack(logsFrom); return true; }
+            if (mode === 'risk') { goBack(riskFrom); return true; }
+            if (mode === 'clock') { goBack(clockFrom); return true; }
             return false;
         });
 
@@ -703,8 +707,9 @@ mgu.run({
         const PAGES = {};
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
         const PLAYING = ['player', 'Playing', (cv, x, y, c) => { [10, 20, 14].forEach((h, k) => cv.roundRect(x - 15 + k * 11, y + 8 - h, 8, h + 8, 2, c)); }];
+        const railSel = () => (mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode === 'list' ? 'pl' : mode);   // the entry lit
         function drawRail(cv) {
-            const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode === 'list' ? 'pl' : mode, bottom = H + (cv.own ? cv.extra : 0);
+            const sel = railSel(), bottom = H + (cv.own ? cv.extra : 0);
             const rail = RAIL.concat(RAIL_MORE.filter((r) => model.can(r[3])));
             const items = cv.own && model.active() ? rail.concat([PLAYING]) : rail;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
@@ -852,8 +857,8 @@ mgu.run({
         /*
          * A browsing page: rows of tiles, each a shelf (its own sideways offset, a title) or a grid's row of four.
          * sections [{ title, items, grid }]. Scrolls up and down (a finger, the controller); targets for the tiles
-         * shown, one more past each edge of a shelf and the rows next to the ones shown (the controller moves
-         * there, onPageFocus brings it into view). Keys: <mode letter>:<row>:<video id>.
+         * shown and one more past each edge of a shelf, on every row, drawn or not (the knob turns through all of
+         * them, whatever the page's scroll; onPageFocus brings the one it is on into view). Keys: <mode letter>:<row>:<video id>.
          */
         const view = {};                                  // mode -> { sy, off: { row: first tile shown } }
         const vs = (m) => view[m] || (view[m] = { sy: 0, max: 0, off: {} });
@@ -880,10 +885,9 @@ mgu.run({
             const where = {}, letter = mode[0];
             const ys = L.rows.map((r) => TOP + r.y - st.sy);
             const vis = L.rows.map((r, i) => ys[i] + r.h > TOP && ys[i] < bottom);
-            const first = vis.indexOf(true), lastV = vis.lastIndexOf(true), after = [];
+            const after = [];
             cv.clip(RAIL_W, TOP, W - RAIL_W, bottom - TOP);
             L.rows.forEach((row, ri) => {
-                if (ri < first - 1 || ri > lastV + 1) return;
                 const y = ys[ri], shown = vis[ri], n = row.items.length, ty = y + (row.title ? HEAD_H : 0);
                 if (row.title && shown) {
                     const tw = cv.text(fit(cv, row.title, 30, 1100, LITB), X0, y + 34, 30, '#ffffff', LITB);
@@ -899,9 +903,10 @@ mgu.run({
                         after.push(chevron(cv, W - 48, ty + TH / 2, 1, () => { st.off[ri] = Math.min(max, off + PER_ROW); dirty = true; }, letter + ':' + ri + ':>'));
                     }
                 }
-                for (let i = Math.max(0, off - 1); i <= Math.min(n - 1, off + PER_ROW); i++) {
+                // every tile a target (the knob enters a row at its first tile, whatever its offset), the ones in view drawn
+                for (let i = 0; i < n; i++) {
                     const r = row.items[i], x = X0 + (i - off) * PITCH, key = letter + ':' + ri + ':' + r.id;
-                    if (shown && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : row.pl ? drawPlTile : drawTile)(cv, r, x, ty, key);
+                    if (shown && i >= off - 1 && i <= off + PER_ROW && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : row.pl ? drawPlTile : drawTile)(cv, r, x, ty, key);
                     const run = r.act ? () => r.act() : row.chan ? () => openChannel(r) : row.pl ? () => openPlaylist(r) : () => play(r.id, r, row.all);
                     if (cv.own) { cv.target(x - 10, ty - 10, TW + 20, TILE_H + 16, run, key, 18); where[key] = { ri, i }; }
                 }
@@ -1187,6 +1192,7 @@ mgu.run({
             // the bar
             const bw = SW - x0 - 60, tot = model.total, ex = model.extras && model.extras.id === model.id ? model.extras : null;
             const at = (ms) => x0 + Math.round(bw * Math.min(1, tot ? ms / tot : 0));
+            let barT = null;                // the bar's target, recorded last: the knob seeks there, so turning ends on it
             cv.roundRect(x0, by, bw, 10, 5, '#3f3f3f');
             if (tot > 0) {
                 const el = shownAt(), bf = focusKey === 'ov:bar';
@@ -1195,7 +1201,7 @@ mgu.run({
                 if (ex) ex.chapters.forEach((k) => { if (k[0] > 0) cv.fillRect(at(k[0]) - 2, by, 4, 10, C.bg); });
                 if (bf) cv.circle(at(el), by + 5, 24, '#3ea6ff');
                 cv.circle(at(el), by + 5, bf || scrub ? 18 : 14, C.red);
-                tg(x0 - 10, by - 36, bw + 20, 80, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                barT = () => tg(x0 - 10, by - 36, bw + 20, 80, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
                 seekBar = { x0, w: bw, y0: by - 40, y1: by + 50, s: cv.place.scale };
                 scrubBubble(cv, at(el), by - 6);
                 cv.text(clock(el), x0, by + 50, 26, C.dim, LIT);
@@ -1247,6 +1253,7 @@ mgu.run({
                 cv.text(tt, x0 + 30, SH - 54, 26, wn ? '#ffd27a' : '#7ee07e', LIT);
             }
             if (model.state === 'error') cv.text(fit(cv, translate('Error: ') + (model.error ? whole(model.error) : translate('playback stopped')), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
+            if (barT) barT();
         }
         function drawFull(cv) {
             const pl = cv.place, s = pl.scale, SW = pl.w / s, SH = pl.h / s, dx = pl.ox / s, dy = pl.oy / s;
@@ -1359,7 +1366,9 @@ mgu.run({
                 cv.text(whole('Send logs'), lx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
             }
             if (mid) cv.text(fit(cv, mid, 30, SW - 2 * LX, LIT), cx, model.state === 'preparing' || live || up || (model.state === 'error' && model.id) ? cy + 150 : cy + 10, 30, '#ffffff', { literal: true, align: 'center' });
-            // bottom: the progress bar (the track, the part played, the scrubber) and the times
+            // bottom: the progress bar (the track, the part played, the scrubber) and the times; its target recorded
+            // last (after Skip and Start over): the knob seeks there, so turning ends on it
+            let barT = null;
             if (model.total > 0 && live) {
                 cv.gradientRect(0, SH - 150, SW, 150, [[0, '#00000000'], [1, '#000000d8']]);
                 const x0 = LX + 40, w = SW - x0 - 40, y = SH - 66, el = shownAt(), fx = x0 + Math.round(w * Math.min(1, el / model.total)), bf = focusKey === 'ov:bar';
@@ -1370,7 +1379,7 @@ mgu.run({
                 if (ex) ex.chapters.forEach((c) => { if (c[0] > 0) cv.fillRect(at(c[0]) - 2, y, 4, 6, '#000000'); });
                 if (bf) cv.circle(fx, y + 3, 18, '#ffffff');
                 cv.circle(fx, y + 3, bf || scrub ? 14 : 10, C.red);
-                tg(x0 - 10, y - 34, w + 20, 70, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                barT = () => tg(x0 - 10, y - 34, w + 20, 70, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
                 seekBar = { x0, w, y0: y - 40, y1: y + 40, s };
                 scrubBubble(cv, fx, y - 8);
                 const tt0 = clock(el) + ' / ' + clock(model.total), tw = cv.textWidth(tt0, 24, LITB), chap = model.chapter();
@@ -1397,6 +1406,7 @@ mgu.run({
                 cv.roundRect(hx, hy, tw, 64, 32, '#000000b0');
                 cv.text(t, hx + tw / 2, hy + 44, 34, '#ffffff', { literal: true, font: 'bold', align: 'center' });
             }
+            if (barT) barT();
             hmiIcons(cv);
         }
         // the HMI's home and back arrow column: its taps stay the HMI's, but no black hole over the video;
@@ -1408,6 +1418,22 @@ mgu.run({
             cv.circle(52, 398, 30, '#00000099');
             cv.polyline([[60, 384], [46, 398], [60, 412]], 5, '#ffffff');
             cv.xf();
+        }
+        // the controller (in use) on a key this frame lacks - the page changed under it (a tile played, a question page
+        // came up, the player went to podcast mode): onto the page's own place. Never onto I agree or Send: a push there acts
+        const SAFE = { risk: 'risk:cancel', logs: 'logs:cancel', clock: 'clock:ok', player: 'ov:play' };
+        // A question page just come up takes it onto its safe answer, even from the rail
+        let focusMode = null;
+        function keepFocus(cv) {
+            const fresh = mode !== focusMode;
+            focusMode = mode;
+            if (!focusKey || !cv.own || !ctx.focus) return;
+            const ks = cv.targets.map((x) => x.key), ask = fresh && /^(risk|logs|clock)$/.test(mode) && ks.indexOf(SAFE[mode]) >= 0;
+            if (!ks.length || (ks.indexOf(focusKey) >= 0 && !ask)) return;
+            const k = [SAFE[mode], backKey[mode]].find((x) => x && ks.indexOf(x) >= 0)
+                || ks.find((x) => !/^rail:|:[<>]$|^risk:ok$|^logs:send$/.test(x)) || (ks.indexOf('rail:' + railSel()) >= 0 ? 'rail:' + railSel() : ks[0]);
+            focusKey = k;
+            setImmediate(() => ctx.focus(k));
         }
         let last = null, lastRev = -1, lastT = 0, upNext = null;
         function render() {
@@ -1436,6 +1462,7 @@ mgu.run({
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }
                 last = cv;
+                keepFocus(cv);
             }
             return ui.image('VIEW_GFX', last);
         }

@@ -55,7 +55,6 @@
   "Searching": "正在搜索",
   "Try again from Search": "请重新搜索",
   "Nothing found for": "未找到相关视频",
-  "Search (bar button) to find videos": "请按「搜索」查找视频",
   "Try other words": "试试其他关键词",
   "Results for": "搜索结果：",
   "Signing in needs a newer jap-ridetube-d tool on the car": "登录需要较新版本的 jap-ridetube-d",
@@ -224,5 +223,11 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "行驶中播放视频仅供乘客观看，且车辆须已编码为允许行驶中播放视频。驾驶员绝不能观看。请遵守当地法律。使用此设置的风险由您自行承担：RideTube 的作者对任何误用、事故、罚款或损失概不负责。",
   "Video while driving": "行驶中播放视频",
   "I agree": "我同意",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "同意需要使用触摸屏。选择任意页面即可保持关闭"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "同意需要使用触摸屏。选择任意页面即可保持关闭",
+  "Type a search": "输入搜索",
+  "Typing works only while parked": "仅在停车时可输入",
+  "Opens the keyboard": "打开键盘",
+  "Clear recent searches": "清除最近搜索",
+  "Menu": "菜单",
+  "Account, settings, logs": "账户、设置、日志"
 }

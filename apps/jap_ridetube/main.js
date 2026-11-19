@@ -6,13 +6,15 @@
  * /dev/shm/mgu-video-ridetube, which the renderer (mgu-render) draws in this app's layer (op 19).
  *
  * Screens (a TV-style dark look: navy, neon pink and cyan, big 16:9 tiles):
- *   VIEW  (first) drawn page. Browsing: an icon rail on the left (Search = the HMI menu, Home, Subscriptions,
+ *   VIEW  (first) drawn page. Browsing: an icon rail on the left (Search, Home, Subscriptions,
  *         Watch later, Playlists; the page shown lit, a pink mark) and, right of it, rows of tiles: a 320 x 180
  *         thumb (its length in a pill), the title in up to two lines, "channel · 125K views · 1 day ago".
  *           home     shelves, each titled, turned sideways on their own: Continue watching, the account's
  *                    Home shelves (daemon `feed` shelves; an older daemon: its flat list as a grid), Watch later
  *           subs     the account's Subscriptions shelves (or the flat list as a grid)
- *           wl / results   a grid, four a row: Watch later, a search's results
+ *           wl       a grid, four a row: Watch later
+ *           results  the Search page (search.js): Type a search (parked only), Menu (the HMI menu), the recent
+ *                    searches, Clear; then the last search's results, a grid
  *           pl       the account's playlists, a grid (the first video's picture, the video count); one opens as
  *           list     its videos, a grid (the controller pushed left at the rail: back to Playlists)
  *           Not signed in, on a feed page: the sign-in card, a QR code for google.com/device and the code to
@@ -30,7 +32,7 @@
  *         bar: none where the kit runs the screen (the rail and the overlay have its jobs; a "Playing" rail entry
  *         while something plays), so the pages reach the screen's bottom. Where the HMI runs the screen: all five
  *         (Play/Pause, -10 s, +10 s, the list / Now playing, Search), and the header has the page tabs (G.frame).
- *   MAIN  HMI menu (Search): the HMI's speller, Now playing, Results, Home, Subscriptions, Watch later, Playlists, recent
+ *   MAIN  HMI menu (the Search page's Menu): the HMI's speller, Now playing, Results, Home, Subscriptions, Watch later, Playlists, recent
  *         searches / suggestions, then Sign in / Sign out (pressed twice), Send logs to the developer.
  *   logs  (a VIEW page) Send logs to the developer: from the menu or the player's error screen. Asks first (Send /
  *         Cancel; where the HMI runs the screen, the menu entry pressed again sends), then "Sending...", then the
@@ -191,26 +193,45 @@ mgu.run({
         // Shorts (tiles the service marks short): only with the Show Shorts setting, a channel's own page too
         const noShorts = (items) => (settings.get('shorts') ? items : items.filter((r) => !r.short));
 
-        /* ---------- searches: recent first, then suggestions ---------- */
-        const RECENT = path.join(ctx.dataDir, 'recent.json');
-        let recent = [];
-        try { recent = JSON.parse(fs.readFileSync(RECENT, 'utf8')).filter((s) => typeof s === 'string').slice(0, SLOTS.length); } catch (e) { /* none yet */ }
+        /* ---------- searches: the Search page (search.js) and the HMI menu: recent first, then suggestions ---------- */
+        // a short note over the page's foot for 4 s (a live tile pressed, typing pressed while driving)
+        let note = null;
+        const flash = (text) => { note = { text, until: Date.now() + 4000 }; dirty = true; };
+        let toResults = false;                       // a search just run: its results brought into view when they come
+        const page = require('./search')({ settings, legacy: path.join(ctx.dataDir, 'recent.json'), model, t: translate, whole, message,
+            moving: () => parked.moving(), type: () => typeSearch(true), run: (q) => search(q), menu: () => ui.open('MAIN'), flash,
+            changed: () => { showSlots(); dirty = true; }, glyphs: () => ({ KEYS, ALL, X: (cv, x, y, c) => xGlyph(cv, x, y, 22, c) }) });
         let suggestions = SUGGEST.map(translate);
-        const slots = () => recent.concat(suggestions.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length);
+        const slots = () => { const recent = page.list(); return recent.concat(suggestions.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length); };
         const showSlots = () => slots().forEach((s, i) => ui.text(SLOTS[i], s, 0, 'Text', { literal: true }));
         function search(q) {
             q = String(q || '').trim();
-            if (!q) return;
-            recent = [q].concat(recent.filter((s) => s.toLowerCase() !== q.toLowerCase())).slice(0, SLOTS.length);
-            try { fs.writeFileSync(RECENT, JSON.stringify(recent)); } catch (e) { log.warn('recent: ' + e.message); }
+            if (!q) return false;
+            page.add(q);
             showSlots();
             model.search(q);               // (not sent: the results screen says why)
+            toResults = true;
             show('results');
             ui.open('VIEW');
+            return true;
         }
-        ui.onClick('BTN_SEARCH', () => spell(ctx.app, translate('Search videos'))
-            .then((t) => search(t))
-            .catch((e) => { log.error('speller', e); ui.text('MAIN_INFO', translate('The keyboard did not open: ') + (e.message || e), 0, 'Text', { literal: true }); }));
+        // the HMI's speller, parked only: from the menu (an error or why not in its info line), or the Search page
+        // (left without a search: back on the page)
+        function typeSearch(fromPage) {
+            if (parked.moving()) {
+                if (fromPage) flash(translate('Typing works only while parked'));
+                else ui.text('MAIN_INFO', translate('Typing works only while parked'), 0, 'Text', { literal: true });
+                return Promise.resolve();
+            }
+            return spell(ctx.app, translate('Search videos'))
+                .then((t) => { if (!search(t) && fromPage) ui.open('VIEW'); })
+                .catch((e) => {
+                    const why = translate('The keyboard did not open: ') + (e.message || e);
+                    log.warn('speller: ' + (e.message || e));
+                    if (fromPage) { flash(why); ui.open('VIEW'); } else ui.text('MAIN_INFO', why, 0, 'Text', { literal: true });
+                });
+        }
+        ui.onClick('BTN_SEARCH', () => typeSearch(false));
         SLOTS.forEach((b, i) => ui.onClick(b, () => search(slots()[i])));
         ui.onClick('BTN_NOW', () => { show('player'); ui.open('VIEW'); });
         ui.onClick('BTN_CLOSE', () => { closeVideo(); info(); });
@@ -271,10 +292,9 @@ mgu.run({
         let queue = [], prevs = [], nextAt = 0;
         const playable = (r) => r && !r.act && !r.live && /^[\w-]{11}$/.test(r.id);
         // a live stream (live:true): the service can't play it yet, so it is not asked; a short note on the page says so
-        let liveNote = 0;
         // stay: play it without showing the player (a steering-wheel skip while browsing, the sound playing on)
         function play(id, it, list, stay) {
-            if (it && it.live) { liveNote = Date.now() + 4000; dirty = true; return; }
+            if (it && it.live) { flash(whole("Live videos can't be played yet")); return; }
             if (!stay) show('player');
             if (list) {
                 const i = list.findIndex((r) => r.id === id);
@@ -567,6 +587,10 @@ mgu.run({
             if (mode === 'player') { goBack(browse); return true; }
             if (mode === 'channel' && edge) { goBack(chanFrom); return true; }
             if (mode === 'list' && edge) { goBack('pl'); return true; }
+            // the question pages: as their Cancel (logs, Video while driving: the setting off) or OK (the clock warning)
+            if (mode === 'logs') { if (!model.logs || model.logs.state !== 'sending') { model.dropLogs(); goBack(logsFrom); } return true; }   // (sending: stays for the code)
+            if (mode === 'risk') { goBack(riskFrom); return true; }
+            if (mode === 'clock') { goBack(clockFrom); return true; }
             return false;
         });
 
@@ -688,8 +712,9 @@ mgu.run({
         const PAGES = {};
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
         const PLAYING = ['player', 'Playing', (cv, x, y, c) => { [10, 20, 14].forEach((h, k) => cv.roundRect(x - 15 + k * 11, y + 8 - h, 8, h + 8, 2, c)); }];
+        const railSel = () => (mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode === 'list' ? 'pl' : mode);   // the entry lit
         function drawRail(cv) {
-            const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode === 'list' ? 'pl' : mode, bottom = H + (cv.own ? cv.extra : 0);
+            const sel = railSel(), bottom = H + (cv.own ? cv.extra : 0);
             const rail = RAIL.concat(RAIL_MORE.filter((r) => model.can(r[3])));
             const items = cv.own && model.active() ? rail.concat([PLAYING]) : rail;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
@@ -699,7 +724,7 @@ mgu.run({
                 glyph(cv, cx, cy - 8, c, bg);
                 cv.text(translate(name === 'Subscriptions' ? 'Subs' : name === 'Watch later' && dict.Later ? 'Later' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
                 const th = Math.min(84, Math.floor(pitch));     // (more entries: the targets as tall as the pitch, never overlapping)
-                if (cv.own) cv.target(16 + RX, cy + 4 - th / 2, 92, th, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
+                if (cv.own) cv.target(16 + RX, cy + 4 - th / 2, 92, th, () => show(m === 'search' ? 'results' : m), 'rail:' + m, 16);
             });
         }
 
@@ -837,8 +862,8 @@ mgu.run({
         /*
          * A browsing page: rows of tiles, each a shelf (its own sideways offset, a title) or a grid's row of four.
          * sections [{ title, items, grid }]. Scrolls up and down (a finger, the controller); targets for the tiles
-         * shown, one more past each edge of a shelf and the rows next to the ones shown (the controller moves
-         * there, onPageFocus brings it into view). Keys: <mode letter>:<row>:<video id>.
+         * shown and one more past each edge of a shelf, on every row, drawn or not (the knob turns through all of
+         * them, whatever the page's scroll; onPageFocus brings the one it is on into view). Keys: <mode letter>:<row>:<video id>.
          */
         const view = {};                                  // mode -> { sy, off: { row: first tile shown } }
         const vs = (m) => view[m] || (view[m] = { sy: 0, max: 0, off: {} });
@@ -865,10 +890,9 @@ mgu.run({
             const where = {}, letter = mode[0];
             const ys = L.rows.map((r) => TOP + r.y - st.sy);
             const vis = L.rows.map((r, i) => ys[i] + r.h > TOP && ys[i] < bottom);
-            const first = vis.indexOf(true), lastV = vis.lastIndexOf(true), after = [];
+            const after = [];
             cv.clip(RAIL_W, TOP, W - RAIL_W, bottom - TOP);
             L.rows.forEach((row, ri) => {
-                if (ri < first - 1 || ri > lastV + 1) return;
                 const y = ys[ri], shown = vis[ri], n = row.items.length, ty = y + (row.title ? HEAD_H : 0);
                 if (row.title && shown) {
                     const tw = cv.text(fit(cv, row.title, 30, 1100, LITB), X0, y + 34, 30, '#ffffff', LITB);
@@ -884,9 +908,10 @@ mgu.run({
                         after.push(chevron(cv, W - 48, ty + TH / 2, 1, () => { st.off[ri] = Math.min(max, off + PER_ROW); dirty = true; }, letter + ':' + ri + ':>'));
                     }
                 }
-                for (let i = Math.max(0, off - 1); i <= Math.min(n - 1, off + PER_ROW); i++) {
+                // every tile a target (the knob enters a row at its first tile, whatever its offset), the ones in view drawn
+                for (let i = 0; i < n; i++) {
                     const r = row.items[i], x = X0 + (i - off) * PITCH, key = letter + ':' + ri + ':' + r.id;
-                    if (shown && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : row.pl ? drawPlTile : drawTile)(cv, r, x, ty, key);
+                    if (shown && i >= off - 1 && i <= off + PER_ROW && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : row.pl ? drawPlTile : drawTile)(cv, r, x, ty, key);
                     const run = r.act ? () => r.act() : row.chan ? () => openChannel(r) : row.pl ? () => openPlaylist(r) : () => play(r.id, r, row.all);
                     if (cv.own) { cv.target(x - 10, ty - 10, TW + 20, TILE_H + 16, run, key, 18); where[key] = { ri, i }; }
                 }
@@ -945,12 +970,16 @@ mgu.run({
         let OFF = translate('The RideTube service (jap-ridetube-d) is not running');
         let OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, count, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
+        // the Search page (search.js): its row of tiles, then the results. A search just run, answered: the results
+        // scrolled up under the row's foot, and the controller (when in use) onto the first one
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (model.searching) return say(cv, message('Searching "{query}"...', { query: model.q }));
-            if (model.searchError) return say(cv, translate('Search: ') + whole(model.searchError), translate('Try again from Search'));
-            if (!model.results.length) return say(cv, model.q ? message('Nothing found for "{query}"', { query: model.q }) : translate('Search (bar button) to find videos'), model.q ? translate('Try other words') : null);
-            drawPage(cv, [{ title: message('Results for “{query}”', { query: model.q }), items: shown(model.results), grid: true }]);
+            const jump = toResults && !model.searching && model.results.length > 0;
+            if (!model.searching) toResults = false;
+            if (jump) vs('results').sy = HEAD_H + TILE_H + SHELF_GAP + 2;    // (row 1's top: layout's y 10 + row 0 - 8)
+            drawPage(cv, page.sections(shown));
+            const first = jump && focusKey && Object.keys(laid.where).find((k) => /^r:1:/.test(k));
+            if (first && ctx.focus) setImmediate(() => ctx.focus(first));
         }
         function drawFeed(cv, which) {
             const f = model.feeds[which], a = model.auth.state;
@@ -1168,6 +1197,7 @@ mgu.run({
             // the bar
             const bw = SW - x0 - 60, tot = model.total, ex = model.extras && model.extras.id === model.id ? model.extras : null;
             const at = (ms) => x0 + Math.round(bw * Math.min(1, tot ? ms / tot : 0));
+            let barT = null;                // the bar's target, recorded last: the knob seeks there, so turning ends on it
             cv.roundRect(x0, by, bw, 10, 5, '#3f3f3f');
             if (tot > 0) {
                 const el = shownAt(), bf = focusKey === 'ov:bar';
@@ -1176,7 +1206,7 @@ mgu.run({
                 if (ex) ex.chapters.forEach((k) => { if (k[0] > 0) cv.fillRect(at(k[0]) - 2, by, 4, 10, C.bg); });
                 if (bf) cv.circle(at(el), by + 5, 24, '#3ea6ff');
                 cv.circle(at(el), by + 5, bf || scrub ? 18 : 14, C.red);
-                tg(x0 - 10, by - 36, bw + 20, 80, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                barT = () => tg(x0 - 10, by - 36, bw + 20, 80, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
                 seekBar = { x0, w: bw, y0: by - 40, y1: by + 50, s: cv.place.scale };
                 scrubBubble(cv, at(el), by - 6);
                 cv.text(clock(el), x0, by + 50, 26, C.dim, LIT);
@@ -1228,6 +1258,7 @@ mgu.run({
                 cv.text(tt, x0 + 30, SH - 54, 26, wn ? '#ffd27a' : '#7ee07e', LIT);
             }
             if (model.state === 'error') cv.text(fit(cv, translate('Error: ') + (model.error ? whole(model.error) : translate('playback stopped')), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
+            if (barT) barT();
         }
         function drawFull(cv) {
             const pl = cv.place, s = pl.scale, SW = pl.w / s, SH = pl.h / s, dx = pl.ox / s, dy = pl.oy / s;
@@ -1340,7 +1371,9 @@ mgu.run({
                 cv.text(whole('Send logs'), lx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
             }
             if (mid) cv.text(fit(cv, mid, 30, SW - 2 * LX, LIT), cx, model.state === 'preparing' || live || up || (model.state === 'error' && model.id) ? cy + 150 : cy + 10, 30, '#ffffff', { literal: true, align: 'center' });
-            // bottom: the progress bar (the track, the part played, the scrubber) and the times
+            // bottom: the progress bar (the track, the part played, the scrubber) and the times; its target recorded
+            // last (after Skip and Start over): the knob seeks there, so turning ends on it
+            let barT = null;
             if (model.total > 0 && live) {
                 cv.gradientRect(0, SH - 150, SW, 150, [[0, '#00000000'], [1, '#000000d8']]);
                 const x0 = LX + 40, w = SW - x0 - 40, y = SH - 66, el = shownAt(), fx = x0 + Math.round(w * Math.min(1, el / model.total)), bf = focusKey === 'ov:bar';
@@ -1351,7 +1384,7 @@ mgu.run({
                 if (ex) ex.chapters.forEach((c) => { if (c[0] > 0) cv.fillRect(at(c[0]) - 2, y, 4, 6, '#000000'); });
                 if (bf) cv.circle(fx, y + 3, 18, '#ffffff');
                 cv.circle(fx, y + 3, bf || scrub ? 14 : 10, C.red);
-                tg(x0 - 10, y - 34, w + 20, 70, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
+                barT = () => tg(x0 - 10, y - 34, w + 20, 70, run(() => model.toggle()), 'ov:bar', 0, turnSeek);
                 seekBar = { x0, w, y0: y - 40, y1: y + 40, s };
                 scrubBubble(cv, fx, y - 8);
                 const tt0 = clock(el) + ' / ' + clock(model.total), tw = cv.textWidth(tt0, 24, LITB), chap = model.chapter();
@@ -1378,6 +1411,7 @@ mgu.run({
                 cv.roundRect(hx, hy, tw, 64, 32, '#000000b0');
                 cv.text(t, hx + tw / 2, hy + 44, 34, '#ffffff', { literal: true, font: 'bold', align: 'center' });
             }
+            if (barT) barT();
             hmiIcons(cv);
         }
         // the HMI's home and back arrow column: its taps stay the HMI's, but no black hole over the video;
@@ -1389,6 +1423,22 @@ mgu.run({
             cv.circle(52, 398, 30, '#00000099');
             cv.polyline([[60, 384], [46, 398], [60, 412]], 5, '#ffffff');
             cv.xf();
+        }
+        // the controller (in use) on a key this frame lacks - the page changed under it (a tile played, a question page
+        // came up, the player went to podcast mode): onto the page's own place. Never onto I agree or Send: a push there acts
+        const SAFE = { risk: 'risk:cancel', logs: 'logs:cancel', clock: 'clock:ok', player: 'ov:play' };
+        // A question page just come up takes it onto its safe answer, even from the rail
+        let focusMode = null;
+        function keepFocus(cv) {
+            const fresh = mode !== focusMode;
+            focusMode = mode;
+            if (!focusKey || !cv.own || !ctx.focus) return;
+            const ks = cv.targets.map((x) => x.key), ask = fresh && /^(risk|logs|clock)$/.test(mode) && ks.indexOf(SAFE[mode]) >= 0;
+            if (!ks.length || (ks.indexOf(focusKey) >= 0 && !ask)) return;
+            const k = [SAFE[mode], backKey[mode]].find((x) => x && ks.indexOf(x) >= 0)
+                || ks.find((x) => !/^rail:|:[<>]$|^risk:ok$|^logs:send$/.test(x)) || (ks.indexOf('rail:' + railSel()) >= 0 ? 'rail:' + railSel() : ks[0]);
+            focusKey = k;
+            setImmediate(() => ctx.focus(k));
         }
         let last = null, lastRev = -1, lastT = 0, upNext = null;
         function render() {
@@ -1408,8 +1458,8 @@ mgu.run({
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
                     else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (mode === 'risk') drawRisk(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
-                    if (browsing() && now < liveNote) {
-                        const nt = whole("Live videos can't be played yet"), nw = cv.textWidth(nt, 26, LIT) + 60, ny = H + (cv.own ? cv.extra : 0) - 96;
+                    if (browsing() && note && now < note.until) {
+                        const nt = note.text, nw = cv.textWidth(nt, 26, LIT) + 60, ny = H + (cv.own ? cv.extra : 0) - 96;
                         cv.roundRect(MID - nw / 2, ny, nw, 64, 32, '#4a3a10');
                         cv.text(nt, MID, ny + 42, 26, '#ffd27a', { literal: true, align: 'center' });
                     }
@@ -1417,6 +1467,7 @@ mgu.run({
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }
                 last = cv;
+                keepFocus(cv);
             }
             return ui.image('VIEW_GFX', last);
         }

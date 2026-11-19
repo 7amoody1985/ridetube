@@ -88,7 +88,6 @@
   "Searching \"{query}\"...": "Cerco \"{query}\"...",
   "Try again from Search": "Riprova da Cerca",
   "Nothing found for \"{query}\"": "Nessun risultato per \"{query}\"",
-  "Search (bar button) to find videos": "Cerca (tasto della barra) per trovare video",
   "Try other words": "Prova altre parole",
   "Results for “{query}”": "Risultati per “{query}”",
   "Signing in needs a newer jap-ridetube-d tool on the car": "L'accesso richiede un jap-ridetube-d più recente in auto",
@@ -192,5 +191,11 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "Il video in marcia è solo per i passeggeri, in un'auto codificata per il video in movimento. Il conducente non deve mai guardarlo. Rispetta la legge del luogo in cui guidi. Usi questa impostazione a tuo rischio: gli autori di RideTube non sono responsabili di alcun uso improprio, incidente, multa o danno.",
   "Video while driving": "Video in marcia",
   "I agree": "Accetto",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "Per accettare serve il touchscreen. Scegli una pagina per lasciarlo spento"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "Per accettare serve il touchscreen. Scegli una pagina per lasciarlo spento",
+  "Type a search": "Scrivi una ricerca",
+  "Typing works only while parked": "Si scrive solo a veicolo fermo",
+  "Opens the keyboard": "Apre la tastiera",
+  "Clear recent searches": "Cancella ricerche recenti",
+  "Menu": "Menu",
+  "Account, settings, logs": "Account, impostazioni, log"
 }

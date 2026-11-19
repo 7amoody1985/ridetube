@@ -318,7 +318,7 @@ test('Romanian ș ț Ș Ț draw as ş ţ Ş Ţ, an accented letter the atlas lac
 // the RideTube strings a catalog must have: wrapped call sites, the tables drawn through translate / whole, app.json's labels
 function rideTubeStrings() {
     const read = (f) => fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8');
-    const src = read('apps/jap_ridetube/main.js') + '\n' + read('apps/jap_ridetube/health.js');
+    const src = read('apps/jap_ridetube/main.js') + '\n' + read('apps/jap_ridetube/health.js') + '\n' + read('apps/jap_ridetube/search.js');
     const LIT = String.raw`('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")`;
     const un = (s) => s.slice(1, -1).replace(/\\(.)/g, '$1');
     const out = new Set();
@@ -351,7 +351,7 @@ function rideTubeStrings() {
     ['Settings', 'Done', 'Back', 'Version'].forEach(add);
     return [...out];
 }
-const RT_SOURCES = ['apps/jap_ridetube/main.js', 'apps/jap_ridetube/health.js', 'apps/jap_ridetube/yt.js', 'apps/jap_ridetube/app.json', 'kit/runtime/sheet.js']
+const RT_SOURCES = ['apps/jap_ridetube/main.js', 'apps/jap_ridetube/health.js', 'apps/jap_ridetube/search.js', 'apps/jap_ridetube/yt.js', 'apps/jap_ridetube/app.json', 'kit/runtime/sheet.js']
     .map((f) => fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8')).join('\n').replace(/\\(['"])/g, '$1');
 const RU = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'ru.json'), 'utf8'));
 const BRAND = /^(RideTube|720p)$/;   // names, no row

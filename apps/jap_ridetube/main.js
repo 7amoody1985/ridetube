@@ -76,7 +76,7 @@ const SEARCH_MS = 8000;                                  // a search with no ans
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'];
 const SLOTS = ['BTN_S1', 'BTN_S2', 'BTN_S3', 'BTN_S4', 'BTN_S5', 'BTN_S6'];
 const TABS = ['home', 'subs', 'wl', 'pl'];
-const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Playlists', list: 'Playlist', results: 'Results' };
+const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Playlists', list: 'Playlist', results: 'Results', hist: 'History', health: 'Health check' };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
@@ -148,7 +148,9 @@ mgu.run({
             dirty = true;
         }
         // what Home, Subscriptions, Watch later and Search show (a channel's own page shows all)
-        const shown = (items) => items.filter((r) => hidden.indexOf(r.channel) < 0 && !(r.members && !settings.get('members')));
+        const shown = (items) => noShorts(items).filter((r) => hidden.indexOf(r.channel) < 0 && !(r.members && !settings.get('members')));
+        // Shorts (tiles the service marks short): only with the Show Shorts setting, a channel's own page too
+        const noShorts = (items) => (settings.get('shorts') ? items : items.filter((r) => !r.short));
 
         /* ---------- searches: recent first, then suggestions ---------- */
         const RECENT = path.join(ctx.dataDir, 'recent.json');
@@ -175,6 +177,9 @@ mgu.run({
         ui.onClick('BTN_CLOSE', () => { closeVideo(); info(); });
         ui.onClick('BTN_RESULTS', () => { show('results'); ui.open('VIEW'); });
         [['BTN_HOME', 'home'], ['BTN_SUBS', 'subs'], ['BTN_WL', 'wl'], ['BTN_PL', 'pl']].forEach(([b, m]) => ui.onClick(b, () => { show(m); ui.open('VIEW'); }));
+        // 0.4.0 services (caps; labels() hides the entries otherwise): History; the health check, run on each press
+        ui.onClick('BTN_HIST', () => { if (model.can('hist')) { show('hist'); ui.open('VIEW'); } });
+        ui.onClick('BTN_HEALTH', () => { if (model.can('health')) { model.runHealth(); show('health'); ui.open('VIEW'); } });
         // Send logs to the developer: the logs page asks first; pressed again there (the HMI's own screen has no Send button), sends
         let logsFrom = 'home';
         function openLogs() {
@@ -242,7 +247,30 @@ mgu.run({
         // Next / Previous in the list the video came from: the steering wheel (steer, below), the podcast view's Next,
         // autoplay. Previous: back to the start when more than 3 s in or
         // nothing is before it (as music players do), else the video before it
-        function skipNext(stay) {
+        // watch-next (cap related): the first video YouTube lists after the one playing worth playing (not itself, not
+        // one just played, not a Short unless they show); undefined while that list is on its way (asked here once)
+        function relatedNext() {
+            const r = model.related;
+            if (!model.can('related') || !model.id) return null;
+            if (!r || r.id !== model.id) return model.loadRelated(model.id) ? undefined : null;
+            if (r.loading) return undefined;
+            return r.items.find((x) => playable(x) && x.id !== model.id && !prevs.some((p) => p.id === x.id) && (!x.short || settings.get('shorts'))) || null;
+        }
+        // a next waiting for that list {id, stay, until}: played when it comes (also hidden: the wheel works then),
+        // dropped once another video plays, it was closed, or after 20 s
+        let relWait = null;
+        model.onRelated = () => {
+            const w = relWait;
+            relWait = null;
+            if (w && w.id === model.id && Date.now() < w.until && (model.active() || model.state === 'ended')) { skipNext(w.stay, true); changed(); }
+        };
+        // related: with the list done, the first related video (a steering-wheel tap, autoplay)
+        function skipNext(stay, related) {
+            if (!queue.length && related) {
+                const r = relatedNext();
+                if (r === undefined) { relWait = { id: model.id, stay, until: Date.now() + 20000 }; return true; }
+                if (r) queue.push(r);
+            }
             if (!queue.length) return false;
             if (model.id) prevs.push(current());
             const r = queue.shift();
@@ -272,15 +300,19 @@ mgu.run({
         // an X: the Close control's glyph
         const xGlyph = (cv, x, y, r, c) => { cv.line(x - r, y - r, x + r, y + r, 6, c); cv.line(x - r, y + r, x + r, y - r, 6, c); };
         // from render: ended with a next one -> 5 s to see what comes, then it plays (back to the list cancels)
+        // the list done: the first related video instead (watch-next)
         function autoNext() {
-            if (model.state !== 'ended' || !queue.length || mode !== 'player') { nextAt = 0; return null; }
+            const up = model.state === 'ended' && mode === 'player' ? queue[0] || relatedNext() : null;
+            if (!up) { nextAt = 0; return null; }
             if (!nextAt) { nextAt = Date.now() + 5000; wake(); }
-            if (Date.now() < nextAt) return queue[0];
-            skipNext();
+            if (Date.now() < nextAt) return up;
+            skipNext(false, true);
             return null;
         }
-        let lastPlay = null, lastList = null, lastAcct = null;
+        let lastPlay = null, lastList = null, lastAcct = null, lastCaps = null;
         function labels() {
+            const caps = [model.can('hist'), model.can('health')];
+            if (String(caps) !== lastCaps && ui.visible) { lastCaps = String(caps); ui.visible('BTN_HIST', caps[0]); ui.visible('BTN_HEALTH', caps[1]); }
             const p = model.state === 'playing' ? 'Pause' : 'Play';
             if (p !== lastPlay) { lastPlay = p; ui.text('BTN_PLAY', translate(p)); }
             const l = mode === 'player' ? NAMES[browse] : model.active() ? 'Now playing' : 'Player';
@@ -393,6 +425,17 @@ mgu.run({
             return ex.segments.find((g) => sbMode(g[2]) === 'ask' && t >= g[0] && t < g[1] - 1000) || null;
         }
         const sbJump = (g) => () => model.skip(g[1] - shownAt());
+        // "Resumed at 12:34 · Start over" for 5 s after a play the service resumed (a notice, nothing to answer): a press
+        // goes back to the start. Drawn by the player and podcast mode where the kit runs the screen; true when drawn
+        function resumePill(cv, x, y, h, size, tg, run) {
+            const r = model.resumedNow(Date.now());
+            if (!r) return false;
+            const tt = whole('Resumed at {time}', { time: clock(r.ms) }) + ' · ' + whole('Start over'), w = cv.textWidth(tt, size, LITB) + h, f = focusKey === 'ov:resume';
+            cv.roundRect(x, y, w, h, h / 2, f ? '#ffffff' : '#3a3a3ae6');
+            cv.text(tt, x + h / 2, y + Math.round(h / 2 + size * 0.36), size, f ? '#0f0f0f' : '#ffffff', LITB);
+            tg(x, y, w, h, run(() => model.startOver()), 'ov:resume', h / 2);
+            return true;
+        }
 
         /* ---------- the steering wheel's next / previous ---------- */
         // The car's media player never sees them while an app plays (no forwarded button reaches it), so the app reads
@@ -413,6 +456,17 @@ mgu.run({
             held.steps++;
             turnSeek((held.dir === 'next' ? 1 : -1) * (held.steps > HOLD_FAST ? 3 : 1));
         }
+        // a tap of next, first match wins: inside an asked SponsorBlock segment, skip it; the next video in the list;
+        // the list done, the next chapter; else the first related video (watch-next)
+        function wheelNext(stay) {
+            const seg = askSeg();
+            if (seg) { sbJump(seg)(); return; }
+            if (queue.length) { skipNext(stay); return; }
+            const ex = live() && model.extras && model.extras.id === model.id ? model.extras : null;
+            const ch = ex ? ex.chapters.find((k) => k[0] > model.elapsed + 1000) : null;
+            if (ch) { model.skip(ch[0] - model.elapsed); return; }
+            skipNext(stay, true);
+        }
         function steer(v) {
             const raw = v && typeof v === 'object' ? v.operationPushButtonAudioAutomaticTuningSteeringWheel : v;
             if (raw === 3 || raw === 'SIGNAL_UNBEFUELLT') return;   // no signal: nothing changes (a hold goes on)
@@ -426,7 +480,7 @@ mgu.run({
                 if (!was.steps) {                                 // a tap: skip
                     log.info('steering wheel: ' + was.dir);
                     const stay = mode !== 'player';
-                    if (was.dir === 'next') skipNext(stay); else skipPrev(stay);
+                    if (was.dir === 'next') wheelNext(stay); else skipPrev(stay);
                     changed();
                 }
             }
@@ -460,7 +514,7 @@ mgu.run({
         let ovUntil = 0, qrUntil = 0;   // qrUntil: the On phone QR card shows until then
         function wake() { ovUntil = Date.now() + OVERLAY_MS; dirty = true; }
         // it stays while there is no moving picture to look at
-        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || !!scrub;
+        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || !!scrub || !!model.resumedNow(Date.now());
         const overlay = () => pinned() || Date.now() < ovUntil || Date.now() < qrUntil;
         // a tap beside the controls (no target): hides them
         if (ctx.onTap) ctx.onTap(() => { if (mode === 'player' && !pinned() && overlay()) { ovUntil = 0; dirty = true; } });
@@ -580,7 +634,12 @@ mgu.run({
             ['pl', 'Playlists', (cv, x, y, c) => listGlyph(cv, x, y, 36, c)],
         ];
         // rail entries of later packages: [mode, name, glyph, cap], shown when the service has the cap (none yet)
-        const RAIL_MORE = [];
+        const RAIL_MORE = [
+            ['hist', 'History', (cv, x, y, c) => {                // a clock with an arrow turning back
+                cv.arc(x, y, 14, 17.5, 20, 300, c); cv.quad([[x - 22, y - 5], [x - 7, y - 6], [x - 15, y - 17], [x - 22, y - 5]], c);
+                cv.line(x, y + 1, x, y - 8, 3.5, c); cv.line(x, y, x + 6, y + 4, 3.5, c);
+            }, 'hist'],
+        ];
         // pages of later packages: mode -> draw(cv), dispatched by render (none yet)
         const PAGES = {};
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
@@ -595,7 +654,8 @@ mgu.run({
                 if (on) { cv.roundRect(18, cy - 38, 90, 84, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
                 cv.text(translate(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
-                if (cv.own) cv.target(16, cy - 38, 92, 84, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
+                const th = Math.min(84, Math.floor(pitch));     // (more entries: the targets as tall as the pitch, never overlapping)
+                if (cv.own) cv.target(16, cy + 4 - th / 2, 92, th, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
             });
         }
 
@@ -711,7 +771,8 @@ mgu.run({
             const tog = { id: '::hide', title: hid ? translate('Show this channel') : translate('Hide this channel'), sub: hid ? translate('Hidden from Home, Subscriptions, Search') : translate('From Home, Subscriptions and Search'),
                 act: () => toggleHidden(c.title), glyph: hid ? SHOW : BLOCK };
             drawPage(cv, (c.shelves && c.shelves.length ? c.shelves : [{ title: translate('Videos'), items: c.items, grid: true }])
-                .map((s, i) => (i === 0 ? Object.assign({}, s, { title: c.title + (s.title ? ' · ' + s.title : ''), items: [tog].concat(s.items) }) : s)));
+                .map((s, i) => (i === 0 ? Object.assign({}, s, { title: c.title + (s.title ? ' · ' + s.title : ''), items: [tog].concat(noShorts(s.items)) }) : Object.assign({}, s, { items: noShorts(s.items) })))
+                .filter((s, i) => i === 0 || s.items.length));   // (a Shorts shelf, Shorts not shown: gone)
         }
 
         // a shelf's arrow for touch: shifts it by four tiles. Its target goes before the tiles' (a tap on it is not
@@ -823,6 +884,7 @@ mgu.run({
         }
         const OFF = translate('The RideTube service (jap-ridetube-d) is not running');
         const OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
+        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, C, focus: () => focusKey, X0, TOP, H, W, OFF, OFF2 });
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
             if (model.searching) return say(cv, message('Searching "{query}"...', { query: model.q }));
@@ -1060,6 +1122,8 @@ mgu.run({
                 cv.roundRect(x0, SH - 100, w2, 72, 36, f ? '#3ea6ff' : '#ffffff');
                 cv.text(tt, x0 + 40, SH - 52, 30, f ? '#ffffff' : C.bg, LITB);
                 tg(x0, SH - 100, w2, 72, run(sbJump(ask)), 'ov:sbskip', 36);
+            } else if (resumePill(cv, x0, SH - 100, 72, 30, tg, run)) {
+                // (the resume notice)
             } else if (model.toast && Date.now() < model.toast.until) {
                 const tt = model.toast.warn ? model.toast.text : translate(model.toast.text), w2 = cv.textWidth(tt, 26, LIT) + 60, wn = model.toast.warn;
                 cv.roundRect(x0, SH - 96, w2, 64, 32, wn ? '#4a3a10' : '#1f3d1f');
@@ -1196,7 +1260,8 @@ mgu.run({
                 cv.text(tt0, x0, SH - 22, 24, '#ffffff', LITB);
                 if (chap) cv.text(fit(cv, '·  ' + chap, 24, w - tw - 20, LIT), x0 + tw + 14, SH - 22, 24, '#dddddd', LIT);
             }
-            if (model.toast && Date.now() < model.toast.until && live) {
+            const resumed = live && resumePill(cv, LX + 40, SH - 170, 60, 26, tg, run);
+            if (!resumed && model.toast && Date.now() < model.toast.until && live) {
                 const tt = model.toast.warn ? model.toast.text : translate(model.toast.text), tw2 = cv.textWidth(tt, 24, LIT) + 48, wn = model.toast.warn;
                 cv.roundRect(LX + 40, SH - 150, tw2, 50, 25, wn ? '#4a3a10e6' : '#1f3d1fe6');
                 cv.text(tt, LX + 64, SH - 116, 24, wn ? '#ffd27a' : '#7ee07e', LIT);

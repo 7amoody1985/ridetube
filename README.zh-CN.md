@@ -2,13 +2,13 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-RideTube 是 BMW iDrive 7（MGU）上的非官方 YouTube 客户端。登录后可在车机浏览首页、订阅和稍后观看，也可搜索视频和频道、选择章节、调节画质及跳过 SponsorBlock 标记的片段。声音通过车机媒体播放器输出。
+RideTube 是 BMW iDrive 7（MGU）上的非官方 YouTube 客户端。登录后可在车机浏览首页、订阅、稍后观看和观看历史，也可搜索视频和频道、选择章节、调节画质及跳过 SponsorBlock 标记的片段。声音通过车机媒体播放器输出。
 
 翻译者：抖音「小白科技杂物社」 · BiliBili「小白151」 · GitHub [JackieZ123430](https://github.com/JackieZ123430)。
 
 ## 安装和首次使用
 
-1. 在 MGU Store 添加 `JustAnotherPU/ridetube` 和 `JustAnotherPU/mgu-apps` 的 Releases 来源。
+1. 在 MGU Store 添加 `JustAnotherPU/ridetube` 的 Releases 来源。从 0.4.0 起该来源自带 `jap-node22`，不必再添加 `JustAnotherPU/mgu-apps`。
 2. 连接车机 Internet Uplink，再从商店安装 RideTube。由商店解析播放器服务、渲染器和 Node.js 依赖。
 3. 打开「首页」，用手机扫描车机二维码并输入屏幕上的登录码。授权保存在车机，应用不会读取手机输入的密码。
 4. 从「搜索」「订阅」或「稍后观看」选择视频。默认停车时显示画面，行驶中切换为播客界面并继续播放声音。
@@ -19,6 +19,7 @@ RideTube 是 BMW iDrive 7（MGU）上的非官方 YouTube 客户端。登录后�
 
 - **填满屏幕**会裁剪画面，关闭时保留黑边。
 - **视频画质**可选择自动、720p、480p 或 360p。自动模式在 Wi-Fi 下选 720p，在移动网络下选 480p。
+- **Show Shorts**（显示 Shorts）默认关闭。
 - **SponsorBlock** 可按片段类型选择自动跳过、显示跳过按钮或关闭。
 - **停车时暂停阈值**按 12 V 蓄电池电量设置。播放会消耗车机电力和流量。
 - 登录、退出登录和搜索入口在应用菜单中。视频、频道和搜索词按原文显示。

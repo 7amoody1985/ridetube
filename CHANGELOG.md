@@ -5,12 +5,53 @@
 - Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
   the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
   GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
-- Service: playback recovers instead of stopping. A buffer underrun from the car's player starts the sound again
-  where it was (up to 3 times a minute), a failed audio start is tried once more, and a download that dies
-  mid-video is fetched again (twice) while the sound plays on. A quality change keeps the place, even in the
-  first 10 s, and a paused video stays paused. Quick taps (stop, quality, pause, seek) during a start no longer
-  restart or lose the video. The underrun handling and the command-sequence tests (`tools/test_sequences.js`)
-  come from @marilykinson-glitch's fork.
+
+## App 0.4.0
+
+- History: a new page on the rail and in the menu with the videos you watched, as YouTube lists them on your
+  account. It needs you signed in, like Subscriptions.
+- Health check: a new menu entry that runs the service's checks on the car and shows one row per check, ok or
+  failed, with Run again. A result the service reports as unknown shows a grey dash and does not count as a
+  failure.
+- Watch next: when the list runs out, the first related video plays after the usual 5 s countdown. The related
+  list comes from YouTube's own watch-next answer.
+- The steering wheel's next picks the first that applies: skip the SponsorBlock segment you are in (one set to show
+  a Skip button), the next video in the list, the next chapter, then the first related video. Held, it still seeks.
+- A video that starts where you left it says "Resumed at 12:34 · Start over" for 5 s. Start over goes back to the
+  start.
+- Lists hold up to 100 videos. Feeds used to stop at 20 and a playlist at 50.
+- Shorts show only when the new Show Shorts setting is on (it is off by default), and they never count toward a
+  list's 100.
+- These need service 0.4.0. With an older service the new menu entries stay hidden and the app works as before.
+
+## Service 0.4.0
+
+- `hello`: the app and the service say which version they are and what the service can do, so a new app knows
+  what an older service lacks. The service README lists every command and event, and a test keeps that table in
+  step with the code.
+- New feeds `hist` (your watch history) and `liked` (your Liked videos), and a new `related` command with what
+  YouTube plays after a video, kept 10 minutes. Feeds, search and related use the app's language and region.
+- Shorts are no longer dropped: they come with `short: true` and the app decides whether to show them.
+- Lists go up to 100 videos (they stopped at 50).
+- The History and Liked feed ids, the related videos and the Shorts handling come from @marilykinson-glitch's fork.
+- Playback recovers instead of stopping. A buffer underrun from the car's player starts the sound again where it
+  was (up to 3 times a minute), a failed audio start is tried once more, and a download that dies mid-video is
+  fetched again (twice) while the sound plays on. A quality change keeps the place, even in the first 10 s, and a
+  paused video stays paused. Quick taps (stop, quality, pause, seek) during a start no longer restart or lose the
+  video. The underrun handling and the command-sequence tests (`tools/test_sequences.js`) come from
+  @marilykinson-glitch's fork.
+- Sound that does not start (#10): the audio start is now tried a second time, and the health check shows
+  whether the car's audio service answers. This is not confirmed fixed yet: a log report from a car where it
+  happens still helps.
+- `health`: 12 checks (the service, Node, jap-node22, mgu-python, yt-dlp, the internet uid, the uplink lease,
+  DNS, TLS to youtube.com, free space, the car's audio service, the control socket). A log report now ends with
+  the same lines, redacted like the rest of the log.
+- Security: the control socket is now open only to the RideTube app's own user. Before, every app on the head
+  unit could use it. The service remembers that user across restarts, and makes the socket root only once
+  RideTube is uninstalled. The service also no longer acts as root inside the folders the downloader writes to:
+  it reads files there only as plain files and leaves deleting them to the downloader's user. It refuses to start
+  if its cache folder is not root's own.
+- Releases now ship `jap-node22` in RideTube's own catalog, the same file as mgu-apps publishes.
 
 ## App 0.3.14
 

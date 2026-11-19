@@ -24,8 +24,10 @@ Rendered on a computer with demo data (Blender open movie titles), not photograp
 RideTube plays videos on the BMW iDrive 7 head unit (MGU), installed from the MGU Store. Everything runs on
 the car, over the car's own internet connection:
 
-- **Home**, **Subscriptions**, **Watch later** and your **Playlists**, once you sign in on the car with the TV
-  device sign-in (a code to enter on your phone; RideTube never sees your password).
+- **Home**, **Subscriptions**, **Watch later**, **History** and your **Playlists**, once you sign in on the car
+  with the TV device sign-in (a code to enter on your phone; RideTube never sees your password).
+- When a list runs out, the first related video plays after a 5 s countdown. The steering wheel's next button
+  skips a segment, a video or a chapter, or goes to a related video.
 - Search, channel pages, chapters, the video quality and fill or fit for the picture.
 - Skip segments from [SponsorBlock](https://sponsor.ajay.app) (sponsors, self-promotion, intros and similar).
 - The sound plays through the car's own media player.
@@ -36,8 +38,11 @@ the car, over the car's own internet connection:
   head unit's storage gets low.
 - Signed in, what you watch goes to your YouTube history, as on a TV.
 - **Send logs to the developer** (in the menu, and on the error screen when a video fails) sends RideTube's
-  recent service log once, after you confirm, with the account details and the videos you watched removed. You
-  get a short code to add to your GitHub issue. Nothing is sent otherwise.
+  recent service log and the health check result once, after you confirm, with the account details and the
+  videos you watched removed. The health check lines carry no IP or MAC address, video id or title. You get a
+  short code to add to your GitHub issue. Nothing is sent otherwise.
+- **Health check** (in the menu) checks the service and its tools, the internet connection, free space and the
+  car's audio service, one row per check.
 
 ## Requirements
 
@@ -57,9 +62,9 @@ JustAnotherPU/ridetube
 
 and pick **Releases** when the Store asks what to follow. Type only `owner/repo`: the Store refuses a `:releases` at the end.
 
-Add `JustAnotherPU/mgu-apps` on Releases too (it is a default source once accepted): it has `jap-node22`, the
-Node.js 22 that RideTube's service runs on. Then install RideTube. The Store installs its service
-(`jap-ridetube-d`, the player, the yt-dlp fetcher and the video decoder) and, from mgu-apps, `jap-node22` with it.
+Then install RideTube. The Store installs its service (`jap-ridetube-d`, the player, the yt-dlp fetcher and the
+video decoder) and `jap-node22`, the Node.js 22 that the service runs on, with it. Since 0.4.0 this source carries
+`jap-node22` itself (the same file as `JustAnotherPU/mgu-apps` publishes), so you no longer need to add mgu-apps.
 
 ## Settings
 
@@ -69,6 +74,7 @@ Node.js 22 that RideTube's service runs on. Then install RideTube. The Store ins
 - **Fill the screen**: off by default (black bars); on, the picture is cropped to fill the screen.
 - **Video quality**: auto (720p on Wi-Fi, 480p on phone data), 720p, 480p or 360p.
 - **Show members-only videos**: off by default. A channel can also be hidden from its page.
+- **Show Shorts**: off by default.
 - **SponsorBlock**, per category: skip, show a Skip button, or off.
 - **Parked: pause when the 12 V battery is under** 60, 65 (default) or 70 %, or never.
 - **Sign in** / **Sign out** in the app's menu.
@@ -93,8 +99,9 @@ One car only so far. Reports from other cars are welcome in the issues.
 - Signing in uses the TV device sign-in that YouTube's TV apps use. The client id is read from YouTube's TV
   page when you sign in; RideTube ships none.
 - The switch from the first seconds of sound to the full file may be heard as a short break.
-- Any app installed on the head unit can drive RideTube's service through its control socket (it is open to the
-  group every app shares). Install only apps you trust; see `native/jap-ridetube-d/README.md`, "Security notes".
+- RideTube's service runs as root. Its control socket is open only to the RideTube app's own user. If the
+  service cannot read which user that is on a fresh install, the socket is open to every app until it can; see
+  `native/jap-ridetube-d/README.md`, "Security notes".
 
 ## Uninstall
 
@@ -120,6 +127,7 @@ node kit/tools/test_runtime.js && node kit/tools/test_life.js && node kit/tools/
   && node kit/tools/test_qr.js
 (cd native/jap-ridetube-d && node test/test_ytd.js && node test/test_thumb.js && python3.12 -I test/test_ytfetch.py)
 (cd native/ytdec && make test && make target)     # make target needs Docker
+node tools/test_sequences.js --seed 1     # command sequences against the service (stop, quality, pause, seek during a start)
 tools/check_node8.sh     # the car runs ytd.js and the app on Node 8: node --check in the node:8 image (Docker)
 ```
 

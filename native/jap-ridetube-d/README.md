@@ -38,8 +38,9 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
   Paused at that moment: `resume` does it (as after a STOP mid-file). Within 1.5 s of the head's end, or a
   seek past it, before `audio_ready`: the player and ytdec pause there, the state is `playing` with
   `buffering: true` (never `ended`), and `audio_ready` resumes there. The fetcher dying with only the
-  head: `error`. A cached video (audio.m4a there) plays it at once, as before. The switch itself
-  (a restart of the file, then the seek) may be audible: not measured on the car yet.
+  head: fetched again, twice at most (below, "Rules"), then `error`. A cached video (audio.m4a there) plays it at
+  once, as before. The switch itself (a restart of the file, then the seek) may be audible: not measured on the car
+  yet.
 - Buffering: if playback catches up with the download, the `state` event says `buffering: true`
   until enough data is there again.
 - Search: InnerTube (`/youtubei/v1/search`) from the daemon, through the same fetch helper.
@@ -70,7 +71,7 @@ drops to that uid itself (from `state/uids.json`); `thumb.js` does not, so the s
 as that uid. `check.sh` is the install `check`: yt-dlp (and `yt_dlp_ejs`) import from
 `ytdlp.pyz` in mgu-python, and node22 loads the JPEG decoder and `thumb.js`.
 
-## Control socket `/run/jap-ridetube-d/ctl.sock` (0660 root:tm_oap_app), JSON lines
+## Control socket `/run/jap-ridetube-d/ctl.sock` (`<app uid>:root` 0600, below "Security notes"), JSON lines
 
 The audio head is internal: `time.total` is the video's length, not the head's.
 
@@ -78,7 +79,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 
 | cmd | |
 |---|---|
-| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its YouTube requests (not used yet: WP1). `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `[]`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
+| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
 | `{"cmd":"status"}` | → `state` (and `time` when known) |
 | `{"cmd":"search","q":".."}` | → `results` (InnerTube), or `error` `empty search` / `search offline` |
 | `{"cmd":"thumb","id":".."}` | → `thumb` (cache `thumb.rgba` first, else `thumb.js` on the car; nothing if neither works, or if the length is neither 57600 nor 230400) |
@@ -88,20 +89,20 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 | `{"cmd":"seek","ms":N}` | absolute; `setTime` + ytdec `seek N` |
 | `{"cmd":"video","on":bool}` | ytdec `video 1/0` (audio unaffected) |
 | `{"cmd":"fill","on":bool}` | zoom while playing: ytdec again at the clock with `--fill` or without; the sound plays on; the same mode: nothing |
-| `{"cmd":"quality","quality":q}` | while playing, at another height (as `play`): the video fetched again from where it is; the same height: nothing |
+| `{"cmd":"quality","quality":q}` | while playing, at another height (as `play`): the video fetched again from where it is (in the first 10 s too), paused if it was; the same height: nothing. A pause, resume, seek, stop or play sent during that restart is applied or cancels it |
 | `{"cmd":"stop"}` | STOP, disconnect, ytdec `quit` (SIGKILL after 1 s) |
 | `{"cmd":"positions"}` | → `positions` |
 | `{"cmd":"auth_status"}` | → `auth` |
 | `{"cmd":"auth"}` | signed in, or a code still valid: → that `auth` again; else a new device code → `auth` `code`, then polled until `signed_in`, `signed_out` (expired, denied) or `error` |
 | `{"cmd":"sign_out"}` | deletes the account → `auth` `signed_out` |
-| `{"cmd":"feed","which":"home\|subs\|wl"}` | → `feed` (items, or error `signed out` / `feed offline` / `unknown feed`). 0.4.0 adds `hist` (`FEhistory`) and `liked` (`VLLL`), cap `hist` (WP1); until then they answer `unknown feed` |
+| `{"cmd":"feed","which":"home\|subs\|wl\|hist\|liked"}` | → `feed` (items, or error `signed out` / `feed offline` / `unknown feed`). `hist` (`FEhistory`, the watch history) and `liked` (`VLLL`) are new in 0.4.0, cap `hist`; an older service answers them `unknown feed` |
 | `{"cmd":"channels"}` | → `channels` (every subscription; kept 10 min), or its error as `feed` |
 | `{"cmd":"channel","id":"UC.."}` | → `channel` (its page), or its error as `feed`, or `bad channel` |
 | `{"cmd":"playlists"}` | → `playlists` (the account's playlists, or error as `feed`) |
 | `{"cmd":"playlist","id":".."}` | → `playlist` (its videos, or error as `feed`, or `bad playlist`) |
-| `{"cmd":"send_logs","app":"0.3.12"}` | the recent log, redacted, to the log relay (below, "Log reports") → `logs_sent` or `logs_error`; a second one while one is on its way is ignored |
-| `{"cmd":"health"}` | 0.4.0, cap `health` (WP4): → a stream of `{"ev":"health","key","ok","text"}`, then `{"ev":"health","done":true}`. Not implemented yet: `error` `not implemented health` |
-| `{"cmd":"related","id":".."}` | 0.4.0, cap `related` (WP1): → `{"ev":"related","id","items":[item]}` or `{"ev":"related","id","error"}`. Not implemented yet: `error` `not implemented related` |
+| `{"cmd":"send_logs","app":"0.4.0"}` | the recent log and the health check's lines, redacted, to the log relay (below, "Log reports") → `logs_sent` or `logs_error`; a second one while one is on its way is ignored |
+| `{"cmd":"health"}` | 0.4.0, cap `health`: → one `{"ev":"health","key","ok","text"}` per check as each one ends, then `{"ev":"health","done":true}`, all within about 8 s. The 12 keys: `service`, `node`, `node22`, `python`, `ytdlp`, `uid`, `lease`, `dns`, `tls`, `free`, `audio`, `socket` (`ytdlp`, `dns` and `tls` from `ytfetch.py check --json`, run as the fetch uid). Every key is answered; a check that could not run says `not checked: <why>`. `text` is one short line with no address (IP, MAC), video id or title |
+| `{"cmd":"related","id":".."}` | 0.4.0, cap `related`: → `{"ev":"related","id","items":[item]}` (the TVHTML5 watch-next tiles, the video itself left out, ≤ 100; kept 10 min per video and language) or `{"ev":"related","id","error"}` (`bad id`, `related offline`) |
 | `{"cmd":"ytdlp","auto":bool}` | 0.4.1, cap `ytdlp` (WP6): `auto` optional (sets the self-update on or off) → `{"ev":"ytdlp","auto","version","bundled","checking"}`. Not implemented yet: `error` `not implemented ytdlp` |
 | `{"cmd":"remote","on":bool}` | 0.5.0, not yet implemented, cap `remote` (WP9): → `{"ev":"remote","on","url","expires"}`; until then `error` `not implemented remote` |
 | `{"cmd":"proxy","mode":"off\|wireproxy\|tailscale"}` | 0.5.0, not yet implemented, cap `proxy` (WP11): → `{"ev":"net","proxy","ok"}`; until then `error` `not implemented proxy` |
@@ -141,14 +142,15 @@ Daemon → app:
 An item is `{id,title,channel,duration_s,meta}`, plus `watched_pct` (the account's progress on the tile), `start_s` (its
 resume point) and `members: true` (a members-only badge) when the tile has them; `meta` = the texts of the tile's second
 line as YouTube writes them, without
-the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none). `items`: every video tile once, page order, ≤ 50.
-`shelves`: YouTube's rows in page order (≤ 8, ≤ 12 tiles each, video tiles only, deduped per row, empty rows such as Shorts
+the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none), and `short: true` for a Short (the app decides
+whether it shows them). `items`: every video tile once, page order, ≤ 100.
+`shelves`: YouTube's rows in page order (≤ 8, ≤ 12 tiles each, video tiles and Shorts only, deduped per row, empty rows
 dropped); `title` is the row header, else the channel when all its tiles share one (Subscriptions' per-channel rows), else `""`.
 Watch later is a playlist with no rows: `shelves: []`, use `items`.
 `{"ev":"playlists","items":[{id,title,count,meta,thumb}]}` or `{"ev":"playlists","error"}`: the library page's playlists, page
 order, each once, Watch later left out (`feed` `wl` has it). `count` is the tile's "N videos" (null when it shows none), `meta`
 its other texts (`["Private","Updated today"]`), `thumb` the video whose picture the tile shows (ask it with `thumb`; null when
-none). `{"ev":"playlist","id","title","items":[item]}` or `{"ev":"playlist","id","error"}`: a playlist's videos (≤ 50), `title`
+none). `{"ev":"playlist","id","title","items":[item]}` or `{"ev":"playlist","id","error"}`: a playlist's videos (≤ 100), `title`
 its name (`""` when the page has none).
 `{"ev":"logs_sent","id":"ABC123"}`: the relay took the report, `id` is the code the user quotes in a GitHub issue.
 `{"ev":"logs_error","msg":"closed|busy|offline|failed"}`: reporting switched off at the relay (410), too many reports
@@ -167,7 +169,8 @@ The car signs in itself with the TV device sign-in: the client id and secret are
 `/o/oauth2/device/code` gives the code the user enters at google.com/device; `/o/oauth2/token`
 is polled, then refreshes the token when less than 5 min is left (`invalid_grant` = signed out).
 Feeds: `POST /youtubei/v1/browse` as `TVHTML5`, `FEwhat_to_watch` (home), `FEsubscriptions`
-(subs), `VLWL` (wl); their video tiles, each id once (no shorts, channels, playlists), at most 50.
+(subs), `VLWL` (wl), `FEhistory` (hist), `VLLL` (liked); their video tiles, each id once (Shorts marked `short: true`; no
+channels or playlists), at most 100.
 Playlists: the TV Playlists page `FEplaylist_aggregation`, its playlist tiles (when it refuses: the Save to playlist list,
 `playlist/get_add_to_playlist`, without counts or pictures); a playlist: `VL` + its id, as Watch later.
 The account (tokens and the scraped secret) is `/var/opt/jap-ridetube-d/state/account.json`, 0600 in the
@@ -213,7 +216,8 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
 - What: `{"app","service","os","log"}`: the app's version (as the app sends it, digits and dots, else
   `unknown`), the service's, the first 5 lines of `/etc/os-release` (≤ 2 KB), and a log (≤ 200 KB, the newest
   lines kept): the last 300 lines of `ytdec.log`, then the daemon's last 1500 log lines (a ring in memory fed by
-  every log line, so nothing extra is written to disk).
+  every log line, so nothing extra is written to disk), then the health check's lines (`--- health`, one
+  `health <key> ok|FAIL <text>` per check; the report waits up to 8 s for them).
 - Redacted first, the whole of it (`redactLog`, tested in `test_ytd.js`):
   - every value in the account file, and of a sign-in under way (client id and secret, tokens, device and user
     codes): `[secret]`; `Bearer` / `OAuth` tokens, `access_token`, `refresh_token`, `device_code`,
@@ -240,6 +244,13 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
 - ytdec dies while playing → restarted once at the current clock; a second death → `error`
   `video failed, audio only`, the state stays `playing` and audio continues. No change in
   `stats.decoded` for 5 s while playing with video on → the child is killed (counts as a death).
+- A buffer underrun from the player (`ITEM_BUFFER_UNDERRUN`) keeps the video: the player starts again at the clock
+  after a short wait, 3 times in a rolling minute, then `error` `audio underrun: 3 recoveries in a minute, stopped`.
+  On the head it waits for `audio.m4a`; during the head -> full switch, a recovery or a pause it is ignored.
+- The audio start (connect + `playFile`) is tried once more after 1 s, in play, resume and recovery.
+- The fetcher dying mid-play (not a refusal, not a full disk) runs again into the same folder, twice a video at
+  most, while the sound plays on; ytdec restarts on the new index. Then as before: `video incomplete`, or `error`
+  with only the head.
 - Cache: `keep` played ids by dir mtime (default 0: a video is deleted once played), never the
   playing or preparing one. ytfetch stops a download when less than 256 MiB is left free.
 - Never exits on its own; uncaught errors → log, release audio, idle.
@@ -272,12 +283,10 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
   the fetcher itself, and a video's folder is emptied by its owner (`rm -rf` as that uid; rm never runs as root, and a
   folder owned by an app's uid is refused) before root removes the empty folder. Root still touches these folders in a few places:
   - it reads `meta.json` and `thumb.rgba` there, only as regular files that are not symlinks, size-capped, opened
-    non-blocking (a FIFO or a link to `/dev/zero` counts as missing). One read of `meta.json` at play (for the
-    chapters) does not go through that check yet;
+    non-blocking (a FIFO or a link to `/dev/zero` counts as missing);
   - it unlinks `audio.head.m4a` once the full audio is ready (unlink does not follow a symlink in the last component);
   - ytdec, as root, reads `index.bin` and `video.h264` there: a known remaining surface;
-  - in this version it unlinks `ytdlp/info/<id>.json` when a play is retried, which follows a symlinked `info/`
-    (being removed in the playback rework).
+  - a retried play extracts again without `--info`, so root never unlinks anything in `ytdlp/info/`.
 - `cache/` itself must be a real folder owned by root: the daemon refuses to start otherwise (systemd then retries
   every 3 s), and puts it back to 0711 (logged) if it was group or other writable. To recover from a refusal, remove
   the folder as root (`rm -rf /var/opt/jap-ridetube-d/cache`) and restart the service; it only holds cached videos and

@@ -395,7 +395,7 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
     });
 
-    await t('fetcher error after playback began: one "video incomplete" error, audio plays on', async () => {
+    await t('fetcher error after playback began (and twice again): one "video incomplete" error, audio plays on', async () => {
         fs.writeFileSync(ctl, '');
         await fetchPlay('FFFFFFFFFF2');
         fs.writeFileSync(ctl, 'error');
@@ -726,9 +726,9 @@ async function main() {
         await stopIdle();
     });
 
-    await t('fetcher dies while only the head is there: error state, audio released', async () => {
+    await t('fetcher dies while only the head is there (and twice again): error state, audio released', async () => {
         await headPlay('FFFFFFFFFH8', 'hold');
-        fs.writeFileSync(ctl, 'error');
+        fs.writeFileSync(ctl, 'dead');
         await c.waitFor((x) => x.ev === 'state' && x.state === 'error', 4000);
         await c.waitFor((x) => x.ev === 'error' && x.msg === 'fetch: HTTP 403');
         assert.strictEqual(ours().length, 0);
@@ -1864,6 +1864,299 @@ async function main() {
         x.opts.cacheDir = wcache;
     });
     wds.forEach((x) => { x.server.close(); x.account.close(); });
+
+    // ---- WP2 recovery ----
+    // every test here ends stopped with no audio connection of ours (the same leftover check as above)
+    const idle = async () => { await stopIdle(); c.clear(); assert.strictEqual(ours().length, 0, 'an audio connection left open'); };
+    // a BMW proxy's callMethod through f(m, a, real): delays and refusals without touching the harness; returns the undo
+    const hook = (o, f) => { const real = o.callMethod; o.callMethod = (m, a, ms) => f(m, a, () => real.call(o, m, a, ms)); return () => { o.callMethod = real; }; };
+    const underrun = () => subs.playbackErrorEvent({ event: 'ITEM_BUFFER_UNDERRUN' });
+    const cached = async (id) => {
+        if (!fs.existsSync(path.join(cache, id))) mkVideo(id);
+        fs.writeFileSync(ytlog, ''); setMode('ok');
+        c.clear(); c.send({ cmd: 'play', id: id, rect: '1280x720' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.id === id);
+        subs.playerState('PLAYER_STATE_PLAY');
+        tick(5000); await sleep(50);
+        calls.length = 0; c.clear();
+    };
+    // one recovery to its end: the replayed file's first tick lets its setTime go
+    const recovered = async (n) => {
+        await waitUntil(() => called('playFile').length === n, 4000);
+        tick(0);
+        await waitUntil(() => !d.recovering && called('setTime').length === n, 4000);
+    };
+    d.opts.underrunWaitMs = 60; d.opts.audioRetryMs = 60;
+
+    await t('WP2 underrun on the full file: after the wait the player again at the clock (new connection), state stays playing; other events stay errors', async () => {
+        await cached('WP2UNDRUN01');
+        underrun();
+        await sleep(20);
+        assert.strictEqual(called('connect').length, 0, 'not before the wait');
+        await recovered(1);
+        assert.deepStrictEqual(calls.map((x) => x.m).filter((m) => m !== 'sendButtonEvent'), ['disconnect', 'connect', 'playFile', 'setTime']);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 5000 });
+        assert.ok(!c.evs.some((x) => x.ev === 'error' || x.ev === 'state'), 'no error, no state change: ' + JSON.stringify(c.evs));
+        assert.strictEqual(ours().length, 1);
+        assert.strictEqual(ytdecIns().slice(-3).join(), 'in pause,in seek 5000,in resume');
+        subs.playbackErrorEvent({ event: 'SOMETHING_ELSE' });
+        await c.waitFor((x) => x.ev === 'error' && x.msg === 'playback error {"event":"SOMETHING_ELSE"}');
+        assert.strictEqual(ours().length, 0);
+        await idle();
+    });
+
+    await t('WP2 underrun burst (4 at once): one recovery, no error; one after it counts again', async () => {
+        await cached('WP2UNDRUN02');
+        for (let k = 0; k < 4; k++) underrun();
+        await recovered(1);
+        underrun();
+        await recovered(2);
+        assert.strictEqual(called('connect').length, 2);
+        assert.ok(!c.evs.some((x) => x.ev === 'error'));
+        await idle();
+    });
+
+    await t('WP2 underrun: 3 recoveries in a rolling minute, the 4th is an error of its own (audio released)', async () => {
+        await cached('WP2UNDRUN03');
+        for (let n = 1; n <= 3; n++) { underrun(); await recovered(n); }
+        underrun();
+        await c.waitFor((x) => x.ev === 'error' && x.msg === 'audio underrun: 3 recoveries in a minute, stopped');
+        assert.strictEqual(d.state, 'error');
+        assert.strictEqual(ours().length, 0);
+        await idle();
+    });
+
+    await t('WP2 underrun on the head before audio.m4a: waits for it (buffering), no error; audio_ready plays on', async () => {
+        await headPlay('WP2UNDRUNH1', 'hold');
+        c.clear();
+        underrun();
+        await c.waitFor((x) => x.ev === 'state' && x.buffering === true);
+        assert.ok(d.headWait);
+        fs.writeFileSync(ctl, 'done');
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === false, 4000);
+        assert.ok(!c.evs.some((x) => x.ev === 'error' || x.state === 'error'));
+        assert.strictEqual(ours().length, 1);
+        await idle();
+    });
+
+    await t('WP2 underrun during the head -> full switch: ignored, the switch completes on the same connection', async () => {
+        await headPlay('WP2UNDRUNH2', 'hold');
+        tick(10000);
+        slowPlayFile = 300;
+        fs.writeFileSync(ctl, 'full');
+        await waitUntil(() => called('playFile').length === 2);
+        c.clear();
+        underrun();
+        slowPlayFile = 0;
+        await waitUntil(() => called('setTime').length === 1);
+        await sleep(150);
+        assert.ok(!c.evs.some((x) => x.ev === 'error' || x.state === 'error'), JSON.stringify(c.evs));
+        assert.strictEqual(called('disconnect').length, 0, 'audio connection kept');
+        assert.strictEqual(called('connect').length, 1);
+        await idle();
+    });
+
+    for (const off of [20, 140]) await t('WP2 a fatal error ' + off + ' ms into an underrun recovery (BMW answers in 80 ms): the error stands, nothing reopens the audio', async () => {
+        await cached('WP2UNDRUN04');
+        d.opts.underrunWaitMs = 100;
+        const undo = hook(d.audio.cc, async (m, a, real) => { await sleep(80); return real(); });
+        try {
+            underrun();
+            await sleep(off);
+            subs.playbackErrorEvent({ event: 'FATAL' });
+            const e = await c.waitFor((x) => x.ev === 'error', 4000);
+            assert.ok(/FATAL/.test(e.msg), e.msg);
+            await sleep(600);
+            assert.strictEqual(d.state, 'error');
+            assert.strictEqual(ours().length, 0, 'no audio connection of ours left');
+        } finally { undo(); d.opts.underrunWaitMs = 60; }
+        await idle();
+    });
+
+    await t('WP2 audio start: a refused connect is tried once more and plays; refused twice -> error, nothing left connected', async () => {
+        if (!fs.existsSync(path.join(cache, 'WP2AUDIO001'))) mkVideo('WP2AUDIO001');
+        let refuse = 1, asked = 0;
+        const undo = hook(d.audio.cc, (m, a, real) => { if (m !== 'connect') return real(); asked++; return refuse-- > 0 ? Promise.resolve({ amError: 'E_NOT_POSSIBLE' }) : real(); });
+        try {
+            c.clear(); calls.length = 0;
+            c.send({ cmd: 'play', id: 'WP2AUDIO001', rect: '1280x720' });
+            await c.waitFor((x) => x.ev === 'state' && x.state === 'playing');
+            assert.strictEqual(asked, 2);
+            assert.ok(!c.evs.some((x) => x.ev === 'error'));
+            assert.strictEqual(ours().length, 1);
+            await idle();
+            refuse = 2; asked = 0;
+            c.send({ cmd: 'play', id: 'WP2AUDIO001', rect: '1280x720' });
+            await c.waitFor((x) => x.ev === 'error' && x.msg === 'audio connect: E_NOT_POSSIBLE');
+            assert.strictEqual(asked, 2, 'once more, not more');
+            assert.strictEqual(d.state, 'error');
+            assert.strictEqual(ours().length, 0);
+        } finally { undo(); }
+        await idle();
+    });
+
+    await t('WP2 fetcher dies mid-play: fetched again into the same folder (no --info) after the wait, the sound untouched, ytdec again; it completes', async () => {
+        fs.writeFileSync(ctl, ''); setMode('ok'); fs.writeFileSync(ytlog, '');
+        d.opts.fetchRetryMs = [300, 300];
+        const id = 'WP2FETCH001', dir = path.join(cache, id);
+        try {
+            await fetchPlay(id);
+            calls.length = 0; c.clear();
+            await waitUntil(() => ytdecLines().some((x) => / argv /.test(x)));
+            const argv = ytdecLines().filter((x) => / argv /.test(x)).length;
+            fs.writeFileSync(ctl, 'error');
+            await waitUntil(() => logs.some((l) => l === 'fetch ' + id + ': HTTP 403 - fetched again in 300 ms (1 of 2)'));
+            fs.writeFileSync(ctl, 'done');
+            await waitUntil(() => d.fetchedMs === Infinity, 4000);
+            assert.deepStrictEqual(fetchLog().argv.slice(1), ['fetch', '--cache-dir', path.join(cache, 'ytdlp'), '--height', '720', '--', id, dir]);
+            await waitUntil(() => ytdecLines().filter((x) => / argv /.test(x)).length === argv + 1);
+            assert.deepStrictEqual(calls.map((x) => x.m), [], 'no connect, disconnect or button');
+            assert.ok(!c.evs.some((x) => x.ev === 'error' || (x.ev === 'state' && x.state !== 'playing')), JSON.stringify(c.evs));
+            assert.ok(isPlayable(dir));
+        } finally { d.opts.fetchRetryMs = []; }
+        await idle();
+    });
+
+    await t('WP2 fetcher dies mid-play three times: fetched again twice, then "video incomplete" as before, the sound plays on', async () => {
+        fs.writeFileSync(ctl, '');
+        const id = 'WP2FETCH002';
+        await fetchPlay(id);
+        calls.length = 0; c.clear();
+        fs.writeFileSync(ctl, 'error');
+        await c.waitFor((x) => x.ev === 'error' && x.msg === 'video incomplete: HTTP 403', 4000);
+        assert.deepStrictEqual(logs.filter((l) => l.indexOf('fetch ' + id + ': HTTP 403 - fetched again') === 0).map((l) => l.slice(-8)), ['(1 of 2)', '(2 of 2)']);
+        assert.deepStrictEqual(calls.map((x) => x.m), []);
+        assert.strictEqual(d.state, 'playing');
+        assert.strictEqual(ours().length, 1);
+        // a refusal (the video gone) or a full disk is not fetched again
+        assert.strictEqual(d.resumeFetch(id, path.join(cache, id), 'Video unavailable'), false);
+        assert.strictEqual(d.resumeFetch(id, path.join(cache, id), 'head unit storage almost full (200 MiB free): video stopped'), false);
+        await idle();
+    });
+
+    await t('WP2 play retry: no --info, and root never unlinks info/<id>.json (info/ swapped for a symlink reaches nothing)', async () => {
+        const info = path.join(cache, 'ytdlp', 'info'), away = path.join(tmp, 'wp2away'), id = 'WP2INFO0001';
+        const kept = fs.existsSync(info) ? info + '.wp2' : null;
+        if (kept) fs.renameSync(info, kept);
+        fs.mkdirSync(away, { recursive: true });
+        fs.writeFileSync(path.join(away, id + '.json'), JSON.stringify({ id: id }));
+        fs.symlinkSync(away, info);
+        d.opts.fetchRetryMs = [200];
+        try {
+            fs.writeFileSync(ctl, 'fail'); c.clear();
+            c.send({ cmd: 'play', id: id, rect: '1280x720' });
+            await c.waitFor((x) => x.ev === 'retry', 4000);
+            fs.writeFileSync(ctl, '');
+            await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.id === id, 4000);
+            assert.ok(fs.existsSync(path.join(away, id + '.json')), 'the file behind the symlink is still there');
+            assert.ok(fetchLog().argv.indexOf('--info') < 0, 'the retry extracts again: ' + fetchLog().argv.join(' '));
+        } finally {
+            d.opts.fetchRetryMs = [];
+            fs.unlinkSync(info);
+            if (kept) fs.renameSync(kept, info);
+        }
+        await idle();
+    });
+
+    await t('WP2 quality while playing: back to where it was even under 10 s; paused stays paused (no sound until resume, then there)', async () => {
+        fs.writeFileSync(ctl, ''); setMode('ok');
+        await fetchPlay('WP2QUALIT01');
+        tick(5000); await sleep(100);
+        c.clear(); calls.length = 0;
+        c.send({ cmd: 'quality', quality: '480' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+        await sleep(100); tick(0);
+        await waitUntil(() => called('setTime').length > 0);
+        assert.deepStrictEqual(called('setTime').map((x) => x.a.newTimeElapsed), [5000], 'the 5 s it was at, not 0');
+        c.send({ cmd: 'pause' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'paused');
+        c.clear(); calls.length = 0;
+        c.send({ cmd: 'quality', quality: '360' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'paused', 4000);
+        await sleep(200);
+        assert.ok(!c.evs.some((x) => x.ev === 'state' && x.state === 'playing'), 'paused all along: ' + c.evs.map((x) => x.state).join());
+        assert.strictEqual(called('connect').length, 0, 'no sound while paused');
+        assert.strictEqual(d.cur.height, 360);
+        // resume: the file at the place it was paused
+        c.send({ cmd: 'resume' });
+        await waitUntil(() => called('playFile').length === 1);
+        tick(0);
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 5000 });
+        await idle();
+    });
+
+    await t('WP2 quality then stop at once: the video stays stopped (the restart is cancelled)', async () => {
+        fs.writeFileSync(ctl, ''); setMode('ok');
+        await fetchPlay('WP2QUALIT02');
+        c.clear();
+        c.send({ cmd: 'quality', quality: '480' });
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        await sleep(800);
+        const st = c.evs.filter((x) => x.ev === 'state').map((x) => x.state);
+        assert.deepStrictEqual(st.slice(st.indexOf('idle')), ['idle'], 'nothing after idle: ' + st.join());
+        assert.strictEqual(ours().length, 0);
+        c.clear();
+    });
+
+    await t('WP2 a play resumed at its place: no `time` at the old place before the seek lands (the app\'s "Resumed at" reads the first one)', async () => {
+        mkVideo('WP2RESUME01');
+        d.opts.resume = true;
+        try {
+            c.clear(); calls.length = 0;
+            c.send({ cmd: 'play', id: 'WP2RESUME01', rect: '1280x720', at: 30000 });
+            await c.waitFor((x) => x.ev === 'state' && x.state === 'playing');
+            subs.playerState('PLAYER_STATE_PLAY');
+            tick(0);                       // the first tick: the seek there
+            await waitUntil(() => called('setTime').length === 1);
+            assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 30000 });
+            await sleep(300); tick(250);   // the player's next time, from before the setTime landed
+            await sleep(300); tick(30250);
+            await c.waitFor((x) => x.ev === 'time');
+            assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'time').map((x) => x.elapsed), [30250]);
+        } finally { d.opts.resume = false; }
+        await idle();
+    });
+
+    await t('WP2 play: a FIFO meta.json (the fetch uid\'s folder) does not hang it; chapters read without following a symlink', async () => {
+        const fc = path.join(tmp, 'wp2fifo'), fv = path.join(fc, 'FIFOPLAY001');
+        fs.mkdirSync(fv, { recursive: true });
+        cp.execSync('mkfifo ' + path.join(fv, 'meta.json'));
+        const run = [
+            'const { Daemon } = require(process.argv[1]);',
+            'const d = new Daemon({ someip: { buildProxy: () => new Promise(() => {}) }, cacheDir: process.argv[2], logDir: process.argv[2], stateDir: process.argv[2],',
+            '    accountFile: process.argv[2] + "/a.json", noSetuid: true, fetchRetryMs: [], resume: false, ytRequest: async () => ({ status: 404, body: "" }), log: () => {} });',
+            'd.emit = () => {}; d.fetchVideo = () => Promise.reject(new Error("stub"));',
+            'd.play(process.argv[3], "1280x720").then(() => { console.log(JSON.stringify({ title: d.cur.title, chapters: d.cur.chapters || null })); process.exit(0); });'].join('\n');
+        const r = cp.spawnSync(process.execPath, ['-e', run, path.join(__dirname, '..', 'ytd.js'), fc, 'FIFOPLAY001'], { timeout: 4000, encoding: 'utf8' });
+        assert.ok(!r.error && r.status === 0, 'play returned: ' + (r.error && r.error.message) + ' ' + r.stderr);
+        assert.deepStrictEqual(JSON.parse(r.stdout), { title: 'FIFOPLAY001', chapters: null });
+        // a symlinked meta.json: its chapters are not read
+        const away = path.join(tmp, 'wp2meta.json'), sv = path.join(fc, 'SYMPLAY0001');
+        fs.writeFileSync(away, JSON.stringify({ title: 'Planted', chapters: [[0, 'Planted']] }));
+        fs.mkdirSync(sv); fs.symlinkSync(away, path.join(sv, 'meta.json'));
+        const r2 = cp.spawnSync(process.execPath, ['-e', run, path.join(__dirname, '..', 'ytd.js'), fc, 'SYMPLAY0001'], { timeout: 4000, encoding: 'utf8' });
+        assert.ok(!r2.error && r2.status === 0, r2.stderr);
+        assert.deepStrictEqual(JSON.parse(r2.stdout), { title: 'SYMPLAY0001', chapters: null });
+    });
+
+    await t('WP2 a play from the start whose first tick is in a skipped segment: its first `time` is that tick, not the segment\'s end', async () => {
+        if (!fs.existsSync(path.join(cache, 'WP2SKIP0001'))) mkVideo('WP2SKIP0001');
+        fs.mkdirSync(path.join(cache, '.sb'), { recursive: true });
+        fs.writeFileSync(path.join(cache, '.sb', 'WP2SKIP0001.json'), JSON.stringify([{ s: 0, e: 30000, cat: 'sponsor' }]));   // the SponsorBlock cache
+        c.clear(); calls.length = 0;
+        c.send({ cmd: 'play', id: 'WP2SKIP0001', rect: '1280x720', skip: ['sponsor'] });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing');
+        await waitUntil(() => d.cur && d.cur.segs && d.cur.segs.length === 1);
+        subs.playerState('PLAYER_STATE_PLAY');
+        tick(200);
+        await c.waitFor((x) => x.ev === 'skipped');
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 30000 });
+        assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'time').map((x) => x.elapsed), [200]);
+        await idle();
+    });
 
     c.destroy();
     await d.close();

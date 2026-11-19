@@ -5,6 +5,12 @@
 - Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
   the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
   GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
+- Service: playback recovers instead of stopping. A buffer underrun from the car's player starts the sound again
+  where it was (up to 3 times a minute), a failed audio start is tried once more, and a download that dies
+  mid-video is fetched again (twice) while the sound plays on. A quality change keeps the place, even in the
+  first 10 s, and a paused video stays paused. Quick taps (stop, quality, pause, seek) during a start no longer
+  restart or lose the video. The underrun handling and the command-sequence tests (`tools/test_sequences.js`)
+  come from @marilykinson-glitch's fork.
 
 ## App 0.3.14
 

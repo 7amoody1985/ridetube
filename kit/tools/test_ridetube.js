@@ -1378,9 +1378,11 @@ async function wp9Frames(x) {
     for (const addr of ['172.16.222.97', '255.255.255.255']) {   // (the longest address: 61 bytes, still a QR code)
         d.send({ ev: 'remote', on: true, url: 'http://' + addr + ':8471/#' + HEX, expires: 3600 });
         await sleep(100); await drawn();
-        const n = require('../runtime/qr').encode('http://' + addr + ':8471/#' + HEX).length, side = (n + 8) * 9;
-        assert.ok(rects.some((r) => r.c === '#ffffff' && r.w === side && r.h === side), addr + ': the QR code, ' + side + ' px');
-        assert.ok(rects.filter((r) => r.c === '#000000' && r.h === 9).length > 100, 'its dark modules');
+        // the code as big as the page allows: 9 to 12 px modules
+        const n = require('../runtime/qr').encode('http://' + addr + ':8471/#' + HEX).length;
+        const sq = rects.find((r) => r.c === '#ffffff' && r.w === r.h && r.w % (n + 8) === 0 && r.w / (n + 8) >= 9 && r.w / (n + 8) <= 12);
+        assert.ok(sq, addr + ': the QR code, 9 to 12 px modules');
+        assert.ok(rects.filter((r) => r.c === '#000000' && r.h === sq.w / (n + 8)).length > 100, 'its dark modules');
         assert.ok(texts.indexOf('Address ' + addr + ':8471 · turns off by itself in 60 min') >= 0, texts.join('|'));
         assert.ok(!texts.some((t) => t.indexOf(HEX) >= 0), 'the token is never written out');
     }

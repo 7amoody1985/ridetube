@@ -62,15 +62,15 @@ module.exports = function remotePage(o) {
             if (st.on && st.url) {
                 // the code on the left, as big as the page allows; the steps right of it
                 const n = (() => { try { return QR.encode(st.url).length; } catch (e) { return 0; } })();
-                const mod = n ? Math.max(4, Math.min(9, Math.floor((bottom - TOP - 90) / (n + 8)))) : 0, side = (n + 8) * mod;
+                const mod = n ? Math.max(4, Math.min(12, Math.floor((bottom - TOP - 40) / (n + 8)))) : 0, side = (n + 8) * mod;
                 let x = X0;
                 if (n) { QR.draw(cv, st.url, X0, TOP + 70, mod); x = X0 + side + 48; }
                 const m = URL_RE.exec(st.url), left = Math.max(1, Math.ceil((st.expires * 1000 - (Date.now() - st.at)) / 60000));
                 y = TOP + 120;
                 const step = (s, size, color, bold) => { cv.text(o.fit(cv, s, size, W - x - 40, bold ? LITB : LIT), x, y, size, color, bold ? LITB : LIT); y += size + 20; };
-                step(t('1. Connect the phone to the car\'s Wi-Fi hotspot'), 26, C.text);
-                step(t('2. Scan this code with its camera'), 26, C.text);
-                step(t('3. Paste a YouTube link or type a search, then send'), 26, C.text);
+                step(t('1. Connect the phone to the car\'s Wi-Fi hotspot'), 32, C.text);
+                step(t('2. Scan this code with its camera'), 32, C.text);
+                step(t('3. Paste a YouTube link or type a search, then send'), 32, C.text);
                 if (!n) step(m[1] + ':' + m[2], 24, C.amber, true);
                 step(o.message('Address {address} · turns off by itself in {minutes} min', { address: m[1] + ':' + m[2], minutes: left }), 22, C.dim);
                 step(t('Anyone with this code can send videos while it is on'), 22, C.dim);

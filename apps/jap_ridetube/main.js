@@ -80,7 +80,7 @@ const VID = 1, VPATH = process.env.MGU_YT_VIDEO || '/dev/shm/mgu-video-ridetube'
 const POOL0 = 8, POOL = 56;                               // picture ids POOL0.. for the thumbs drawn (a pool, by video)
 let TOP = 38;                                            // the page shows from here down (the kit: y 38..520 + extra; fill: 12, inset())
 const RAIL0 = 116, TILE_X = 136;                         // the icon rail, x 12..116, and the first tile's left
-let RX = 0, RAIL_W = RAIL0, X0 = TILE_X;                 // inset() moves both right of the HMI's back arrow column
+let RX = 0, FILL = false, RAIL_W = RAIL0, X0 = TILE_X;                 // inset() moves both right of the HMI's back arrow column
 let TW = 320, TH = 180, PITCH = 348;                     // tiles: 16:9 thumbs, four a row, the fifth peeking (inset())
 const PER_ROW = 4;
 let TILE_H = TH + 98;
@@ -915,7 +915,7 @@ mgu.run({
                 if (cv.own && shown && row.hs) {
                     if (off > 0) after.push(chevron(cv, X0 + 4, ty + TH / 2, -1, () => { st.off[ri] = Math.max(0, off - PER_ROW); dirty = true; }, letter + ':' + ri + ':<'));
                     if (off < max) {
-                        if (!RX) after.push(() => { for (let k = 0; k < 6; k++) cv.fillRect(W - 108 + k * 16, ty - 10, 16, TILE_H + 16, [15, 15, 15, Math.round(255 * (0.3 + k * 0.14))]); });
+                        if (!FILL) after.push(() => { for (let k = 0; k < 6; k++) cv.fillRect(W - 108 + k * 16, ty - 10, 16, TILE_H + 16, [15, 15, 15, Math.round(255 * (0.3 + k * 0.14))]); });
                         after.push(chevron(cv, W - 48, ty + TH / 2, 1, () => { st.off[ri] = Math.min(max, off + PER_ROW); dirty = true; }, letter + ':' + ri + ':>'));
                     }
                 }
@@ -967,11 +967,12 @@ mgu.run({
         // taps stay the HMI's (they close the app): the rail, the tiles and the pages start right of it
         function inset(cv) {
             const pl = cv.place;
-            RX = pl && pl.scale ? Math.max(0, Math.ceil((HMI.left - pl.ox) / pl.scale) + 4 - 16) : 0;   // (16: the rail's targets' left)
-            RAIL_W = RAIL0 + RX; X0 = TILE_X + RX; MID = (RAIL_W + W) / 2;
+            const fill = !!(pl && pl.scale && pl.ox === 0 && pl.oy === 0);   // fill: no back column, the rail starts at the screen's left edge
+            RX = fill ? 0 : pl && pl.scale ? Math.max(0, Math.ceil((HMI.left - pl.ox) / pl.scale) + 4 - 16) : 0;   // (16: the rail's targets' left)
+            FILL = fill || RX > 0; RAIL_W = RAIL0 + RX; X0 = TILE_X + RX; MID = (RAIL_W + W) / 2;
             // fill: the whole screen is the app's, so the page starts near the top and four tiles reach the right edge
             // (W - 16; a shelf's next arrow sits over the fourth tile); otherwise four tiles and the fifth peeking
-            if (RX) { TOP = 12; TW = 328; TH = 184; PITCH = 354; } else { TOP = 38; TW = 320; TH = 180; PITCH = 348; }
+            if (fill) { TOP = 12; TW = 342; TH = 192; PITCH = 368; } else if (RX) { TOP = 12; TW = 328; TH = 184; PITCH = 354; } else { TOP = 38; TW = 320; TH = 180; PITCH = 348; }
             TILE_H = TH + 98;
         }
         function say(cv, msg, sub) {
@@ -1137,8 +1138,8 @@ mgu.run({
             return undefined;
         }
         function drawPlayer(cv) {
-            cv.fillRect(0, TOP, W, H - TOP, '#000000');
-            cv.fillRect(BOX.x, BOX.y, BOX.w, BOX.h, '#000000');
+            cv.fillRect(0, TOP, W, H - TOP, videoShown ? '#000000' : C.bg);
+            if (videoShown) cv.fillRect(BOX.x, BOX.y, BOX.w, BOX.h, '#000000');
             if (videoShown) cv.video(VID, BOX.x, BOX.y, BOX.w, BOX.h, 0);
             const cx = BOX.x + BOX.w / 2, cy = BOX.y + BOX.h / 2 - 10, bot = BOX.y + BOX.h;
             // the title and channel over a scrim at the top

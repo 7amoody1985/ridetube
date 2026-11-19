@@ -4,14 +4,15 @@
   ytfetch.py fetch <id> <dir> --cache-dir <d> [--height 720] [--node P] [--lease P] [--pyz P]
   ytfetch.py extract <id> <info.json> --cache-dir <d> [...]
   ytfetch.py serve --cache-dir <d> [...]
-  ytfetch.py check [<id>] --cache-dir <d> [--uid N] [--node P] [--lease P] [--pyz P]
+  ytfetch.py check [<id>] --cache-dir <d> [--uid N] [--node P] [--lease P] [--pyz P] [--json]
 
 fetch writes <dir>/meta.json, audio.m4a, video.h264 (+ .part while running) and index.bin, and prints
 one JSON event per line on stdout: meta, audio, audio_head, audio_ready, video, done | error (then exit 1).
 audio_head {ms, bytes}: <dir>/audio.head.m4a is a complete MP4 of the audio's first ms, before audio.m4a.
 fetch --info <f>: the extraction extract wrote there (if fresh), not a new one: ~2.5 s less on the car.
 serve: loads yt-dlp (~1.2 s on the car), prints {"ev":"warm"}, then runs the one argv list read from stdin.
-check is the owner's self-test, run as root over ssh (it drops to the fetch uid itself).
+check is the owner's self-test, run as root over ssh (it drops to the fetch uid itself). check --json: only its
+fast probes (yt-dlp, DNS, TLS), one JSON line each: the daemon's health command runs it as the fetch uid.
 """
 import argparse
 import copy
@@ -962,11 +963,14 @@ def check(a):
         if uid is None:
             with open('/var/opt/jap-ridetube-d/state/uids.json') as f:
                 uid = int(json.load(f)['fetch'])
-        os.makedirs(work, exist_ok=True)
-        os.chown(work, uid, uid)
+        if not a.json:
+            os.makedirs(work, exist_ok=True)
+            os.chown(work, uid, uid)
         os.setgroups([])
         os.setgid(uid)
         os.setuid(uid)
+    if a.json:
+        return check_json(a)
     os.makedirs(work, exist_ok=True)
     ok_all = []
 
@@ -1049,6 +1053,64 @@ def check(a):
     return 0 if all(ok_all) else 1
 
 
+def _why(e):
+    """An exception as one of a few fixed phrases (health.js shows only these): resolve_a's errors name the DNS server."""
+    if isinstance(e, urllib.error.URLError) and isinstance(e.reason, BaseException):
+        e = e.reason
+    if isinstance(e, urllib.error.HTTPError):
+        return f'HTTP {e.code}'
+    if isinstance(e, ssl.SSLCertVerificationError):
+        return 'certificate not trusted'
+    for kind, phrase in ((ssl.SSLError, 'TLS error'), ((socket.timeout, TimeoutError), 'timed out'),
+                         (socket.gaierror, 'name not resolved'), (ConnectionRefusedError, 'connection refused'),
+                         (ConnectionResetError, 'connection reset'), (ImportError, 'not found')):
+        if isinstance(e, kind):
+            return phrase
+    import errno
+    return {errno.ENETUNREACH: 'network unreachable', errno.EHOSTUNREACH: 'no route to host'}.get(getattr(e, 'errno', None), 'failed')
+
+
+def check_json(a):
+    """check --json: the daemon's health probes only (yt-dlp loads, DNS, TLS to YouTube), no extract, no fetch, no
+    file written. One JSON line each, flushed as it is known: {"ev":"check","name","ok","s","info"} (+ "version",
+    "servers"), then {"ev":"done","ok"}. No address in any line: the daemon shows them on the car's screen."""
+    ok_all = []
+
+    def line(name, ok, t0, info, **kw):
+        ok_all.append(bool(ok))
+        print(json.dumps(dict(ev='check', name=name, ok=bool(ok), s=round(time.monotonic() - t0, 2), info=info, **kw)),
+              flush=True)
+
+    t = time.monotonic()
+    try:
+        load_ytdlp(a.pyz, a.cache_dir)
+        from yt_dlp.version import __version__ as v
+        line('ytdlp', True, t, 'loaded', version=v)
+    except Exception as e:  # noqa: BLE001
+        line('ytdlp', False, t, _why(e))
+    t = time.monotonic()
+    servers = install_dns(a.lease)
+    resolved = False
+    try:
+        socket.getaddrinfo('www.youtube.com', 443)
+        resolved = True
+        line('dns', bool(servers), t, 'resolved' if servers else 'no uplink lease', servers=len(servers))
+    except OSError as e:
+        line('dns', False, t, _why(e), servers=len(servers))
+    t = time.monotonic()
+    if not resolved:
+        line('tls', False, t, 'skipped: no DNS')
+    else:
+        try:
+            ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+            with urllib.request.urlopen('https://www.youtube.com/robots.txt', context=ctx, timeout=5) as r:
+                line('tls', r.status == 200, t, f'HTTP {r.status}')
+        except Exception as e:  # noqa: BLE001
+            line('tls', False, t, _why(e))
+    print(json.dumps({'ev': 'done', 'ok': all(ok_all)}), flush=True)
+    return 0 if all(ok_all) else 1
+
+
 def validate(index_path, h264_path):
     """mgyi.validate's rules; returns the record count."""
     with open(index_path, 'rb') as f:
@@ -1075,6 +1137,7 @@ def main(argv=None):
     ap.add_argument('--pyz')
     ap.add_argument('--uid', type=int)
     ap.add_argument('--info')
+    ap.add_argument('--json', action='store_true', help='check: the health probes only, as JSON lines')
     a = ap.parse_args(argv)
     if a.cmd == 'check':
         return check(a)

@@ -26,7 +26,7 @@ const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
 const VERSION = '0.3.12';   // component.json's (test_ytd.js checks): sent with a log report
 // what `hello` says this build answers for real. The frozen names: health, related, hist (feed hist|liked), ytdlp,
 // remote, proxy, stream. A package adds its name here (through the integrator) once its command works
-const CAPS = ['related', 'hist'];
+const CAPS = ['related', 'hist', 'health'];
 const LANG_RE = /^[a-z]{2}$/, REGION_RE = /^[A-Z]{2}$/;   // hello's lang ("ru") and region ("RU")
 // the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
 const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
@@ -1495,7 +1495,7 @@ Daemon.prototype.hello = function (m) {
 };
 // commands of the frozen protocol whose package has not landed: each answers this until its package replaces the body
 Daemon.prototype.notImplemented = function (cmd) { return this.emit({ ev: 'error', cmd: cmd, msg: 'not implemented ' + cmd }); };
-Daemon.prototype.health = function () { return this.notImplemented('health'); };              // WP4
+Daemon.prototype.health = function () { return require('./health.js').run(this, VERSION, (o) => this.emit(o)); };   // WP4: health.js, never rejects
 // `related` {id} -> related{id, items} (what YouTube plays after it: the TVHTML5 watch-next answer's video tiles, the
 // video itself left out) or related{id, error}. Signed in when we can, anonymous otherwise (as search); kept 10 min
 // per video and language, dropped at sign-out. After marilykinson-glitch's fork (GPL-3.0)
@@ -1577,11 +1577,14 @@ Daemon.prototype.known = function () {
     list(path.join(this.opts.cacheDir, 'thumbs')).concat(list(path.join(this.opts.cacheDir, 'ytdlp', 'info'))).forEach((n) => vid(n.split('.')[0]));
     return { secrets: secrets, titles: titles, ids: ids };
 };
-Daemon.prototype.report = function (app) {
+// health: health.js's lines, last in the log (lastBytes keeps the newest), through the same redaction as the rest
+Daemon.prototype.report = function (app, health) {
     const k = this.known(), salt = crypto.randomBytes(16).toString('hex');
     const red = (ls) => redactLog(ls.join('\n'), k, salt, this.opts.cacheDir).split('\n');
     const ytdec = tailLines(path.join(this.opts.logDir, 'ytdec.log'), 300);
-    const log = ['--- ytdec.log, last ' + ytdec.length + ' lines'].concat(ytdec, ['--- jap-ridetube-d ' + VERSION + ', last ' + this.ring.length + ' lines'], this.ring);
+    const hl = (health || []).map((h) => 'health ' + h.key + ' ' + (h.ok ? 'ok' : 'FAIL') + ' ' + h.text);
+    const log = ['--- ytdec.log, last ' + ytdec.length + ' lines'].concat(ytdec, ['--- jap-ridetube-d ' + VERSION + ', last ' + this.ring.length + ' lines'], this.ring,
+        hl.length ? ['--- health'].concat(hl) : []);
     return { app: /^[\d.]{1,12}$/.test(String(app)) ? String(app) : 'unknown', service: VERSION,
         os: lastBytes(red(lines(path.join(this.opts.etcDir, 'os-release')).slice(0, 5)), OS_MAX).join('\n'),
         log: lastBytes(red(log), REPORT_MAX).join('\n') };
@@ -1590,7 +1593,8 @@ Daemon.prototype.sendLogs = async function (app) {
     if (this.reporting) return undefined;
     this.reporting = true;
     try {
-        const body = this.report(app);
+        // the health page's lines ride in the report (no clipboard in the car): up to healthMs (8 s) before the POST
+        const body = this.report(app, await require('./health.js').run(this, VERSION));
         this.log('logs: sending ' + body.log.length + ' characters');
         const r = await this.opts.ytRequest('POST', String(this.opts.reportUrl).replace(/\/+$/, '') + '/v1/report',
             { 'User-Agent': 'jap-ridetube-d/' + VERSION }, body, this.opts.reportTimeoutMs);

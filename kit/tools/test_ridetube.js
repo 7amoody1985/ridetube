@@ -1151,6 +1151,29 @@ async function wp5Frames(x) {
     assert.ok(tgt(/^h:0:SHORT000001$/), 'Show Shorts on: the Short shows');
     hu.ctx.settings.set('shorts', false);
     console.log('ok   WP5 History page (rail), Shorts only with the setting');
+    // a live tile (live:true): a red LIVE tag where the length goes; a tap or a rest on it asks nothing, a note says why
+    {
+        const { Recorder } = require(path.join(hu.kitDir, 'record'));
+        const rr = [], orr = Recorder.prototype.roundRect;
+        Recorder.prototype.roundRect = function (x, y, w, h, r, c) { rr.push(c); return orr.apply(this, arguments); };
+        d.send({ ev: 'feed', which: 'hist', items: [{ id: 'HIST0000001', title: 'Watched one', channel: 'C', duration_s: 60 }, { id: 'LIVE0000001', title: 'On air', channel: 'C', duration_s: null, live: true }] });
+        await sleep(100); rr.length = 0; await drawn();
+        assert.ok(texts.indexOf('LIVE') >= 0 && rr.indexOf('#cc0000') >= 0, 'the red LIVE tag: ' + texts.slice(0, 12).join('|'));
+        assert.ok(texts.indexOf('1:00') >= 0, 'the other tile keeps its length');
+        const nPlay = d.cmds('play').length, nPre = d.cmds('prefetch').length;
+        disp.onPageFocus('h:0:LIVE0000001');
+        await sleep(1300);
+        tgt(/^h:0:LIVE0000001$/).run();
+        await sleep(100); await drawn();
+        assert.deepStrictEqual([d.cmds('play').length, d.cmds('prefetch').length], [nPlay, nPre], 'no play, no prefetch for a live video');
+        assert.ok(texts.indexOf("Live videos can't be played yet") >= 0 && tgt(/^h:0:LIVE0000001$/), 'the note, the page stays: ' + texts.join('|'));
+        tgt(/^h:0:HIST0000001$/).run();
+        await until(() => d.cmds('play').length === nPlay + 1, 2000, 'a normal tile still plays');
+        d.send({ ev: 'state', state: 'idle' });
+        hu.handlers.BTN_LIST();
+        Recorder.prototype.roundRect = orr;
+        console.log('ok   live tile: red LIVE tag, a tap shows the note and asks nothing');
+    }
     // the health check: run on opening, rows as they come, Run again
     hu.handlers.BTN_HEALTH();
     await until(() => d.cmds('health').length === 1, 2000, 'health asked');

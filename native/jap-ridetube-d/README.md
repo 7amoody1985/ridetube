@@ -142,8 +142,9 @@ Daemon → app:
 An item is `{id,title,channel,duration_s,meta}`, plus `watched_pct` (the account's progress on the tile), `start_s` (its
 resume point) and `members: true` (a members-only badge) when the tile has them; `meta` = the texts of the tile's second
 line as YouTube writes them, without
-the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none), and `short: true` for a Short (the app decides
-whether it shows them). `items`: every video tile once, page order, ≤ 100.
+the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none), `short: true` for a Short (the app decides
+whether it shows them), and `live: true` for a live stream or an upcoming premiere (`duration_s` null; not playable yet,
+the app shows a LIVE tag and does not ask to play it). `items`: every video tile once, page order, ≤ 100.
 `shelves`: YouTube's rows in page order (≤ 8, ≤ 12 tiles each, video tiles and Shorts only, deduped per row, empty rows
 dropped); `title` is the row header, else the channel when all its tiles share one (Subscriptions' per-channel rows), else `""`.
 Watch later is a playlist with no rows: `shelves: []`, use `items`.

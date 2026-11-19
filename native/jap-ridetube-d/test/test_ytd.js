@@ -806,14 +806,14 @@ async function main() {
         await c.waitFor((x) => authEv('signed_in')(x) && c.evs.filter(authEv('signed_in')).length === 2);
     });
 
-    await t('feed subs: TVHTML5 browse with the token; video tiles and shorts (short:true), each once, channel and length', async () => {
+    await t('feed subs: TVHTML5 browse with the token; video tiles and shorts (short:true), each once, channel and length, LIVE in the length: live:true', async () => {
         c.clear(); yt.calls.length = 0;
         yt.browse = (h, b) => ok(BROWSE);
         c.send({ cmd: 'feed', which: 'subs' });
         const e = await c.waitFor((x) => x.ev === 'feed');
         const v1 = { id: 'VVVVVVVVVV1', title: 'First', channel: 'Chan A', duration_s: 2390, meta: ['1K views'] };
         const v2 = { id: 'VVVVVVVVVV2', title: 'Second', channel: 'Chan C', duration_s: 3723, meta: ['1K views'] };
-        const v3 = { id: 'VVVVVVVVVV3', title: 'Live', channel: 'Chan D', duration_s: null, meta: ['1K views'] };
+        const v3 = { id: 'VVVVVVVVVV3', title: 'Live', channel: 'Chan D', duration_s: null, meta: ['1K views'], live: true };
         const s1 = { id: 'SSSSSSSSSS1', title: 'A short', channel: 'Chan B', duration_s: null, meta: ['1K views'], short: true };
         assert.deepStrictEqual(e, { ev: 'feed', which: 'subs', items: [v1, s1, v2, v3],
             shelves: [{ title: '', items: [v1, s1] }, { title: '', items: [v2, v1, v3] }] });
@@ -1642,6 +1642,29 @@ async function main() {
         c.send({ cmd: 'search', q: 'cat shorts' });
         assert.deepStrictEqual((await c.waitFor((x) => x.ev === 'results')).items, items);
         yt.search = () => ok(SEARCH);
+    });
+
+    await t('live: a live or upcoming tile / lockup (a real one, its overlay made live) has live:true and no length; plain videos none', async () => {
+        const json = (o) => JSON.parse(JSON.stringify(o));
+        const findAll = (o, k, out) => { if (o && typeof o === 'object') { if (o[k]) out.push(o[k]); Object.keys(o).forEach((x) => findAll(o[x], k, out)); } return out; };
+        const lk = json(findAll(SEARCH, 'lockupViewModel', [])[0]), tl = json(findAll(NEXT, 'tileRenderer', []).filter((x) => x.contentType === 'TILE_CONTENT_TYPE_VIDEO')[0]);
+        const lkBadge = lk.contentImage.thumbnailViewModel.overlays[0].thumbnailBottomOverlayViewModel.badges[0].thumbnailBadgeViewModel;
+        const tlOv = tl.header.tileHeaderRenderer.thumbnailOverlays.filter((x) => x.thumbnailOverlayTimeStatusRenderer)[0].thumbnailOverlayTimeStatusRenderer;
+        const plain = feedItems({ a: [{ lockupViewModel: lk }, { tileRenderer: tl }] });
+        assert.ok(plain.length === 2 && plain.every((x) => !('live' in x) && x.duration_s > 0), 'as captured: not live');
+        assert.ok(feedItems(SEARCH).concat(feedItems(NEXT), feedItems(SHORTS)).every((x) => !('live' in x)), 'no flag on the captured videos');
+        Object.assign(lkBadge, { text: 'LIVE', badgeStyle: 'THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE' });
+        Object.assign(tlOv, { text: { runs: [{ text: 'EN DIRECT' }] }, style: 'LIVE' });       // (style, whatever the language)
+        const up = json(tl); up.contentId = 'UPCOMING001';
+        up.header.tileHeaderRenderer.thumbnailOverlays.filter((x) => x.thumbnailOverlayTimeStatusRenderer)[0].thumbnailOverlayTimeStatusRenderer = { text: { simpleText: 'UPCOMING' }, style: 'UPCOMING' };
+        const now = json(tl); now.contentId = 'LIVENOW0001';
+        now.header.tileHeaderRenderer.thumbnailOverlays = [];
+        now.metadata.tileMetadataRenderer.lines[1].lineRenderer.items.unshift({ lineItemRenderer: { badge: { metadataBadgeRenderer: { style: 'BADGE_STYLE_TYPE_LIVE_NOW', label: 'LIVE' } } } });
+        const items = feedItems({ a: [{ lockupViewModel: lk }, { tileRenderer: tl }, { tileRenderer: up }, { tileRenderer: now }] });
+        assert.deepStrictEqual(items.map((x) => [x.live, x.duration_s]), [[true, null], [true, null], [true, null], [true, null]]);
+        assert.deepStrictEqual([items[0].id, items[0].title, items[0].channel], [plain[0].id, plain[0].title, plain[0].channel], 'the rest as before');
+        const named = json(findAll(SEARCH, 'lockupViewModel', [])[0]); named.metadata.lockupMetadataViewModel.title.content = 'LIVE';
+        assert.ok(!('live' in feedItems({ a: [{ lockupViewModel: named }] })[0]), 'a title "LIVE" is not a live stream');
     });
 
     await t('100 videos per list; the worst-case feed line (100 items + 8 shelves of 12) stays under the app\'s 1 MiB MAX_LINE', async () => {

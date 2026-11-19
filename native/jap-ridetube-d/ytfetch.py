@@ -83,6 +83,15 @@ def emit(**kw):
             os._exit(1)  # the daemon is gone
 
 
+def clock_wrong(e):
+    """The user's message when TLS fails because the head unit's clock is off (YouTube's certificate is newer than
+    the clock, or the clock is past it); None for any other error."""
+    t = str(getattr(e, 'verify_message', '') or e)
+    if 'certificate is not yet valid' not in t and 'certificate has expired' not in t:
+        return None
+    return "Wrong head unit clock (" + time.strftime('%Y-%m-%d', time.gmtime()) + "): set the car's date and time"
+
+
 def fail(msg):
     emit(ev='error', msg=str(msg)[-500:])
     os._exit(1)  # the other thread may sit in a socket read
@@ -779,7 +788,7 @@ def extract_cmd(a):
     try:
         info = extract(yt_dlp, a, 'https://www.youtube.com/watch?v=' + a.id)
     except Exception as e:  # noqa: BLE001
-        fail(f'extract: {e}')
+        fail(clock_wrong(e) or f'extract: {e}')
     tmp = a.dir + '.tmp'
     with open(tmp, 'w') as f:
         json.dump(yt_dlp.YoutubeDL.sanitize_info(info), f)
@@ -866,7 +875,7 @@ def fetch(a):
     try:
         info = info or extract(yt_dlp, a, url)
     except Exception as e:  # noqa: BLE001 - any yt-dlp failure is reported to the daemon
-        fail(f'extract: {e}')
+        fail(clock_wrong(e) or f'extract: {e}')
     meta = {'id': a.id, 'title': info.get('title'), 'channel': info.get('channel') or info.get('uploader'),
             'duration_s': info.get('duration'),
             'chapters': [[int((c.get('start_time') or 0) * 1000), str(c.get('title') or '')[:80]]
@@ -1060,7 +1069,7 @@ def _why(e):
     if isinstance(e, urllib.error.HTTPError):
         return f'HTTP {e.code}'
     if isinstance(e, ssl.SSLCertVerificationError):
-        return 'certificate not trusted'
+        return 'wrong clock: ' + time.strftime('%Y-%m-%d', time.gmtime()) if clock_wrong(e) else 'certificate not trusted'
     for kind, phrase in ((ssl.SSLError, 'TLS error'), ((socket.timeout, TimeoutError), 'timed out'),
                          (socket.gaierror, 'name not resolved'), (ConnectionRefusedError, 'connection refused'),
                          (ConnectionResetError, 'connection reset'), (ImportError, 'not found')):

@@ -267,7 +267,7 @@ class Model {
                 if (this.logs && this.logs.state === 'sending') this.logs = { state: 'error', msg: 'old' };
                 this._changed(); return;
             }
-            this.error = String(m.msg || 'error');
+            this.error = String(m.msg || 'error').replace(/^fetch: /, '');   // the service's stage name means nothing to a driver
             if (this.searching) { this.searching = false; this.searchError = this.error; }
         } else if (typeof this['ev_' + m.ev] === 'function') this['ev_' + m.ev](m);   // events of later packages: an ev_<name> method
         else return;

@@ -8,6 +8,7 @@
 
 ## App 0.4.0
 
+- Error messages no longer start with "fetch:".
 - History: a new page on the rail and in the menu with the videos you watched, as YouTube lists them on your
   account. It needs you signed in, like Subscriptions.
 - Health check: a new menu entry that runs the service's checks on the car and shows one row per check, ok or
@@ -26,6 +27,9 @@
 
 ## Service 0.4.0
 
+- When the head unit's clock is wrong, YouTube's certificate looks invalid and every video failed with a long TLS
+  error. The error now says "Wrong head unit clock (date): set the car's date and time", the video is not retried,
+  and the health check's TLS line says the same. Seen in a Send logs report where the clock was 5 weeks behind.
 - `hello`: the app and the service say which version they are and what the service can do, so a new app knows
   what an older service lacks. The service README lists every command and event, and a test keeps that table in
   step with the code.

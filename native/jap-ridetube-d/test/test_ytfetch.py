@@ -430,6 +430,21 @@ class Dns(unittest.TestCase):
         self.assertIs(socket.getaddrinfo, self.orig)
 
 
+class ClockWrong(unittest.TestCase):
+    def test_messages(self):
+        import ssl
+        e = ssl.SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: '
+                                            'certificate is not yet valid (_ssl.c:1010)')
+        m = ytfetch.clock_wrong(Exception('ERROR: [youtube] x: Unable to download API page: ' + str(e)))
+        self.assertTrue(m.startswith("Wrong head unit clock (20"), m)
+        self.assertIsNone(ytfetch.clock_wrong(Exception('HTTP Error 403: Forbidden')))
+        e.verify_message = 'certificate has expired'
+        self.assertTrue(ytfetch._why(e).startswith('wrong clock: 20'))
+        e.verify_message = 'unable to get local issuer certificate'
+        e.args = (1, 'certificate verify failed: unable to get local issuer certificate')
+        self.assertEqual(ytfetch._why(e), 'certificate not trusted')
+
+
 class NoCaptions(unittest.TestCase):
     def test_initial_extract_loses_captions(self):
         import types

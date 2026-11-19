@@ -92,7 +92,7 @@ function qualityHeight(q, lease) {
 // members-only (or members-first) videos: a badge somewhere in the tile, its shape unknown (no capture) - matched on the text
 // shortcut: a JSON scan of the tile, swap for the badge's field once a real members tile is captured
 const isMembers = (t) => /BADGE_STYLE_TYPE_MEMBERS|"Members (only|first)"/i.test(JSON.stringify(t));
-const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country|can't be played|can't play/i;
+const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country|can't be played|can't play|head unit clock/i;
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function withTimeout(p, ms, what) {
     return new Promise(function (resolve, reject) {

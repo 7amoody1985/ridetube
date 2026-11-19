@@ -73,6 +73,7 @@ const fakeYt = async (method, url, headers, body) => {
     if (url === 'https://www.youtube.com/o/oauth2/token') { const r = yt.token(body); return json(r, r.error ? 400 : 200); }
     if (url === 'https://www.youtube.com/youtubei/v1/browse') return yt.browse(headers, body);
     if (url === 'https://www.youtube.com/youtubei/v1/search') return yt.search(headers, body);
+    if (url === 'https://www.youtube.com/youtubei/v1/next' && yt.next) return yt.next(headers, body);
     if (url.indexOf('https://sponsor.ajay.app/api/skipSegments/') === 0 && yt.sb) return yt.sb(url);
     if (url === 'https://www.youtube.com/youtubei/v1/player') return json({ playbackTracking: { videostatsPlaybackUrl: { baseUrl: 'https://s.youtube.com/api/stats/playback?docid=x&ei=E' }, videostatsWatchtimeUrl: { baseUrl: 'https://s.youtube.com/api/stats/watchtime?docid=x&ei=E' } } });
     if (url.indexOf('https://s.youtube.com/api/stats/') === 0) return { status: 204, body: '' };
@@ -805,7 +806,7 @@ async function main() {
         await c.waitFor((x) => authEv('signed_in')(x) && c.evs.filter(authEv('signed_in')).length === 2);
     });
 
-    await t('feed subs: TVHTML5 browse with the token; video tiles only, each once, channel and length', async () => {
+    await t('feed subs: TVHTML5 browse with the token; video tiles and shorts (short:true), each once, channel and length', async () => {
         c.clear(); yt.calls.length = 0;
         yt.browse = (h, b) => ok(BROWSE);
         c.send({ cmd: 'feed', which: 'subs' });
@@ -813,8 +814,9 @@ async function main() {
         const v1 = { id: 'VVVVVVVVVV1', title: 'First', channel: 'Chan A', duration_s: 2390, meta: ['1K views'] };
         const v2 = { id: 'VVVVVVVVVV2', title: 'Second', channel: 'Chan C', duration_s: 3723, meta: ['1K views'] };
         const v3 = { id: 'VVVVVVVVVV3', title: 'Live', channel: 'Chan D', duration_s: null, meta: ['1K views'] };
-        assert.deepStrictEqual(e, { ev: 'feed', which: 'subs', items: [v1, v2, v3],
-            shelves: [{ title: 'Chan A', items: [v1] }, { title: '', items: [v2, v1, v3] }] });
+        const s1 = { id: 'SSSSSSSSSS1', title: 'A short', channel: 'Chan B', duration_s: null, meta: ['1K views'], short: true };
+        assert.deepStrictEqual(e, { ev: 'feed', which: 'subs', items: [v1, s1, v2, v3],
+            shelves: [{ title: '', items: [v1, s1] }, { title: '', items: [v2, v1, v3] }] });
         const b = ytCalls('/browse')[0];
         assert.strictEqual(b.headers.Authorization, 'Bearer ACCESS-1');
         assert.strictEqual(b.body.browseId, 'FEsubscriptions');
@@ -838,7 +840,7 @@ async function main() {
         yt.browse = (h) => (h.Authorization === 'Bearer ACCESS-2' ? { status: 401, body: '{}' } : ok(BROWSE));
         c.send({ cmd: 'feed', which: 'home' });
         const e = await c.waitFor((x) => x.ev === 'feed');
-        assert.strictEqual(e.items.length, 3, JSON.stringify(e));
+        assert.strictEqual(e.items.length, 4, JSON.stringify(e));
         assert.deepStrictEqual(ytCalls('/browse').map((x) => x.headers.Authorization), ['Bearer ACCESS-2', 'Bearer ACCESS-3']);
         assert.strictEqual(ytCalls('/browse')[0].body.browseId, 'FEwhat_to_watch');
         const a2 = readAcct();
@@ -1201,7 +1203,8 @@ async function main() {
         assert.deepStrictEqual(feedItems({ a: [
             { lockupViewModel: { contentId: 'PLxxxxxxxxxxxxxxxx', rendererContext: tap({ watchEndpoint: { videoId: 'AAAAAAAAAAA' } }) } },
             { lockupViewModel: { contentId: 'UCxxxxxxxxxxxxxxxxxxxxxx', rendererContext: tap({ browseEndpoint: { browseId: 'UCx' } }) } },
-            { lockupViewModel: { contentId: 'SSSSSSSSSS1', rendererContext: tap({ reelWatchEndpoint: { videoId: 'SSSSSSSSSS1' } }) } }] }), [], 'playlist, channel, short');
+            { lockupViewModel: { contentId: 'SSSSSSSSSS1', rendererContext: tap({ reelWatchEndpoint: { videoId: 'SSSSSSSSSS1' } }) } }] }),
+            [{ id: 'SSSSSSSSSS1', title: 'SSSSSSSSSS1', channel: '', duration_s: null, meta: [], short: true }], 'playlist, channel dropped; a short kept');
         assert.deepStrictEqual(feedItems({ lockupViewModel: { contentId: 'AAAAAAAAAAA', rendererContext: tap({ watchEndpoint: { videoId: 'AAAAAAAAAAA' } }) } }),
             [{ id: 'AAAAAAAAAAA', title: 'AAAAAAAAAAA', channel: '', duration_s: null, meta: [] }], 'a bare lockup');
     });
@@ -1217,7 +1220,7 @@ async function main() {
         assert.strictEqual(qualityHeight(undefined, null), 720, 'no uplink known: as before');
     });
 
-    await t('feedShelves: titles, per-channel and mixed groups, shorts shelf dropped, per-shelf dedup, meta, caps', async () => {
+    await t('feedShelves: titles, per-channel and mixed groups, shorts shelf kept, per-shelf dedup, meta, caps', async () => {
         const V = 'TILE_CONTENT_TYPE_VIDEO';
         const txt = (x) => ({ lineItemRenderer: { text: { simpleText: x } } });
         const badge = (x) => ({ lineItemRenderer: { badge: { metadataBadgeRenderer: { style: 'BADGE_STYLE_TYPE_SIMPLE', label: x } } } });
@@ -1237,16 +1240,17 @@ async function main() {
             shelf({ tvhtml5Metadata: { retainShelfIndex: true } }, [tile(id(1), V, 'One', 'Chan A', '4:05'), tile(id(6), V, 'Six', 'Chan E', '1:00')]),
             shelf({ headerRenderer: { shelfHeaderRenderer: { title: { simpleText: 'Plain title' } } } }, many)]);
         const sh = feedShelves(root);
-        assert.deepStrictEqual(sh.map((x) => x.title), ['Consumer Electronics and more', 'Chan D', '', 'Plain title']);
+        assert.deepStrictEqual(sh.map((x) => x.title), ['Consumer Electronics and more', 'Shorts', 'Chan D', '', 'Plain title']);
         assert.deepStrictEqual(sh[0].items[0], { id: id(1), title: 'One', channel: 'Chan A', duration_s: 245, meta: ['125K views', '1 day ago'] });
         assert.deepStrictEqual(sh[0].items[1].meta, []);
-        assert.deepStrictEqual(sh[1].items.map((x) => x.id), [id(4), id(5)], 'dedup inside a shelf');
-        assert.deepStrictEqual(sh[2].items.map((x) => x.id), [id(1), id(6)], 'a video in two shelves stays in both');
-        assert.strictEqual(sh[3].items.length, 12);
+        assert.deepStrictEqual(sh[1].items.map((x) => [x.id, x.short]), [[id(3), true]], 'the Shorts shelf, its tiles marked');
+        assert.deepStrictEqual(sh[2].items.map((x) => x.id), [id(4), id(5)], 'dedup inside a shelf');
+        assert.deepStrictEqual(sh[3].items.map((x) => x.id), [id(1), id(6)], 'a video in two shelves stays in both');
+        assert.strictEqual(sh[4].items.length, 12);
         const flat = feedItems(root).map((x) => x.id);
         assert.strictEqual(flat.filter((x) => x === id(1)).length, 1, 'flat items deduped across shelves');
-        assert.deepStrictEqual(flat.slice(0, 5), [id(1), id(2), id(4), id(5), id(6)]);
-        assert.strictEqual(flat.length, 18);
+        assert.deepStrictEqual(flat.slice(0, 6), [id(1), id(2), id(3), id(4), id(5), id(6)]);
+        assert.strictEqual(flat.length, 19);
         const ten = [];
         for (let i = 0; i < 10; i++) ten.push(shelf(avatar(['S' + i]), [tile(id(200 + i), V, 'T', 'C', '1:00')]));
         assert.deepStrictEqual(feedShelves(page(ten)).map((x) => x.title), ['S0', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7']);
@@ -1492,7 +1496,7 @@ async function main() {
 
     await t('hello: service version and caps; lang / region kept for the connection; a bad one dropped, never refused', async () => {
         const FROZEN = ['health', 'related', 'hist', 'ytdlp', 'remote', 'proxy', 'stream'];
-        assert.deepStrictEqual(CAPS, [], 'nothing of the 0.4.0 protocol answers for real yet');
+        assert.deepStrictEqual(CAPS, ['related', 'hist'], 'what of the 0.4.0 protocol answers for real (WP1: related, hist)');
         assert.ok(CAPS.every((x) => FROZEN.indexOf(x) >= 0), 'caps only from the frozen names');
         c.clear();
         c.send({ cmd: 'hello', app: '0.4.0', lang: 'ru', region: 'RU' });
@@ -1519,8 +1523,8 @@ async function main() {
         assert.deepStrictEqual([d.hl, d.gl], [null, null], 'a new connection starts with none');
     });
 
-    await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before; feed hist|liked: unknown feed', async () => {
-        for (const m of [{ cmd: 'health' }, { cmd: 'related', id: 'DemoVideo01' }, { cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
+    await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before', async () => {
+        for (const m of [{ cmd: 'health' }, { cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
             c.clear();
             c.send(m);
             assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', cmd: m.cmd, msg: 'not implemented ' + m.cmd });
@@ -1528,11 +1532,171 @@ async function main() {
         c.clear();
         c.send({ cmd: 'bogus' });
         assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', msg: 'unknown cmd bogus' });
+    });
+
+    // ---- WP1 feeds ----
+    // Real TVHTML5 answers (anonymous, from the Mac, 2026-11-19), trimmed to a few entries, session and tracking
+    // fields removed: /next for aqz-KE-bpKQ, and a search for "cat shorts" (LOCKUP_CONTENT_TYPE_SHORT lockups).
+    // History and Liked videos need an account: their answers below are built like the other browse fixtures.
+    const NEXT = JSON.parse(fs.readFileSync(path.join(__dirname, 'next_tvhtml5.json'), 'utf8'));
+    const SHORTS = JSON.parse(fs.readFileSync(path.join(__dirname, 'search_shorts_tvhtml5.json'), 'utf8'));
+    const NEXT_IDS = ['vE57fPUAQh0', 'rdGTgpVj0Cg', 'sAtlN4OMA1I', 'X2UoFpxy4qo'];
+    const signIn = () => fs.writeFileSync(acct, JSON.stringify({ cid: 'x', sec: 'y', access: 'ACCESS-1', refresh: 'REFRESH-1', exp: Date.now() + 1e7 }), { mode: 0o600 });
+    const signOut = () => { try { fs.unlinkSync(acct); } catch (e) { /* none */ } };
+    const V = 'TILE_CONTENT_TYPE_VIDEO';
+    const resumed = (tl, pct) => { tl.tileRenderer.header.tileHeaderRenderer.thumbnailOverlays.push({ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: pct } }); return tl; };
+    const browsePage = (shelves) => ({ contents: { tvBrowseRenderer: { content: { tvSurfaceContentRenderer: { content: { sectionListRenderer: { contents: shelves } } } } } } });
+    const HIST = browsePage([{ shelfRenderer: { headerRenderer: { shelfHeaderRenderer: { title: { simpleText: 'Today' } } }, content: { horizontalListRenderer: { items: [
+        resumed(tile('HHHHHHHHHH1', V, 'Watched half', 'Chan H', '10:00'), 50), tile('HHHHHHHHHH2', 'TILE_CONTENT_TYPE_SHORTS', 'A short seen', 'Chan S', null)] } } } }]);
+    const LIKED = { contents: { tvBrowseRenderer: { content: { tvSecondaryNavRenderer: { sections: [{ playlistVideoListRenderer: { contents: [
+        tile('LLLLLLLLLL1', V, 'Liked one', 'Chan L', '3:00'), tile('LLLLLLLLLL2', V, 'Liked two', 'Chan L', '4:00')] } }] } } } } };
+
+    await t('feed hist / liked: FEhistory and VLLL browsed with the token, tiles parsed (watched share, a short); signed out: "signed out", nothing asked', async () => {
+        signIn();
+        c.clear(); yt.calls.length = 0;
+        yt.browse = (h, b) => ok(b.browseId === 'FEhistory' ? HIST : b.browseId === 'VLLL' ? LIKED : {});
+        c.send({ cmd: 'feed', which: 'hist' });
+        const h = await c.waitFor((x) => x.ev === 'feed' && x.which === 'hist');
+        const h1 = { id: 'HHHHHHHHHH1', title: 'Watched half', channel: 'Chan H', duration_s: 600, meta: ['1K views'], watched_pct: 50 };
+        const h2 = { id: 'HHHHHHHHHH2', title: 'A short seen', channel: 'Chan S', duration_s: null, meta: ['1K views'], short: true };
+        assert.deepStrictEqual(h, { ev: 'feed', which: 'hist', items: [h1, h2], shelves: [{ title: 'Today', items: [h1, h2] }] });
+        c.send({ cmd: 'feed', which: 'liked' });
+        const l = await c.waitFor((x) => x.ev === 'feed' && x.which === 'liked');
+        assert.deepStrictEqual([l.items.map((x) => x.id), l.shelves], [['LLLLLLLLLL1', 'LLLLLLLLLL2'], []], 'a playlist: no shelves');
+        assert.deepStrictEqual(ytCalls('/browse').map((x) => [x.body.browseId, x.headers.Authorization]), [['FEhistory', 'Bearer ACCESS-1'], ['VLLL', 'Bearer ACCESS-1']]);
+        signOut();
+        c.clear(); yt.calls.length = 0;
         for (const which of ['hist', 'liked']) {
-            c.clear();
             c.send({ cmd: 'feed', which: which });
-            assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'feed'), { ev: 'feed', which: which, error: 'unknown feed' });
+            assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'feed' && x.which === which), { ev: 'feed', which: which, error: 'signed out' });
         }
+        assert.strictEqual(ytCalls('/browse').length, 0, 'nothing asked without an account');
+    });
+
+    await t('related: the watch-next tiles (real TVHTML5 /next), the video itself left out; anonymous signed out; kept 10 min per video and language; offline; bad id', async () => {
+        signOut();
+        const id = 'aqz-KE-bpKQ';
+        c.clear(); yt.calls.length = 0; d.relatedKept = {};
+        yt.next = (h, b) => ok({ a: NEXT, b: tile(b.videoId, V, 'Itself', 'Blender', '10:34') });
+        c.send({ cmd: 'related', id: id });
+        const e = await c.waitFor((x) => x.ev === 'related');
+        assert.deepStrictEqual(e.items.map((x) => x.id), NEXT_IDS, JSON.stringify(e));
+        assert.deepStrictEqual(e.items[0], { id: 'vE57fPUAQh0', title: 'The Good Dinosaur -  Best Scenes', channel: 'Hinl', duration_s: 1437, meta: ['17M views', '9 years ago'] });
+        assert.deepStrictEqual(Object.keys(e), ['ev', 'id', 'items']);
+        const r0 = ytCalls('/youtubei/v1/next')[0];
+        assert.strictEqual(r0.headers, null, 'anonymous');
+        assert.deepStrictEqual(r0.body, { context: { client: { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'en' } }, videoId: id });
+        c.clear();
+        c.send({ cmd: 'related', id: id });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'related'), e, 'kept');
+        assert.strictEqual(ytCalls('/youtubei/v1/next').length, 1, 'within 10 min: not asked again');
+        Object.keys(d.relatedKept).forEach((k) => { d.relatedKept[k].t -= 600001; });
+        c.clear();
+        c.send({ cmd: 'related', id: id });
+        await c.waitFor((x) => x.ev === 'related');
+        assert.strictEqual(ytCalls('/youtubei/v1/next').length, 2, 'after 10 min: asked again');
+        c.send({ cmd: 'hello', app: '0.4.0', lang: 'de', region: 'DE' });
+        await c.waitFor((x) => x.ev === 'hello');
+        c.clear();
+        c.send({ cmd: 'related', id: id });
+        await c.waitFor((x) => x.ev === 'related');
+        assert.strictEqual(ytCalls('/youtubei/v1/next').length, 3, 'another language: asked again');
+        assert.deepStrictEqual(ytCalls('/youtubei/v1/next')[2].body.context.client, { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'de', gl: 'DE' });
+        c.send({ cmd: 'hello', app: '0.4.0' });
+        await waitUntil(() => d.hl === null);
+        signIn();
+        c.clear(); yt.calls.length = 0;
+        yt.next = (h, b) => (h ? { status: 401, body: '{}' } : ok(NEXT));
+        c.send({ cmd: 'related', id: 'XXXXXXXXXX1' });
+        assert.deepStrictEqual((await c.waitFor((x) => x.ev === 'related')).items.map((x) => x.id), NEXT_IDS);
+        assert.deepStrictEqual(ytCalls('/youtubei/v1/next').map((x) => x.headers && x.headers.Authorization), ['Bearer ACCESS-1', null], 'signed in, then anonymous on a 401');
+        c.send({ cmd: 'sign_out' });
+        await c.waitFor(authEv('signed_out'));
+        c.clear();
+        c.send({ cmd: 'related', id: 'XXXXXXXXXX1' });
+        await c.waitFor((x) => x.ev === 'related');
+        assert.strictEqual(ytCalls('/youtubei/v1/next').length, 3, 'sign_out drops what the account was shown');
+        c.clear(); logs.length = 0;
+        yt.next = () => Promise.reject(new Error('ENETUNREACH'));
+        c.send({ cmd: 'related', id: 'XXXXXXXXXX2' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'related'), { ev: 'related', id: 'XXXXXXXXXX2', error: 'related offline' });
+        assert.ok(logs.some((m) => m === 'related: ENETUNREACH'), logs.join('|'));
+        yt.next = () => ({ status: 500, body: 'x' });
+        c.clear();
+        c.send({ cmd: 'related', id: 'XXXXXXXXXX2' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'related'), { ev: 'related', id: 'XXXXXXXXXX2', error: 'related offline' }, 'an error answer is not kept');
+        c.clear();
+        c.send({ cmd: 'related', id: '../etc' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'related'), { ev: 'related', id: '../etc', error: 'bad id' });
+        yt.next = null;
+    });
+
+    await t('Shorts: a real TVHTML5 search of shorts (LOCKUP_CONTENT_TYPE_SHORT) and Shorts tiles come with short:true, plain videos without', async () => {
+        const items = feedItems(SHORTS);
+        assert.deepStrictEqual(items.map((x) => [x.id, x.short, x.duration_s]), [['odPXcj2id8k', true, null], ['TsIvLpSJQbk', true, null], ['SgbNfUpnLj0', true, null], ['6W2q6g-qs4w', true, null]]);
+        assert.deepStrictEqual(items[0].meta, ['274M views', '1 year ago']);
+        assert.ok(feedItems(SEARCH).concat(feedItems(NEXT)).every((x) => !('short' in x)), 'no flag on plain videos');
+        signOut();
+        c.clear();
+        yt.search = () => ok(SHORTS);
+        c.send({ cmd: 'search', q: 'cat shorts' });
+        assert.deepStrictEqual((await c.waitFor((x) => x.ev === 'results')).items, items);
+        yt.search = () => ok(SEARCH);
+    });
+
+    await t('100 videos per list; the worst-case feed line (100 items + 8 shelves of 12) stays under the app\'s 1 MiB MAX_LINE', async () => {
+        const MAX_LINE = 1 << 20;   // apps/jap_ridetube/yt.js
+        // the longest text JSON can make: 100 control characters, each written as \u00XX (6 bytes)
+        const big = new Array(101).join('\u0001'), part = { lineItemRenderer: { text: { simpleText: big } } };
+        const id = (n) => 'W' + ('000000000' + n).slice(-10);
+        const fat = (n) => resumed(tile(id(n), V, big, big, '10:00:00', [part, part, part]), 99);
+        const shelves = [];
+        for (let s = 0; s < 11; s++) { const tl = []; for (let i = 0; i < 12; i++) tl.push(fat(s * 12 + i)); shelves.push({ shelfRenderer: { content: { horizontalListRenderer: { items: tl } } } }); }
+        signIn();
+        c.clear();
+        yt.browse = () => ok(browsePage(shelves));
+        c.send({ cmd: 'feed', which: 'home' });
+        const e = await c.waitFor((x) => x.ev === 'feed' && x.which === 'home');
+        assert.deepStrictEqual([e.items.length, e.shelves.length, e.shelves.every((x) => x.items.length === 12)], [100, 8, true]);
+        const line = JSON.stringify(e) + '\n';
+        assert.ok(line.length < MAX_LINE && Buffer.byteLength(line) < MAX_LINE, 'feed line ' + Buffer.byteLength(line) + ' bytes');
+        assert.ok(Buffer.byteLength(line) > 400000, 'the worst case really is big: ' + Buffer.byteLength(line));
+        yt.search = () => ok(browsePage(shelves));
+        c.clear();
+        c.send({ cmd: 'search', q: 'x' });
+        assert.strictEqual((await c.waitFor((x) => x.ev === 'results')).items.length, 100);
+        yt.next = () => ok(browsePage(shelves));
+        c.send({ cmd: 'related', id: 'YYYYYYYYYY1' });
+        assert.strictEqual((await c.waitFor((x) => x.ev === 'related')).items.length, 100);
+        yt.search = () => ok(SEARCH); yt.next = null;
+    });
+
+    await t('hl / gl from hello reach feeds, search and related; the Playlists page stays English; no hello: hl en, no gl; caps related + hist', async () => {
+        assert.ok(CAPS.indexOf('related') >= 0 && CAPS.indexOf('hist') >= 0);
+        signIn();
+        yt.browse = () => ok(BROWSE);
+        yt.next = () => ok(NEXT);
+        const ask = async () => {
+            yt.calls.length = 0; c.clear();
+            c.send({ cmd: 'feed', which: 'subs' }); await c.waitFor((x) => x.ev === 'feed');
+            c.send({ cmd: 'search', q: 'q' }); await c.waitFor((x) => x.ev === 'results');
+            c.send({ cmd: 'related', id: 'ZZZZZZZZZZ' + (d.hl ? '1' : '2') }); await c.waitFor((x) => x.ev === 'related');
+            c.send({ cmd: 'playlists' }); await c.waitFor((x) => x.ev === 'playlists');
+            return yt.calls.filter((x) => x.body && x.body.context).map((x) => [x.url.replace(/.*v1\//, ''), x.body.browseId || '', x.body.context.client]);
+        };
+        c.send({ cmd: 'hello', app: '0.4.0', lang: 'ru', region: 'RU' });
+        await waitUntil(() => d.hl === 'ru');
+        const ru = { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'ru', gl: 'RU' };
+        const en = { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'en' };
+        const got = await ask();
+        assert.deepStrictEqual(got.slice(0, 4), [['browse', 'FEsubscriptions', ru], ['search', '', ru], ['next', '', ru], ['browse', 'FEplaylist_aggregation', en]]);
+        c.send({ cmd: 'hello', app: '0.4.0', region: 'RU' });
+        await waitUntil(() => d.hl === null);
+        assert.deepStrictEqual((await ask()).slice(0, 3).map((x) => x[2]), [1, 2, 3].map(() => ({ clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'en', gl: 'RU' })), 'a region alone');
+        c.send({ cmd: 'hello', app: '0.4.0' });
+        await waitUntil(() => d.gl === null);
+        assert.deepStrictEqual((await ask()).slice(0, 3).map((x) => x[2]), [en, en, en], 'none: as before');
+        yt.next = null;
     });
 
     // ---- WP3 socket + security ----

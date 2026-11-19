@@ -25,8 +25,8 @@ const VIDEO_DIR_MODE = 0o711;
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
 const VERSION = '0.3.12';   // component.json's (test_ytd.js checks): sent with a log report
 // what `hello` says this build answers for real. The frozen names: health, related, hist (feed hist|liked), ytdlp,
-// remote, proxy, stream. A package adds its name here (through the integrator) once its command works; none do yet
-const CAPS = [];
+// remote, proxy, stream. A package adds its name here (through the integrator) once its command works
+const CAPS = ['related', 'hist'];
 const LANG_RE = /^[a-z]{2}$/, REGION_RE = /^[A-Z]{2}$/;   // hello's lang ("ru") and region ("RU")
 // the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
 const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
@@ -329,11 +329,13 @@ function fetchRequest(o, uid, req) {
 const YT = 'https://www.youtube.com';
 const TV_UA = 'Mozilla/5.0 (Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1';
 const TV_CLIENT = { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'en' };
+// TV_CLIENT in hello's language and region (feeds, search, related); English and no region when the app sent none
+function tvClient(hl, gl) { return Object.assign({}, TV_CLIENT, hl ? { hl: hl } : {}, gl ? { gl: gl } : {}); }
 const CRED_RE = /clientId:"([-\w]+\.apps\.googleusercontent\.com)",\n?[$\w]+:"([-\w]+)"/;
 const SCOPE = 'http://gdata.youtube.com https://www.googleapis.com/auth/youtube-paid-content';
 const TOKEN_URL = YT + '/o/oauth2/token';
-const FEEDS = { home: 'FEwhat_to_watch', subs: 'FEsubscriptions', wl: 'VLWL' };
-const FEED_MAX = 50;
+const FEEDS = { home: 'FEwhat_to_watch', subs: 'FEsubscriptions', wl: 'VLWL', hist: 'FEhistory', liked: 'VLLL' };
+const FEED_MAX = 100;   // a feed's, channel's, playlist's, search's or related list's videos (a full feed line stays far under the app's 1 MiB)
 
 // method, url, headers, body (JSON or null) -> {status, body (utf8)}; no redirects (none seen on these URLs)
 function ytRequest(method, url, headers, body, timeoutMs, lookup) {
@@ -371,12 +373,14 @@ function ytRequest(method, url, headers, body, timeoutMs, lookup) {
 const runsText = (x) => (!x ? '' : typeof x.simpleText === 'string' ? x.simpleText
     : Array.isArray(x.runs) ? x.runs.map((r) => (r && r.text) || '').join('') : '');
 function hms(s) { return /^\d+(:\d{1,2}){1,2}$/.test(s) ? s.split(':').reduce((a, p) => a * 60 + Number(p), 0) : null; }
-// One TVHTML5 tileRenderer -> {id,title,channel,duration_s,meta}, or null when it is not a video
-// (shorts, channels, playlists). meta: the texts of the second line, without its "•" and badges ("4K").
+// One TVHTML5 tileRenderer -> {id,title,channel,duration_s,meta}, or null when it is not a video (channels,
+// playlists). A short (reelWatchEndpoint) is a video with short:true: the app decides whether it shows them.
+// meta: the texts of the second line, without its "•" and badges ("4K").
 function tileItem(t) {
-    const ep = t.onSelectCommand && t.onSelectCommand.watchEndpoint;
+    const sel = t.onSelectCommand || {}, short = t.contentType === 'TILE_CONTENT_TYPE_SHORTS';
+    const ep = short ? sel.reelWatchEndpoint : sel.watchEndpoint;
     const id = t.contentId || (ep && ep.videoId);
-    if (t.contentType !== 'TILE_CONTENT_TYPE_VIDEO' || !ID_RE.test(String(id))) return null;
+    if ((t.contentType !== 'TILE_CONTENT_TYPE_VIDEO' && !short) || !ID_RE.test(String(id))) return null;
     const m = (t.metadata && t.metadata.tileMetadataRenderer) || {};
     const lines = (Array.isArray(m.lines) ? m.lines : []).map((l) => ((l && l.lineRenderer && l.lineRenderer.items) || [])
         .map((i) => runsText(i && i.lineItemRenderer && i.lineItemRenderer.text)));
@@ -385,17 +389,19 @@ function tileItem(t) {
     const rp = ovs.map((x) => x && x.thumbnailOverlayResumePlaybackRenderer).filter(Boolean)[0];   // the account's own progress
     const it = { id: id, title: runsText(m.title) || id, channel: (lines[0] || []).join(''), duration_s: hms(runsText(ov && ov.text)),
         meta: (lines[1] || []).filter((x) => x && x.trim() !== '\u2022') };
+    if (short) it.short = true;
     if (rp && rp.percentDurationWatched > 0) it.watched_pct = Math.min(100, Number(rp.percentDurationWatched) || 0);
     if (ep && ep.startTimeSeconds > 0) it.start_s = Number(ep.startTimeSeconds);
     if (isMembers(t)) it.members = true;
     return it;
 }
 // One TVHTML5 lockupViewModel (search answers, 2026-11) -> the same, or null when not a video: playlists
-// (contentId a list) and channels (no watchEndpoint). meta: the second metadata row, without badges.
+// (contentId a list) and channels (no watchEndpoint). A short (LOCKUP_CONTENT_TYPE_SHORT, a reelWatchEndpoint) has
+// short:true. meta: the second metadata row, without badges.
 function lockupItem(l) {
     const cc = l.rendererContext && l.rendererContext.commandContext;
-    const cmd = cc && cc.onTap && cc.onTap.innertubeCommand;
-    const id = cmd && cmd.watchEndpoint && cmd.watchEndpoint.videoId;
+    const cmd = (cc && cc.onTap && cc.onTap.innertubeCommand) || {};
+    const ep = cmd.watchEndpoint || cmd.reelWatchEndpoint, id = ep && ep.videoId;
     if (!ID_RE.test(String(id)) || id !== l.contentId) return null;
     const m = (l.metadata && l.metadata.lockupMetadataViewModel) || {};
     const cm = m.metadata && m.metadata.contentMetadataViewModel;
@@ -404,6 +410,7 @@ function lockupItem(l) {
     const ov = (tv.overlays || []).map((x) => x && x.thumbnailBottomOverlayViewModel).filter(Boolean)[0];
     const len = ((ov && ov.badges) || []).map((x) => x && x.thumbnailBadgeViewModel && x.thumbnailBadgeViewModel.text).filter(Boolean)[0];
     const it = { id: id, title: (m.title && m.title.content) || id, channel: (rows[0] || []).join(''), duration_s: hms(String(len)), meta: rows[1] || [] };
+    if (!cmd.watchEndpoint) it.short = true;
     if (isMembers(l)) it.members = true;
     return it;
 }
@@ -565,10 +572,12 @@ function addToPlaylistItems(root) {
 }
 
 // emit(o): to the app. Every method answers with an event and never rejects (a rejection would be a fault).
-function Account(opts, emit) {
+// client(): the InnerTube client of this connection's language (tvClient); TV_CLIENT when not given
+function Account(opts, emit, client) {
     this.opts = opts;
     this.log = opts.log;
     this.emit = emit;
+    this.client = client || (() => TV_CLIENT);
     this.pending = null;     // the device code shown: {cid, sec, device, code, url, interval, expires, timer}
     this.starting = false;
     this.refreshing = null;
@@ -730,10 +739,11 @@ Account.prototype.refresh = async function (a, out) {
     if (j.error === 'invalid_grant') { this.drop('invalid_grant'); throw out; } // revoked or expired: sign in again
     throw new Error('refresh: ' + (j.error || r.status));
 };
-Account.prototype.browse = function (browseId, token) {
-    return this.json('POST', YT + '/youtubei/v1/browse', { context: { client: TV_CLIENT }, browseId: browseId }, { Authorization: 'Bearer ' + token });
+Account.prototype.browse = function (browseId, token, client) {
+    return this.json('POST', YT + '/youtubei/v1/browse', { context: { client: client || this.client() }, browseId: browseId }, { Authorization: 'Bearer ' + token });
 };
-// `feed` {which: home|subs|wl} -> feed{which, items, shelves} or feed{which, error}
+// `feed` {which: home|subs|wl|hist|liked} -> feed{which, items, shelves} or feed{which, error}; hist is the account's
+// watch history (FEhistory), liked its Liked videos (VLLL). Signed out: error 'signed out', as every feed
 Account.prototype.feed = function (which) {
     which = String(which);
     if (typeof FEEDS[which] !== 'string') { this.emit({ ev: 'feed', which: which, error: 'unknown feed' }); return Promise.resolve(); }
@@ -769,7 +779,7 @@ Account.prototype.channel = function (id) {
 // when it refuses (seen 2026-11: 404 for an account a while, then 200) or lists none (a page we no longer read:
 // every account has Liked videos at least), the Save to playlist list (no counts). That one failing after the
 // page's 200: the page's (empty) answer.
-// `playlist` {id} -> playlist{id, title, items} (its videos, at most 50) or playlist{id, error}
+// `playlist` {id} -> playlist{id, title, items} (its videos, at most FEED_MAX) or playlist{id, error}
 const ANY_VIDEO = 'jNQXAC9IVRw';   // get_add_to_playlist lists the playlists for a video; any public one does
 Account.prototype.playlists = async function () {
     const g = this.gen, call = async (fn) => {
@@ -779,7 +789,7 @@ Account.prototype.playlists = async function () {
         return r;
     };
     try {
-        const r = await call((tok) => this.browse('FEplaylist_aggregation', tok));
+        const r = await call((tok) => this.browse('FEplaylist_aggregation', tok, TV_CLIENT));   // English: playlistTiles reads "N videos"
         let items = r.status === 200 && r.j ? playlistTiles(r.j) : null;
         if (!items || !items.length) {
             const q = await call((tok) => this.json('POST', YT + '/youtubei/v1/playlist/get_add_to_playlist',
@@ -1052,7 +1062,7 @@ function Daemon(o) {
     this.childFetch = !this.opts.ytRequest;
     if (this.childFetch) this.opts.ytRequest = (m, u, h, b, t) => this.fetch({ method: m, url: u, headers: h, body: b, timeoutMs: t });
     this.fetchUid = null;
-    this.account = new Account(this.opts, (o) => this.emit(o));
+    this.account = new Account(this.opts, (o) => this.emit(o), () => tvClient(this.hl, this.gl));
 }
 // the fetch uid (picked on first need; none: an error naming why, never a crash)
 Daemon.prototype.uid = function () {
@@ -1486,7 +1496,32 @@ Daemon.prototype.hello = function (m) {
 // commands of the frozen protocol whose package has not landed: each answers this until its package replaces the body
 Daemon.prototype.notImplemented = function (cmd) { return this.emit({ ev: 'error', cmd: cmd, msg: 'not implemented ' + cmd }); };
 Daemon.prototype.health = function () { return this.notImplemented('health'); };              // WP4
-Daemon.prototype.related = function (id) { return this.notImplemented('related'); };          // WP1
+// `related` {id} -> related{id, items} (what YouTube plays after it: the TVHTML5 watch-next answer's video tiles, the
+// video itself left out) or related{id, error}. Signed in when we can, anonymous otherwise (as search); kept 10 min
+// per video and language, dropped at sign-out. After marilykinson-glitch's fork (GPL-3.0)
+const RELATED_KEEP = 600000;
+Daemon.prototype.related = async function (id) {
+    if (!ID_RE.test(String(id))) return this.emit({ ev: 'related', id: String(id), error: 'bad id' });
+    const key = id + '/' + (this.hl || '') + '/' + (this.gl || ''), g = this.account.gen;
+    const c = this.relatedKept || (this.relatedKept = {}), k = c[key];
+    if (k && k.g === g && Date.now() - k.t < RELATED_KEEP) return this.emit({ ev: 'related', id: id, items: k.items });
+    const body = { context: { client: tvClient(this.hl, this.gl) }, videoId: id };
+    const ask = (tok) => this.account.json('POST', YT + '/youtubei/v1/next', body, tok ? { Authorization: 'Bearer ' + tok } : null);
+    let r;
+    try {
+        const tok = await this.account.token(false).catch(() => null);
+        r = await ask(tok);
+        if (r.status === 401 && tok) r = await ask(null);
+        if (r.status !== 200 || !r.j) throw new Error('next ' + r.status);
+    } catch (e) {
+        this.log('related: ' + e.message);
+        return this.emit({ ev: 'related', id: id, error: e.noUid ? e.message : 'related offline' });
+    }
+    const items = feedItems(r.j).filter((x) => x.id !== id).slice(0, FEED_MAX);
+    Object.keys(c).forEach((x) => { if (Date.now() - c[x].t >= RELATED_KEEP) delete c[x]; });   // old ones go: no unbounded map
+    c[key] = { t: Date.now(), g: g, items: items };
+    return this.emit({ ev: 'related', id: id, items: items });
+};
 Daemon.prototype.ytdlp = function (auto) { return this.notImplemented('ytdlp'); };            // WP6
 Daemon.prototype.remote = function (on) { return this.notImplemented('remote'); };            // WP9, 0.5.0
 Daemon.prototype.proxy = function (mode) { return this.notImplemented('proxy'); };            // WP11, 0.5.0
@@ -1580,7 +1615,7 @@ Daemon.prototype.sendLogs = async function (app) {
 Daemon.prototype.search = async function (q) {
     q = typeof q === 'string' ? q.trim() : '';
     if (!q) return this.emit({ ev: 'error', msg: 'empty search' });
-    const ask = (tok) => this.account.json('POST', YT + '/youtubei/v1/search', { context: { client: TV_CLIENT }, query: q },
+    const ask = (tok) => this.account.json('POST', YT + '/youtubei/v1/search', { context: { client: tvClient(this.hl, this.gl) }, query: q },
         tok ? { Authorization: 'Bearer ' + tok } : null);
     let r;
     try {

@@ -260,7 +260,9 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
   MainApp's registry (`/var/opt/public/oap/oap_12201/data/apps/jap_ridetube.json`) and makes the socket
   `<uid>:root` 0600, checked again every 5 s (a reinstall can change the uid). The uid must be an integer, inside
   MainApp's app uid ranges when those can be read, and never the fetch uid. The last good uid is kept in `state/app-uid.json`: if the
-  registry later cannot be read, the socket stays locked to that uid, across restarts too. When the owner changes,
+  registry later cannot be read, the socket stays locked to that uid, across restarts too. If the entry is gone from
+  the registry (the app was uninstalled), the socket is root only (0600) until it comes back, because MainApp may give
+  the old uid to another app. When the owner changes,
   the connected client is dropped and the app reconnects under the new owner. Only when no uid was ever known (a
   fresh install whose registry cannot be read) is the socket 0660 root:`tm_oap_app`, logged: then every app on the
   head unit shares that group, so any installed app can drive the daemon (play, search, read the feeds and the
@@ -276,8 +278,10 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
   - ytdec, as root, reads `index.bin` and `video.h264` there: a known remaining surface;
   - in this version it unlinks `ytdlp/info/<id>.json` when a play is retried, which follows a symlinked `info/`
     (being removed in the playback rework).
-- `cache/` itself must be a real folder owned by root: the daemon refuses to start otherwise, and puts it back to
-  0711 (logged) if it was group or other writable.
+- `cache/` itself must be a real folder owned by root: the daemon refuses to start otherwise (systemd then retries
+  every 3 s), and puts it back to 0711 (logged) if it was group or other writable. To recover from a refusal, remove
+  the folder as root (`rm -rf /var/opt/jap-ridetube-d/cache`) and restart the service; it only holds cached videos and
+  saved positions.
 - The cache (`/var/opt/jap-ridetube-d/cache`) is 0711: the fetch uid reaches its own folders, and nobody else can
   list what was watched. Each video's folder is 0711: BMW's media engine (its own uid) opens the audio in it by
   name, and nobody can list it. The thumbnail folder is 0700 and `positions.json` (where each video was left, the

@@ -1577,10 +1577,24 @@ async function main() {
         } finally { fs.chownSync = realChown; }
     });
 
-    await t('WP3 socket: registry gone, unreadable or not an app uid -> the last uid kept (logged once), never shared; a failed chown keeps the previous owner', async () => {
+    await t('WP3 socket: registry entry removed (uninstall) after a uid was known -> root only (0600) until it comes back', async () => {
         recordChown(false);
+        const keep = fs.readFileSync(reg);
         try {
             fs.unlinkSync(reg);
+            await waitUntil(() => ds.sockUid === 0, 350);
+            assert.deepStrictEqual([chowns.slice(-1)[0], modeOf(wsock), ds.sockShared()], [[wsock, 0, 0], 0o600, false]);
+            assert.strictEqual(wlogs.filter((m) => /no longer in MainApp's registry: root only$/.test(m)).length, 1, 'logged once');
+            fs.writeFileSync(reg, keep);
+            await waitUntil(() => ds.sockUid === 23457, 350);
+            assert.deepStrictEqual(chowns.slice(-1)[0], [wsock, 23457, 0]);
+        } finally { fs.chownSync = realChown; }
+    });
+
+    await t('WP3 socket: registry unreadable or not an app uid -> the last uid kept (logged once), never shared; a failed chown keeps the previous owner', async () => {
+        recordChown(false);
+        try {
+            fs.writeFileSync(reg, '{');
             await sleep(350);
             assert.deepStrictEqual([ds.sockUid, chowns, modeOf(wsock), ds.sockShared()], [23457, [], 0o600, false]);
             ['{"userId":"root"}', '{"userId":true}', '{"userId":5}', '{"userId":23999}', '{"userId":23456.5}', '{'].forEach((txt) => {
@@ -1629,7 +1643,7 @@ async function main() {
         try {
             const f = path.join(wroot, 'state', 'app-uid.json');
             assert.deepStrictEqual([JSON.parse(fs.readFileSync(f, 'utf8')), modeOf(f)], [{ uid: 23458 }, 0o600]);
-            fs.unlinkSync(reg);
+            fs.writeFileSync(reg, '{');                                 // unreadable, not removed
             const x = await sockDaemon('restart', path.join(wroot, 'state'));
             assert.deepStrictEqual([x.sockUid, chowns.slice(-1)[0], modeOf(x.opts.sock)], [23458, [x.opts.sock, 23458, 0], 0o600]);
             fs.writeFileSync(f, JSON.stringify({ uid: 5 }));            // not an app uid: not trusted either
@@ -1647,9 +1661,9 @@ async function main() {
             fs.writeFileSync(reg, JSON.stringify({ userId: 23460 }));
             x.lockSocket();
             assert.deepStrictEqual([x.sockUid, modeOf(x.opts.sock), x.sockShared()], [23460, 0o600, false]);
-            fs.unlinkSync(reg);
+            fs.unlinkSync(reg);                                          // removed once known: root only, not shared
             x.lockSocket();
-            assert.deepStrictEqual([x.sockUid, modeOf(x.opts.sock)], [23460, 0o600]);
+            assert.deepStrictEqual([x.sockUid, modeOf(x.opts.sock), x.sockShared()], [0, 0o600, false]);
         } finally { fs.chownSync = realChown; }
     });
 

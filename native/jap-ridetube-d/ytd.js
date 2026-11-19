@@ -1341,6 +1341,13 @@ Daemon.prototype.knownAppUid = function () {
         this.lastAppUid = this.okAppUid(k) ? k : null;
     }
     const u = this.appUid();
+    if (u === null && this.lastAppUid !== null && this.appRemoved()) {
+        // uninstalled (or mid-reinstall): its old uid may go to another app, so root only until an entry comes back
+        if (!this.regGone) this.log('ctl.sock: RideTube is no longer in MainApp\'s registry: root only');
+        this.regGone = true;
+        return 0;
+    }
+    this.regGone = false;
     if (u === null) {
         if (this.lastAppUid !== null && !this.regBad) this.log('ctl.sock: no valid app uid in MainApp\'s registry: kept ' + this.lastAppUid);
         this.regBad = true;
@@ -1356,6 +1363,11 @@ Daemon.prototype.knownAppUid = function () {
     }
     return u;
 };
+// true when MainApp's apps folder lists fine and has no jap_ridetube.json (a read error is not a removal)
+Daemon.prototype.appRemoved = function () {
+    try { return fs.readdirSync(path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps')).indexOf('jap_ridetube.json') < 0; }
+    catch (e) { return false; }
+};
 // ctl.sock belongs to the app's uid alone (<uid>:root 0600): no other app can play, read feeds or sign out. Shared
 // (0660 root:tm_oap_app, every app can connect) only while no app uid was ever known (a fresh install whose registry
 // cannot be read). Applied only when it changes, logged then; a connection made before a change is dropped (the app
@@ -1368,7 +1380,7 @@ Daemon.prototype.lockSocket = function () {
     try {
         if (u === null) { fs.chmodSync(sock, 0o660); fs.chownSync(sock, 0, this.opts.sockGid); }
         else { fs.chmodSync(sock, 0o600); fs.chownSync(sock, u, 0); }   // closed first, then handed over
-        this.log(u === null ? 'ctl.sock: shared with every app (0660 root:tm_oap_app): no app uid known' : 'ctl.sock: app uid ' + u + ' only (0600)');
+        this.log(u === null ? 'ctl.sock: shared with every app (0660 root:tm_oap_app): no app uid known' : u === 0 ? 'ctl.sock: root only (0600)' : 'ctl.sock: app uid ' + u + ' only (0600)');
         this.sockUid = u;
         this.sockErr = null;
     } catch (e) {

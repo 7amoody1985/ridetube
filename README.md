@@ -177,6 +177,18 @@ Auto and the car's menu for RideTube pick up the new language by themselves. A l
 two plural forms, or letters outside the Latin fonts, takes a little more work in the code: say so in the pull
 request and I will help.
 
+## Contributors
+
+Thanks to everyone whose code is in RideTube:
+
+- @cars-done: your playlists on the rail, Cyrillic text, touch seeking, the video's title and picture on the
+  cluster and the media screen, and the steering wheel's next and previous buttons.
+- @alexarghir98: Romanian ș ț, and accented letters the fonts lack drawn as their base letter.
+- @marilykinson-glitch: the History and Liked feeds, related videos, the Shorts handling, the dropout recovery
+  and the command-sequence tests, from their fork.
+- @JackieZ123430 (小白151): the Simplified Chinese translation.
+- @Asksket: Close ends the video and goes back to the list.
+
 ## License
 
 GPL-3.0-or-later, Copyright (c) 2026 JustAnotherPU ([LICENSE](LICENSE)). Parts come from others under their

@@ -2616,7 +2616,10 @@ async function main() {
             await a.init();
             assert.deepStrictEqual(built.map((b) => [b[0].mine, b[1]]), [[1, '1'], [2, 'OapGenericMedia']]);
             assert.deepStrictEqual(a.from, { CommandControl: 'MainApp', MediaPlayer: 'MainApp' });
-            assert.deepStrictEqual(a.logs, ['someip: CommandControl from MainApp', 'someip: MediaPlayer from MainApp', 'someip: MainApp v8.3.2-pr-847.1, catalog present, not needed']);
+            assert.deepStrictEqual(a.logs, ['someip: CommandControl from MainApp', 'someip: MediaPlayer from MainApp', 'someip: MainApp v8.3.2-pr-847.1, catalog present, not needed',
+                'someip: in use CommandControl ? v? 1=none, lacks instance 1 connect disconnect listOfMainConnections',
+                'someip: in use MediaPlayer ? v? OapGenericMedia=none, lacks instance OapGenericMedia sendButtonEvent playFile setTime playerState currentItemTime playbackErrorEvent'],
+                'a src-gen file is used unchecked; the report says what it lacks');
             assert.ok(!fs.existsSync(path.join(a.opts.stateDir, 'someip.json')), 'no generator run');
             [ccFile, mpFile].forEach((f) => fs.unlinkSync(f));
         });
@@ -2628,7 +2631,8 @@ async function main() {
                 [45088, { instances: '1', attributes: { listOfMainConnections: 'rs' }, methods: ['connect', 'disconnect'] }, '1'], [45122, '*', 'OapGenericMedia']]);
             assert.deepStrictEqual(a.from, { CommandControl: 'catalog', MediaPlayer: 'catalog' });
             assert.deepStrictEqual(a.logs, ['someip: CommandControl from catalog', 'someip: MediaPlayer from catalog', 'someip: MainApp v8.3.2-pr-847.1, catalog db v0.1.0',
-                'someip: catalog CommandControl 0xB020 v1.1 instances 1=1', 'someip: catalog MediaPlayer 0xB042 v2.0 instances OapGenericMedia=40 BrowserMedia=60']);
+                'someip: catalog CommandControl 0xB020 v1.1 instances 1=1', 'someip: catalog MediaPlayer 0xB042 v2.0 instances OapGenericMedia=40 BrowserMedia=60',
+                'someip: in use CommandControl 0xB020 v1.1 1=1', 'someip: in use MediaPlayer 0xB042 v2.0 OapGenericMedia=40']);
             assert.strictEqual(fs.statSync(path.join(a.opts.stateDir, 'someip.json')).mode & 0o777, 0o600);
             assert.strictEqual(fs.statSync(a.opts.stateDir).mode & 0o777, 0o700);
             assert.strictEqual(a.sources(), 'CommandControl from catalog, MediaPlayer from catalog; MainApp v8.3.2-pr-847.1');
@@ -2676,7 +2680,7 @@ async function main() {
             const k = {};
             (await H.run(x, VERSION)).forEach((h) => { k[h.key] = h; });
             assert.deepStrictEqual([k.audio.ok, k.audio.text], [false, SAY]);
-            assert.ok(/--- someip\nsomeip: CommandControl from built-in\nsomeip: MediaPlayer from built-in\nsomeip: MainApp v8\.3\.2-pr-847\.1, catalog missing\n--- health/.test(x.report('0.4.0', [{ key: 'audio', ok: false, text: SAY }]).log));
+            assert.ok(/--- someip\nsomeip: CommandControl from built-in\nsomeip: MediaPlayer from built-in\nsomeip: MainApp v8\.3\.2-pr-847\.1, catalog missing\n(someip: in use .*\n){2}--- health/.test(x.report('0.4.0', [{ key: 'audio', ok: false, text: SAY }]).log));
             up = true;
             await waitUntil(() => logs.indexOf('someip ready') >= 0, 2000);
             assert.strictEqual(x.audio.unsupported, null);
@@ -2691,7 +2695,8 @@ async function main() {
                 sock: path.join(tmp, 'someip2.sock'), noSetuid: true, spare: false, ytRequest: fakeYt, healthMs: 1500, log: (m) => logs.push(m) });
             await x.audio.init();
             const block = ['--- someip', 'someip: CommandControl from catalog', 'someip: MediaPlayer from built-in', 'someip: MainApp v8.3.2-pr-847.1, catalog db v0.1.0',
-                'someip: catalog CommandControl 0xB020 v1.1 instances 1=1', 'someip: catalog MediaPlayer 0xB042 v2.0 instances BrowserMedia=60 ExternalDeviceUsbFrontAInstanceRearL=11'];
+                'someip: catalog CommandControl 0xB020 v1.1 instances 1=1', 'someip: catalog MediaPlayer 0xB042 v2.0 instances BrowserMedia=60 ExternalDeviceUsbFrontAInstanceRearL=11',
+                'someip: in use CommandControl 0xB020 v1.1 1=1', 'someip: in use MediaPlayer 0xB042 v2.0 OapGenericMedia=40'];
             const ls = x.report('0.4.0').log.split('\n'), at = ls.indexOf('--- someip');
             assert.deepStrictEqual(ls.slice(at, at + block.length), block);
             assert.strictEqual(ls.length, at + block.length, 'last without a health block');

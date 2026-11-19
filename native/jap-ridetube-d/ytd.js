@@ -883,11 +883,14 @@ const IFACES = [
     { key: 'MediaPlayer', id: 'de.bmw.infotainment.entertainment.mediaplayer.MediaPlayer', serviceId: 0xB042, inst: 'OapGenericMedia', proxy: '*',
         uses: { methods: ['sendButtonEvent', 'playFile', 'setTime'], fields: ['playerState', 'currentItemTime'], events: ['playbackErrorEvent'] } }
 ];
-// a description with our instance and everything this file calls, subscribes to or reads
-function usable(d, i) {
-    return !!d && typeof d === 'object' && !!d.instances && typeof d.instances[i.inst] === 'number' &&
-        Object.keys(i.uses).every((kind) => i.uses[kind].every((n) => !!(d[kind] && d[kind][n])));
+// what a description lacks of our instance and of what this file calls, subscribes to or reads ([]: usable)
+function lacking(d, i) {
+    if (!d || typeof d !== 'object') return ['everything'];
+    const out = d.instances && typeof d.instances[i.inst] === 'number' ? [] : ['instance ' + i.inst];
+    Object.keys(i.uses).forEach((kind) => i.uses[kind].forEach((n) => { if (!(d[kind] && d[kind][n])) out.push(n); }));
+    return out;
 }
+const usable = (d, i) => lacking(d, i).length === 0;
 // Last resort, used only when MainApp's src-gen and the catalog both lack a service: our own minimal description of the
 // two services as our P18_23w44 unit (MainApp 8.3.2) has them, limited to what this file uses (the enums it decodes in
 // full, the button enum to the three it sends). Ids, versions or instances may differ on other firmware: then the
@@ -939,7 +942,8 @@ function mainappVersion(srcGen) {
     const v = (readJson(path.join(dir, 'package.json')) || {}).version || (readJson(path.join(dir, 'manifest.json')) || {}).version;
     return typeof v === 'string' && /^[\w.+-]{1,40}$/.test(v) ? 'v' + v : 'unknown';
 }
-const hex = (n) => '0x' + Number(n).toString(16).toUpperCase();
+const hex = (n) => (typeof n === 'number' ? '0x' + n.toString(16).toUpperCase() : '?');
+const ver = (v) => (v && v.major !== undefined ? 'v' + v.major + '.' + v.minor : 'v?');
 const instText = (m) => (m && typeof m === 'object' ? Object.keys(m).map((k) => k + '=' + m[k]).join(' ') : 'none');
 // ytd.js --someip-gen <catalog> <out.json> <oapgen.js> <keys JSON> (root, OAP_APPMGMT: the generator's bundle): what the
 // catalog says of the two services (names and ids only) and, for the keys asked, their descriptions -> out.json
@@ -1002,9 +1006,15 @@ Audio.prototype.resolve = async function () {
         IFACES.forEach((i) => {
             const x = cat.info[i.key];
             diag.push('someip: catalog ' + i.key + ' ' + (!x ? 'none with service id ' + hex(i.serviceId) : (x.name === i.id ? '' : 'named ' + x.name + ' ') + hex(x.serviceId) +
-                ' v' + (x.version && x.version.major) + '.' + (x.version && x.version.minor) + ' instances ' + instText(x.instances)));
+                ' ' + ver(x.version) + ' instances ' + instText(x.instances)));
         });
     }
+    // what goes to buildProxy, whatever its source (a src-gen file is used unchecked, as before)
+    IFACES.forEach((i) => {
+        const d = out[i.key] || {}, miss = lacking(d, i);
+        diag.push('someip: in use ' + i.key + ' ' + hex(d.serviceId) + ' ' + ver(d.version) + ' ' + i.inst + '=' +
+            (d.instances && d.instances[i.inst] !== undefined ? d.instances[i.inst] : 'none') + (miss.length ? ', lacks ' + miss.join(' ') : ''));
+    });
     this.diag = diag;
     diag.forEach((l) => o.log(l));
     return out;

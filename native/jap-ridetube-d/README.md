@@ -15,7 +15,9 @@ run on the car; nothing is downloaded for keeps: the cache holds the last few vi
   3. a built-in description of our P18_23w44 unit's two services, limited to what `ytd.js` uses.
 
   Logged once: `someip: CommandControl from MainApp|catalog|built-in`, MainApp's version and, when the catalog was
-  read, its entries for services 0xB020 and 0xB042 (name, version, instances). With a built-in description and
+  read, its entries for services 0xB020 and 0xB042 (name, version, instances), then per service what goes to
+  `buildProxy` (`someip: in use <service> <id> <version> <instance>=<id>`, plus `lacks ...` for a member `ytd.js`
+  uses that is not there: a src-gen file is used unchecked). With a built-in description and
   no answer, the log, the health check's `audio` row and the play error say `This car's software (<os-release
   VERSION>) does not offer the audio connection RideTube uses`, logged again only when the reason changes.
 - video: `ytdec --dir cache/<id> --rect WxH [--fill] --log /var/opt/jap-ridetube-d/log/ytdec.log`, which

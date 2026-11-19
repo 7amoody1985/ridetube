@@ -54,11 +54,12 @@ function defaults() {
         stateDir: env.MGU_YT_STATE || '/var/opt/jap-ridetube-d/state',
         etcDir: '/etc',
         oapRoot: '/var/opt/public/oap',
+        mgrUid: 12201,       // MainApp's uid: its registry must be owned by it (or root)
         toolRoot: '/var/opt',
         procDir: '/proc',
         mainapps: MAINAPPS,
         fetchCmd: [process.execPath, '--max-http-header-size=65536', __filename, '--fetch'],
-        fetcher: ['/var/opt/mgu-python/current/bin/python3', path.join(here, 'ytfetch.py')],
+        fetcher: ['/var/opt/mgu-python/current/bin/python3', '-I', path.join(here, 'ytfetch.py')],
         thumbCmd: ['/var/opt/jap-node22/current/bin/node', path.join(here, 'thumb.js')],
         startVideoMs: 6000,  // video fetched ahead before playback starts (later the buffering pause covers a slow link)
         fetchRetryMs: [3000, 8000], // a fetch failing before playback (the network): tried again after these waits
@@ -1090,7 +1091,9 @@ Daemon.prototype.uid = function () {
 // Node 8 has no way to skip only the certificate dates, and rejectUnauthorized:false would skip the whole check
 Daemon.prototype.fetch = function (req) {
     try {
-        if (!this.certTime()) return fetchRequest(this.opts, this.uid(), req);
+        // sign-in (refresh token, client secret) never crosses date-unchecked TLS: it fails with the clock error
+        // instead, which is not invalid_grant, so the account stays signed in for when the clock is set
+        if (/^https:\/\/[^/]+\/o\/oauth2\//.test(String(req.url || '')) || !this.certTime()) return fetchRequest(this.opts, this.uid(), req);
         const o = Object.assign({}, this.opts, { fetchCmd: this.opts.fetcher.concat(['request', '--no-cert-time', '--cache-dir', this.ytc(), '--lease', this.opts.leaseFile]) });
         return fetchRequest(o, this.uid(), Object.assign({}, req, { headers: Object.assign({ 'User-Agent': TV_UA }, req.headers || {}) }));
     } catch (e) { return Promise.reject(e); }
@@ -1099,6 +1102,7 @@ Daemon.prototype.fetch = function (req) {
 // fetcher spawn, since the clock may be set while driving. A change after hello is told to the app (`clock`)
 Daemon.prototype.certTime = function () {
     const c = clockBehind((this.opts.now || Date.now)());
+    if (this.clockSaid === undefined) return null;   // no hello on this connection: no app could warn, so dates checked
     if (this.clockSaid !== undefined && c !== this.clockSaid) {
         this.clockSaid = c;
         this.log(c ? 'clock wrong (' + c + '): certificate dates not checked' : 'clock right again: certificate dates checked');
@@ -1367,7 +1371,8 @@ Daemon.prototype.listen = function () {
 // not an app's: an integer (or all-digit string) inside MainApp's app uid ranges (unchecked while those are unknown),
 // never the fetch uid
 Daemon.prototype.appUid = function () {
-    const e = readJson(path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps', 'jap_ridetube.json'));
+    const f = path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps', 'jap_ridetube.json');
+    const e = this.regOk(f) ? readJson(f) : null;
     const v = e && e.userId;
     const u = typeof v === 'number' || typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN;
     return this.okAppUid(u) ? u : null;
@@ -1408,8 +1413,28 @@ Daemon.prototype.knownAppUid = function () {
 };
 // true when MainApp's apps folder lists fine and has no jap_ridetube.json (a read error is not a removal)
 Daemon.prototype.appRemoved = function () {
-    try { return fs.readdirSync(path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps')).indexOf('jap_ridetube.json') < 0; }
+    const d = path.join(this.opts.oapRoot, 'oap_12201', 'data', 'apps');
+    try { return this.regOk(d) && fs.readdirSync(d).indexOf('jap_ridetube.json') < 0; }
     catch (e) { return false; }
+};
+// every app can write /var/opt/public/oap (group mgu_persist), so one could rename oap_12201 and plant its own
+// registry: trust a path only when each part from oap_12201 down is no symlink, owned by MainApp (or root) and not
+// world-writable
+Daemon.prototype.regOk = function (p) {
+    const top = path.join(this.opts.oapRoot, 'oap_12201'), parts = path.relative(top, p).split(path.sep);
+    let cur = top;
+    for (let i = 0; i <= parts.length; i++) {
+        if (i > 0) cur = path.join(cur, parts[i - 1]);
+        let st;
+        try { st = fs.lstatSync(cur); } catch (e) { return false; }
+        if (st.isSymbolicLink() || (st.uid !== this.opts.mgrUid && st.uid !== 0) || (st.mode & 0o002)) {
+            if (!this.regUntrusted) this.log('ctl.sock: MainApp\'s registry is not MainApp\'s (' + cur + '): ignored');
+            this.regUntrusted = true;
+            return false;
+        }
+    }
+    this.regUntrusted = false;
+    return true;
 };
 // ctl.sock belongs to the app's uid alone (<uid>:root 0600): no other app can play, read feeds or sign out. Shared
 // (0660 root:tm_oap_app, every app can connect) only while no app uid was ever known (a fresh install whose registry
@@ -1523,8 +1548,7 @@ Daemon.prototype.hello = function (m) {
     this.gl = typeof m.region === 'string' && REGION_RE.test(m.region) ? m.region : null;
     const bad = (m.lang !== undefined && !this.hl ? ' (bad lang dropped)' : '') + (m.region !== undefined && !this.gl ? ' (bad region dropped)' : '');
     this.log('hello: app ' + (/^\d+(\.\d+){0,3}$/.test(String(m.app)) ? m.app : 'unknown') + ', lang ' + (this.hl || '-') + ', region ' + (this.gl || '-') + bad);
-    this.clockSaid = undefined;
-    const clk = this.certTime();
+    const clk = clockBehind((this.opts.now || Date.now)());
     this.clockSaid = clk;
     if (clk) this.log('clock wrong (' + clk + '): certificate dates not checked');
     return this.emit(Object.assign({ ev: 'hello', service: VERSION, caps: CAPS.slice() }, clk ? { clock: clk } : {}));

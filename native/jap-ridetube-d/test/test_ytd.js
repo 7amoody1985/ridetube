@@ -1566,6 +1566,11 @@ async function main() {
         assert.ok(fs.existsSync(fl + '.node') && !fs.existsSync(fl), 'the clock right: ytd.js --fetch, as before');
         dq.opts.now = () => Date.parse('2026-10-13T08:00:00Z');
         assert.deepStrictEqual(await dq.opts.ytRequest(rq.method, rq.url, rq.headers, rq.body, rq.timeoutMs), { status: 200, body: 'hello' });
+        assert.ok(!fs.existsSync(fl), 'no hello yet (no app could warn): dates still checked');
+        dq.clockSaid = '2026-10-13';   // the app's hello was told
+        await dq.opts.ytRequest('POST', 'https://www.youtube.com/o/oauth2/token', {}, { refresh_token: 'R' }, 2000);
+        assert.ok(!fs.existsSync(fl), 'sign-in requests never skip the dates');
+        assert.deepStrictEqual(await dq.opts.ytRequest(rq.method, rq.url, rq.headers, rq.body, rq.timeoutMs), { status: 200, body: 'hello' });
         const l = JSON.parse(fs.readFileSync(fl, 'utf8'));
         assert.deepStrictEqual(l.argv.slice(4), ['request', '--no-cert-time', '--cache-dir', path.join(cache, 'ytdlp'), '--lease', path.join(tmp, 'lease-clock.json')]);
         assert.deepStrictEqual(l.req, Object.assign({}, rq, { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1', Authorization: 'Bearer X' } }),
@@ -1786,9 +1791,25 @@ async function main() {
     fs.mkdirSync(path.join(wroot, 'mainapp', 'config'), { recursive: true });
     fs.writeFileSync(path.join(wroot, 'mainapp', 'config', 'base.json'), JSON.stringify({ usableUidsAndGids: { min: 20000, max: 29999 } }));
     const ds = new Daemon({ someip: { buildProxy: () => new Promise(() => {}) }, srcGen: srcGen, cacheDir: wcache, logDir: wroot, sock: wsock,
-        oapRoot: path.join(wroot, 'oap'), mainapps: wmain, tickMs: 100, noSetuid: !root, spare: false, ytRequest: fakeYt, keep: 20,
+        oapRoot: path.join(wroot, 'oap'), mgrUid: process.getuid(), mainapps: wmain, tickMs: 100, noSetuid: !root, spare: false, ytRequest: fakeYt, keep: 20,
         accountFile: path.join(wroot, 'account.json'), stateDir: path.join(wroot, 'state'), log: (m) => wlogs.push(m) });
 
+    await t('WP3 registry: trusted only when MainApp (or root) owns every part, no symlink, not world-writable', async () => {
+        fs.writeFileSync(reg, JSON.stringify({ appId: 'jap_ridetube', userId: 23456 }));
+        assert.strictEqual(ds.regOk(reg), true);
+        const other = new Daemon({ oapRoot: path.join(wroot, 'oap'), mgrUid: process.getuid() + 1, mainapps: wmain, ytRequest: fakeYt,
+            accountFile: path.join(wroot, 'acct-x.json'), stateDir: path.join(wroot, 'state-x'), log: () => {} });
+        assert.strictEqual(root ? true : other.regOk(reg) === false && other.appUid() === null && other.appRemoved() === false, true);
+        fs.chmodSync(reg, 0o666);
+        assert.strictEqual(ds.regOk(reg), false);
+        assert.strictEqual(ds.appUid(), null);
+        fs.chmodSync(reg, 0o644);
+        const real = path.join(wroot, 'apps-real'), apps = path.dirname(reg);
+        fs.renameSync(apps, real); fs.symlinkSync(real, apps);
+        try { assert.strictEqual(ds.regOk(reg), false); assert.strictEqual(ds.appUid(), null); assert.strictEqual(ds.appRemoved(), false); }
+        finally { fs.unlinkSync(apps); fs.renameSync(real, apps); }
+        assert.strictEqual(ds.appUid(), 23456);
+    });
     await t('WP3 socket: owner and mode from MainApp\'s registry (<app uid>:root 0600)', async () => {
         fs.writeFileSync(reg, JSON.stringify({ appId: 'jap_ridetube', userId: 23456 }));
         recordChown(false);
@@ -1867,7 +1888,7 @@ async function main() {
     const wds = [];
     const sockDaemon = async (name, state) => {
         const x = new Daemon({ someip: someip, srcGen: srcGen, cacheDir: wcache, logDir: wroot, sock: path.join(tmp, name + '.sock'),
-            oapRoot: path.join(wroot, 'oap'), mainapps: wmain, noSetuid: true, spare: false, ytRequest: fakeYt, keep: 20,
+            oapRoot: path.join(wroot, 'oap'), mgrUid: process.getuid(), mainapps: wmain, noSetuid: true, spare: false, ytRequest: fakeYt, keep: 20,
             accountFile: path.join(wroot, 'account.json'), stateDir: state || path.join(wroot, 'st-' + name), log: (m) => wlogs.push(m) });
         wds.push(x);
         x.listen();
@@ -1935,7 +1956,7 @@ async function main() {
         x.fetchUid = 23462;
         assert.strictEqual(x.appUid(), null, 'the fetch uid');
         x.fetchUid = null;
-        const y = new Daemon({ oapRoot: path.join(wroot, 'oap'), mainapps: [], ytRequest: fakeYt, accountFile: path.join(wroot, 'account.json'), log: () => {} });
+        const y = new Daemon({ oapRoot: path.join(wroot, 'oap'), mgrUid: process.getuid(), mainapps: [], ytRequest: fakeYt, accountFile: path.join(wroot, 'account.json'), log: () => {} });
         fs.writeFileSync(reg, JSON.stringify({ userId: 40000 }));
         assert.strictEqual(y.appUid(), 40000);
         y.account.close();
@@ -2414,6 +2435,7 @@ async function main() {
                 accountFile: path.join(hdir, 'account.json'), noSetuid: true, leaseFile: lease, sock: path.join(hdir, 'none.sock'),
                 fetcher: [py, path.join(__dirname, 'fake_health.js'), hctl], thumbCmd: [node22, 'thumb.js'], log: () => {} }, o || {}));
             x.fetchUid = me;
+            x.clockSaid = null;   // as after the app's hello
             x.audio.cc = { isAvailable: async () => true };
             return x;
         };

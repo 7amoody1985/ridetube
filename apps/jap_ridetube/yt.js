@@ -143,7 +143,7 @@ class Model {
 
     setConnected(on) {
         this.connected = on;
-        if (on) { this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.send(Object.assign({ cmd: 'hello' }, this.hi)); this.videoOn = null; this._video(); } else {
+        if (on) { this.send(Object.assign({ cmd: 'hello' }, this.hi)); this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.videoOn = null; this._video(); } else {
             this.caps = []; this.clock = null;
             this.searching = false; this.state = 'idle'; this.pending.clear();
             this.auth = { state: 'unknown', code: null, url: null, msg: null };

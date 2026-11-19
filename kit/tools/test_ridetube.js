@@ -57,7 +57,8 @@ async function clientAndModel() {
     await until(() => d.cmds('status').length, 2000, 'status on connect');
     assert.ok(m.connected, 'connected');
     await until(() => d.cmds('auth_status').length, 2000, 'auth_status on connect');
-    assert.deepStrictEqual(d.got.slice(0, 2), [{ cmd: 'status' }, { cmd: 'auth_status' }], 'on connect: status, then the account (no library: nothing is kept on the car)');
+    assert.deepStrictEqual(d.got.slice(1, 3), [{ cmd: 'status' }, { cmd: 'auth_status' }], 'on connect: status, then the account (no library: nothing is kept on the car)');
+    assert.strictEqual(d.got[0].cmd, 'hello', 'hello first: the service skips no certificate date before the app can warn');
 
     // first results: no thumb asked on its own (the screens ask for the tiles they draw: wantThumb), each asked once
     assert.ok(m.search('first'));
@@ -1049,7 +1050,7 @@ async function helloCaps() {
     ctl.on('up', () => m.setConnected(true)).on('down', () => m.setConnected(false)).on('msg', (x) => m.onMsg(x));
     ctl.connect();
     await until(() => d.cmds('hello').length, 2000, 'hello on connect');
-    assert.deepStrictEqual(d.got.map((x) => x.cmd).slice(0, 4), ['status', 'auth_status', 'positions', 'hello'], 'hello after the 0.3 commands');
+    assert.deepStrictEqual(d.got.map((x) => x.cmd).slice(0, 4), ['hello', 'status', 'auth_status', 'positions'], 'hello first (an old service answers it unknown and goes on)');
     assert.deepStrictEqual(d.cmds('hello')[0], { cmd: 'hello', app: '0.4.0', lang: 'zh', region: 'CN' });
     // an old service: unknown cmd hello = no caps, not an error, a search in flight goes on
     assert.ok(m.search('old service'));

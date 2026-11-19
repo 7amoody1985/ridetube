@@ -1193,7 +1193,7 @@ def request_cmd():
         out = {'status': r.status, 'body': data.decode('utf-8', 'replace')}
     except Exception as e:  # noqa: BLE001 - every failure is the daemon's error text
         out = {'error': clock_wrong(e) or str(e)[:300] or type(e).__name__}
-    sys.stdout.write(json.dumps(out))
+    sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode('utf-8'))
     sys.stdout.flush()
     return 0
 

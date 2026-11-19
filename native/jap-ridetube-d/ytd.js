@@ -287,7 +287,7 @@ function pickUid(o, key) {
     const inRange = (u) => inRanges(cfg, u);
     const taken = (procs) => { const t = takenIds(o, cfg, procs); others.forEach((u) => { t[u] = true; }); return t; };
     let uid = null;
-    if (isId(kept) && (key === 'fetch' || kept <= MAX_UID) && !taken(false)[kept] && !inRange(kept)) uid = kept;   // (a fetch uid kept from before 0.5.0 may sit above)
+    if (isId(kept) && (key === 'fetch' || kept <= MAX_UID) && !taken(false)[kept] && !inRange(kept)) uid = kept;   // (a fetch uid kept from before 0.4.1 may sit above)
     else if (cfg) {
         const all = taken(true), up = key === 'fetch', step = up ? 1 : -1, low = Math.max.apply(null, cfg.ranges.map((r) => r.max)) + 1;
         let u = up ? low : MAX_UID;
@@ -1740,8 +1740,8 @@ Daemon.prototype.onLine = function (line) {
     case 'health': return this.health();
     case 'related': return this.related(m.id);
     case 'ytdlp': return this.ytdlp(m.auto);
-    case 'remote': return this.remote(m.on, m.lang);   // 0.5.0
-    case 'proxy': return this.proxy(m.mode);   // 0.5.0
+    case 'remote': return this.remote(m.on, m.lang);   // 0.4.1
+    case 'proxy': return this.proxy(m.mode);   // later
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
     }
 };
@@ -1787,7 +1787,7 @@ Daemon.prototype.related = async function (id) {
     return this.emit({ ev: 'related', id: id, items: items });
 };
 Daemon.prototype.ytdlp = function (auto) { return this.notImplemented('ytdlp'); };            // WP6
-// `remote` {on} -> remote{on, url, expires} (remote.js; on not a bool: only the state). WP9, 0.5.0
+// `remote` {on} -> remote{on, url, expires} (remote.js; on not a bool: only the state). WP9, 0.4.1
 Daemon.prototype.remote = function (on, lang) { return this.rc.set(on, lang); };
 // the web uid (remote.js's server): its own, never the fetch uid nor an app's; throws when there is none
 Daemon.prototype.remoteUid = function () {
@@ -1796,7 +1796,7 @@ Daemon.prototype.remoteUid = function () {
     if (this.webUid === null || this.webUid === this.fetchUid) throw new Error('no web uid on the car (see the log)');
     return this.webUid;
 };
-Daemon.prototype.proxy = function (mode) { return this.notImplemented('proxy'); };            // WP11, 0.5.0
+Daemon.prototype.proxy = function (mode) { return this.notImplemented('proxy'); };            // WP11, later
 Daemon.prototype.setState = function (s) {
     this.state = s;
     this.sendState();

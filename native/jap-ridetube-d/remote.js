@@ -1,7 +1,7 @@
 'use strict';
 // SPDX-License-Identifier: GPL-3.0-or-later
 /**
- * remote.js - the phone remote (0.5.0, cap remote): a passenger's phone on the car's own Wi-Fi hotspot opens a page
+ * remote.js - the phone remote (0.4.1, cap remote): a passenger's phone on the car's own Wi-Fi hotspot opens a page
  * served by the car and sends a YouTube link (played) or a search to the RideTube app. Nothing is hosted outside the
  * car. Node 8. The design follows the MGU Store's phone page (mgu-updater js/web.js, GPL-3.0-or-later), reimplemented.
  *

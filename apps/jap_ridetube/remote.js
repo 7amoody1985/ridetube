@@ -1,6 +1,6 @@
 'use strict';
 /**
- * The phone remote page (cap remote, 0.5.0 service): a passenger's phone on the car's own Wi-Fi hotspot scans the QR
+ * The phone remote page (cap remote, service 0.4.1): a passenger's phone on the car's own Wi-Fi hotspot scans the QR
  * code shown here, opens the page the car serves and sends a YouTube link or a search. The service hands each phone
  * action to the app (remote_do); main.js carries it out as a tap would (the parked rule and the screen stay the app's).
  * Off by default; Turn on / Turn off here (where the HMI runs the screen, the menu entry pressed again). The QR code (the

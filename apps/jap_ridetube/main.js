@@ -243,7 +243,7 @@ mgu.run({
         // 0.4.0 services (caps; labels() hides the entries otherwise): History; the health check, run on each press
         ui.onClick('BTN_HIST', () => { if (model.can('hist')) { show('hist'); ui.open('VIEW'); } });
         ui.onClick('BTN_HEALTH', () => { if (model.can('health')) { model.runHealth(); show('health'); ui.open('VIEW'); } });
-        // 0.5.0 (cap remote): the phone remote page; pressed again there where the HMI runs the screen (no button drawn): on / off
+        // 0.4.3 (cap remote): the phone remote page; pressed again there where the HMI runs the screen (no button drawn): on / off
         ui.onClick('BTN_REMOTE', () => {
             if (!model.can('remote') || !remote) return;
             const hmiScreen = !(ctx.display && ctx.display.own && ctx.display.own());

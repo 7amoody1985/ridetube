@@ -42,6 +42,7 @@ const { Canvas } = require('./canvas');
 const { RenderClient } = require('./renderd');
 const G = require('./gauges');
 const { drawCredit } = require('./credits');
+const { leftEdge } = require('./toucharea');
 
 // FrontCCU deflection: short / long push per direction (DREHGEBER enums as numbers)
 const TILT = { 1: 'N', 2: 'N', 4: 'E', 5: 'E', 7: 'S', 8: 'S', 10: 'W', 11: 'W' };
@@ -585,8 +586,12 @@ class Display {
             // corner; extra = the logical px it has below its 520
             if (this.fill()) {
                 const k = scr.w / PAGE.w;
-                Object.assign(pl, { scale: k, ox: 0, oy: 0, extra: Math.floor(h / k - PAGE.h) });
+                // touchX: where the app's taps start - 0 when every renderer lets it claim the back column, else HMI.left
+                // (a tap there would reach the HMI and close the app, so the page keeps its targets out of it)
+                const edge = leftEdge(scr.w);
+                Object.assign(pl, { scale: k, ox: 0, oy: 0, extra: Math.floor(h / k - PAGE.h), touchX: edge.full ? 0 : HMI.left });
                 delete pl.oyMid; delete pl.oyTop;
+                if (edge.why !== this.edgeWhy) { this.edgeWhy = edge.why; this.log.info('display: taps from x ' + pl.touchX + ' (' + edge.why + ')'); }
             }
         }
         this.place = pl;

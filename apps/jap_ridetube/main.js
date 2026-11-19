@@ -967,12 +967,13 @@ mgu.run({
         // taps stay the HMI's (they close the app): the rail, the tiles and the pages start right of it
         function inset(cv) {
             const pl = cv.place;
-            const fill = !!(pl && pl.scale && pl.ox === 0 && pl.oy === 0);   // fill: no back column, the rail starts at the screen's left edge
-            RX = fill ? 0 : pl && pl.scale ? Math.max(0, Math.ceil((HMI.left - pl.ox) / pl.scale) + 4 - 16) : 0;   // (16: the rail's targets' left)
+            // taps start at touchX (the kit: 0 where the renderers give fill apps the back column, else HMI.left)
+            const fill = !!(pl && pl.scale && pl.ox === 0 && pl.oy === 0), tx = pl && pl.touchX !== undefined ? pl.touchX : HMI.left;
+            RX = pl && pl.scale ? Math.max(0, Math.ceil((tx - pl.ox) / pl.scale) + 4 - 16) : 0;   // (16: the rail's targets' left)
             FILL = fill || RX > 0; RAIL_W = RAIL0 + RX; X0 = TILE_X + RX; MID = (RAIL_W + W) / 2;
             // fill: the whole screen is the app's, so the page starts near the top and four tiles reach the right edge
             // (W - 16; a shelf's next arrow sits over the fourth tile); otherwise four tiles and the fifth peeking
-            if (fill) { TOP = 12; TW = 342; TH = 192; PITCH = 368; } else if (RX) { TOP = 12; TW = 328; TH = 184; PITCH = 354; } else { TOP = 38; TW = 320; TH = 180; PITCH = 348; }
+            if (fill && !RX) { TOP = 12; TW = 342; TH = 192; PITCH = 368; } else if (RX) { TOP = 12; TW = 328; TH = 184; PITCH = 354; } else { TOP = 38; TW = 320; TH = 180; PITCH = 348; }
             TILE_H = TH + 98;
         }
         function say(cv, msg, sub) {

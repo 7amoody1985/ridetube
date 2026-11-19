@@ -458,6 +458,37 @@ test('the built package (dist/jap_ridetube): the car\'s ru_RU table has the menu
     assert.ok(enValues.filter((v) => /[\u0400-\u04ff]/.test(v)).every((v) => v === 'Русский'), 'en_GB: no Russian but the language\'s own name');
 });
 
+test('touch area: the left edge is the app\'s only when every touch-routing renderer lets it claim the whole width', async () => {
+    const { leftEdge, rendererArea } = require('../runtime/toucharea');
+    const files = {
+        '/c/full.conf': 'a = 1\ntouch_area = 0,0,1920,720\n', '/c/auto.conf': 'touch_area = auto\n', '/c/old.conf': 'touch_area = 84,0,1836,720\n',
+        '/c/none.conf': 'touch = 1\n', '/c/off.conf': 'touch = 0\n', '/c/junk.conf': 'touch_area = left\n',
+    };
+    const read = (local) => (f) => (f === '/var/opt/mgu-render/mgu-render.local.conf' ? (local === undefined ? null : local) : files[f] === undefined ? null : files[f]);
+    const id7 = ['/x/mgu-renderd', '-s', 'socket_path=/run/mgu-renderd/renderd.sock'];
+    const store = (c) => ['/x/mgu-render', '-c', c];
+    const area = (argv, local) => rendererArea(argv, 1920, read(local));
+    assert.strictEqual(area(id7), 'clipped', 'no setting: auto (84 on iDrive 7)');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area=0,0,1920,720'])), 'full', '-s');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area=84,0,1836,720'])), 'clipped', '-s, the back column left out');
+    assert.strictEqual(area(store('/c/full.conf')), 'full', '-c');
+    assert.strictEqual(area(store('/c/auto.conf')), 'clipped', 'auto');
+    assert.strictEqual(area(store('/c/old.conf')), 'clipped', '84,0,1836,720');
+    assert.strictEqual(area(store('/c/junk.conf')), 'clipped', 'garbage');
+    assert.strictEqual(area(store('/c/missing.conf')), 'clipped', 'unreadable conf');
+    assert.strictEqual(area(store('/c/none.conf'), 'touch_area = 0,0,1920,720\n'), 'clipped', 'the local conf alone: not every build reads it, so it never widens');
+    assert.strictEqual(area(store('/c/full.conf'), 'touch_area = auto\n'), 'clipped', 'the local conf narrows it');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area=0,0,1920,720']), 'touch_area = 84,0,1836,720\n'), 'clipped', 'a build that may read the local conf: it must agree');
+    assert.strictEqual(area(store('/c/off.conf')), 'off', 'touch = 0');
+    assert.strictEqual(area(store('/c/off.conf'), 'touch = 1\n'), 'clipped', 'touch = 0, the local conf turns it on (auto)');
+    const both = (a, b, local) => leftEdge(1920, () => [a, b], read(local)).full;
+    assert.strictEqual(both(store('/c/full.conf'), id7.concat(['-s', 'touch_area=0,0,1920,720'])), true, 'both full');
+    assert.strictEqual(both(store('/c/full.conf'), id7), false, 'one renderer at auto');
+    assert.strictEqual(both(store('/c/off.conf'), id7.concat(['-s', 'touch_area=0,0,1920,720'])), true, 'one routes no touch');
+    assert.strictEqual(leftEdge(1920, () => [], read()).full, false, 'no renderer seen');
+    assert.strictEqual(leftEdge(1920, () => [store('/c/off.conf')], read()).full, false, 'none routes touch');
+});
+
 (async () => {
     await new Promise((r) => server.listen(process.env.MGU_RENDERD_SOCKET, r));
     let failed = 0;

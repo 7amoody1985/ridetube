@@ -2,10 +2,8 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-For a Simplified Chinese local build, provide your own `oap-sdk/` and run
-`python3 kit/tools/build.py --language zh-CN jap_ridetube`.
-Chinese translation by 小白151 (JackieZ123430). The [Chinese guide](README.zh-CN.md)
-includes setup, playback settings, and font coverage.
+RideTube shows in English, Russian or Simplified Chinese (Language setting). Chinese translation by 小白151
+(JackieZ123430). The [Chinese guide](README.zh-CN.md) includes setup, playback settings, and font coverage.
 
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
 > endorsed by or sponsored by Google or YouTube. Use it at your own risk. You are responsible for following
@@ -68,6 +66,8 @@ video decoder) and `jap-node22`, the Node.js 22 that the service runs on, with i
 
 ## Settings
 
+- **Language**: Auto (follows the car: Russian or Chinese when the car is set to it, else English), English,
+  Русский or 中文.
 - **Video while driving**: off by default. Leave it off unless the car is coded for video in motion and only
   passengers can see the screen. You use it at your own risk. It takes effect only once switched on while the
   car is parked: pressed while driving, the picture stays off until the next stop.

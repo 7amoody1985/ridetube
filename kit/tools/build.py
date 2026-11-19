@@ -481,8 +481,12 @@ def build(app_id, language='en'):
                         os.path.join(src, 'javascript', 'kit', 'fonts', 'cjk.json'))
     if app_id == 'jap_ridetube':   # its Language setting offers Chinese in every build: the UI atlas and the title font
         for source, target in (('ridetube-zh-CN.json', 'cjk.json'), ('cjk-titles.json', 'cjk-titles.json')):
-            shutil.copy(os.path.join(KIT, 'localization', 'fonts', source),
-                        os.path.join(src, 'javascript', 'kit', 'fonts', target))
+            with open(os.path.join(KIT, 'localization', 'fonts', source), encoding='utf-8') as f:
+                atlas = json.load(f)
+            # sizes over 4096 rows never ship: mgu-render refuses them (kit/runtime/fonts.js skips them too)
+            atlas['sizes'] = [s for s in atlas['sizes'] if s['atlasH'] <= 4096]
+            with open(os.path.join(src, 'javascript', 'kit', 'fonts', target), 'w', encoding='utf-8') as f:
+                json.dump(atlas, f, ensure_ascii=False, separators=(',', ':'))
     if credit(language):
         # The translation credit in the installed entry code, as plain comments.
         entry = os.path.join(src, 'javascript', 'app.js')

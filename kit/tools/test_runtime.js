@@ -273,6 +273,26 @@ test('Cyrillic titles: every letter drawn (accented Latin too), in the weight an
     ['label', 'bold', 'num', 'light'].forEach((fam) => assert.strictEqual(fonts.get(fam, 32, 'Rebuilding a B58 · Café').family, fam, fam + ': Latin as before'));
 });
 
+test('CJK titles never pick an atlas over 4096 rows (mgu-render closes the connection on one)', () => {
+    const fs = require('fs'), path = require('path');
+    const link = path.join(__dirname, '..', 'runtime', 'fonts', 'cjk-titles.json');
+    const had = fs.existsSync(link);
+    if (!had) fs.copyFileSync(path.join(__dirname, '..', 'localization', 'fonts', 'cjk-titles.json'), link);
+    try {
+        delete require.cache[require.resolve('../runtime/fonts')];
+        const fonts = require('../runtime/fonts');
+        const rare = '\u9f98\u9f49';   // two characters the UI atlas (cjk.json) lacks: they take cjk-titles
+        [14, 22, 32, 52, 64].forEach((size) => {
+            const f = fonts.get('label', size, '\u6807\u9898 ' + rare);
+            assert.strictEqual(f.family, 'cjk-titles', size + ': the titles atlas');
+            assert.ok(f.atlasH <= 4096, size + ': atlas ' + f.atlasH + ' rows');
+        });
+    } finally {
+        if (!had) fs.unlinkSync(link);
+        delete require.cache[require.resolve('../runtime/fonts')];
+    }
+});
+
 test('Romanian ș ț Ș Ț draw as ş ţ Ş Ţ, an accented letter the atlas lacks as its base letter: nothing drops out of a title', () => {
     const fonts = require('../runtime/fonts');
     const { Canvas } = require('../runtime/canvas');
@@ -336,7 +356,7 @@ const RT_SOURCES = ['apps/jap_ridetube/main.js', 'apps/jap_ridetube/health.js', 
 const RU = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'ru.json'), 'utf8'));
 const BRAND = /^(RideTube|720p)$/;   // names, no row
 
-test('ru plurals: one, few, many (11-14 many), the catalog\'s three forms; English and zh-CN keep two', () => {
+test('ru plurals: one, few, many (11-14 many), the catalog\'s three forms; English keeps two, zh-CN one', () => {
     const i18n = require('../runtime/i18n');
     assert.ok(i18n.languages().indexOf('ru') >= 0 && i18n.languages().indexOf('zh-CN') >= 0, 'the catalogs: ' + i18n.languages());
     try {
@@ -347,7 +367,7 @@ test('ru plurals: one, few, many (11-14 many), the catalog\'s three forms; Engli
         assert.deepStrictEqual([1, 3, 7].map((n) => i18n.plural(n, '{count} subscriptions', '{count} subscriptions')), ['{count} подписка', '{count} подписки', '{count} подписок']);
         assert.strictEqual(i18n.t('Home'), 'Главная');
         assert.ok(i18n.setLanguage('zh-CN'));
-        assert.strictEqual(i18n.plural(5, '{count} channel', '{count} channels'), '{count} channels', 'zh-CN: no plural row, the English form (then t())');
+        assert.deepStrictEqual([1, 5].map((n) => i18n.plural(n, '{count} channel', '{count} channels')), ['{count} 个频道', '{count} 个频道'], 'zh-CN: its one form for every count');
         assert.strictEqual(i18n.t('Home'), '首页');
         assert.strictEqual(i18n.setLanguage('xx'), false, 'an unknown language: nothing changes');
         assert.strictEqual(i18n.getLanguage(), 'zh-CN');

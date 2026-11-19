@@ -19,6 +19,10 @@ function family(name) {
             size: s.size, ascent: s.ascent, descent: s.descent, atlasW: s.atlasW, atlasH: s.atlasH,
             glyphs: s.glyphs, _alpha: s.alpha, alpha: null, family: name, cacheKey: j.cacheKey || '',
         }));
+        // mgu-render closes the connection on an atlas over 4096 rows (main.c M_ATLAS), the app then leaves full
+        // screen: cjk-titles' 52 px (18403 rows) drops out and its 14 px draws the big titles
+        const fits = fam.filter((f) => !(f.atlasH > 4096));
+        if (fits.length) fam = fits;
     } catch (e) { fam = null; }
     families[name] = fam;
     return fam;

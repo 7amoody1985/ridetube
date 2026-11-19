@@ -1,15 +1,11 @@
 # Changelog
 
-## Unreleased
-
-- Simplified Chinese: an optional zh-CN RideTube build with the rail, search, account and playback controls,
-  the native settings and the common status messages in Chinese. Chinese titles outside the UI font draw from a
-  GB2312 title font baked at 14 and 52 px, so large titles stay sharp. The English build is unchanged.
-
 ## App 0.4.0
 
 - Full screen: RideTube now covers the whole screen. The car's title bar and left column are gone, so the rail,
-  the tiles and the player get all 1920 × 720 pixels. Touch works as before. The rail sits just right of the car's back-arrow strip at the left edge, because a tap there still goes to the car and closes the app; the tiles are a little narrower so four still fit in a row.
+  the tiles and the player get all 1920 × 720 pixels. Touch works as before. The rail sits just right of the
+  car's back-arrow strip at the left edge, because a tap there still goes to the car and closes the app. The
+  tiles are a little narrower so four still fit in a row.
 - Error messages no longer start with "fetch:".
 - A wrong head unit clock: while the service skips the certificate date check (see Service 0.4.0), a security
   warning shows once, until you press OK, and the menu's info line starts with "Wrong clock" until the clock is
@@ -33,8 +29,10 @@
 - Russian: the app, its menus and its settings can now show in Russian, from the same package as English. A new
   Language setting offers Auto, English, Русский and 中文. Auto follows the car's language and falls back to
   English. Texts the service sends (health check rows, its error messages) stay in English. Russian YouTube feeds
-  (Russian titles and shelves) need service 0.4.0; an older service keeps sending the feeds it sent before. The
-  package grows from about 2.5 MB to 6.8 MB because the Chinese fonts now ship in it too.
+  (Russian titles and shelves) need service 0.4.0; an older service keeps sending the feeds it sent before.
+- Simplified Chinese (中文) comes in the same package: the rail, search, account, playback controls, settings,
+  History, the health check and the log report. Chinese titles outside the UI font draw from a GB2312 title
+  font. The package grows from about 2.5 MB to 3.2 MB.
 - These need service 0.4.0. With an older service the new menu entries stay hidden and the app works as before.
 
 ## Service 0.4.0

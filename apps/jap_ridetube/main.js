@@ -236,9 +236,12 @@ mgu.run({
         const QUALITIES = ['auto', '720', '480', '360'];   // app.json's Video quality values, in the button's order
         // queue: the list's videos after the one playing (next first); prevs: those before it (the nearest last)
         let queue = [], prevs = [], nextAt = 0;
-        const playable = (r) => r && !r.act && /^[\w-]{11}$/.test(r.id);
+        const playable = (r) => r && !r.act && !r.live && /^[\w-]{11}$/.test(r.id);
+        // a live stream (live:true): the service can't play it yet, so it is not asked; a short note on the page says so
+        let liveNote = 0;
         // stay: play it without showing the player (a steering-wheel skip while browsing, the sound playing on)
         function play(id, it, list, stay) {
+            if (it && it.live) { liveNote = Date.now() + 4000; dirty = true; return; }
             if (!stay) show('player');
             if (list) {
                 const i = list.findIndex((r) => r.id === id);
@@ -682,6 +685,11 @@ mgu.run({
                 cv.fillRect(x, y + TH - 5, TW, 5, '#ffffff55');
                 cv.fillRect(x, y + TH - 5, pw, 5, C.red);
             }
+            if (r.live) {
+                const lt = translate('LIVE'), lw = cv.textWidth(lt, 20, LITB) + 16;
+                cv.roundRect(x + TW - 8 - lw, y + TH - 36, lw, 28, 6, '#cc0000');     // YouTube's live red
+                cv.text(lt, x + TW - 16, y + TH - 15, 20, '#ffffff', { literal: true, font: 'bold', align: 'right' });
+            }
             if (r.duration_s > 0) {
                 const d = clock(r.duration_s * 1000), dw = cv.textWidth(d, 20, LITB) + 16;
                 cv.roundRect(x + TW - 8 - dw, y + TH - 36, dw, 28, 6, '#000000cc');
@@ -861,7 +869,8 @@ mgu.run({
             // resting ~1 s on a video: the daemon looks its streams up now, so a press plays ~2.5 s sooner
             clearTimeout(dwell);
             const vid = /^[a-z]+:\d+:([A-Za-z0-9_-]{11})$/.exec(key || '');
-            if (vid) dwell = setTimeout(() => { if (focusKey === key) model.prefetch(vid[1]); }, 1000);
+            const lw = laid.mode === mode && laid.where[key], lr = lw && laid.rows[lw.ri].items[lw.i];
+            if (vid && !(lr && lr.live)) dwell = setTimeout(() => { if (focusKey === key) model.prefetch(vid[1]); }, 1000);
             if (key && key.indexOf('ov:') === 0) { wake(); return; }      // the controller in the player: its overlay
             const w = key && laid.mode === mode && laid.where[key];
             if (!w) return;
@@ -1332,6 +1341,11 @@ mgu.run({
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
                     else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    if (browsing() && now < liveNote) {
+                        const nt = whole("Live videos can't be played yet"), nw = cv.textWidth(nt, 26, LIT) + 60, ny = H + (cv.own ? cv.extra : 0) - 96;
+                        cv.roundRect(MID - nw / 2, ny, nw, 64, 32, '#4a3a10');
+                        cv.text(nt, MID, ny + 42, 26, '#ffd27a', { literal: true, align: 'center' });
+                    }
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

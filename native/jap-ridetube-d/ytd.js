@@ -95,6 +95,11 @@ function qualityHeight(q, lease) {
 // members-only (or members-first) videos: a badge somewhere in the tile, its shape unknown (no capture) - matched on the text
 // shortcut: a JSON scan of the tile, swap for the badge's field once a real members tile is captured
 const isMembers = (t) => /BADGE_STYLE_TYPE_MEMBERS|"Members (only|first)"/i.test(JSON.stringify(t));
+// live now or upcoming (a premiere): the overlay's style (LIVE / UPCOMING) or its English text, a lockup's LIVE badge, a
+// LIVE_NOW line badge; never a length
+// shortcut: the values are YouTube's live enums from its other clients, no TVHTML5 live capture in test/; check on the first one
+const LIVE_VALUES = ['LIVE', 'UPCOMING', 'THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE', 'BADGE_STYLE_TYPE_LIVE_NOW'];
+const isLive = (marks, duration) => duration === null && marks.some((x) => LIVE_VALUES.indexOf(x) >= 0);
 const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country|can't be played|can't play|head unit clock/i;
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function withTimeout(p, ms, what) {
@@ -377,7 +382,8 @@ const runsText = (x) => (!x ? '' : typeof x.simpleText === 'string' ? x.simpleTe
     : Array.isArray(x.runs) ? x.runs.map((r) => (r && r.text) || '').join('') : '');
 function hms(s) { return /^\d+(:\d{1,2}){1,2}$/.test(s) ? s.split(':').reduce((a, p) => a * 60 + Number(p), 0) : null; }
 // One TVHTML5 tileRenderer -> {id,title,channel,duration_s,meta}, or null when it is not a video (channels,
-// playlists). A short (reelWatchEndpoint) is a video with short:true: the app decides whether it shows them.
+// playlists). A short (reelWatchEndpoint) is a video with short:true: the app decides whether it shows them. A live
+// stream or an upcoming premiere (isLive) has live:true and no length.
 // meta: the texts of the second line, without its "•" and badges ("4K").
 function tileItem(t) {
     const sel = t.onSelectCommand || {}, short = t.contentType === 'TILE_CONTENT_TYPE_SHORTS';
@@ -396,11 +402,14 @@ function tileItem(t) {
     if (rp && rp.percentDurationWatched > 0) it.watched_pct = Math.min(100, Number(rp.percentDurationWatched) || 0);
     if (ep && ep.startTimeSeconds > 0) it.start_s = Number(ep.startTimeSeconds);
     if (isMembers(t)) it.members = true;
+    const badges = [].concat.apply([], (Array.isArray(m.lines) ? m.lines : []).map((l) => ((l && l.lineRenderer && l.lineRenderer.items) || [])
+        .map((i) => { const b = i && i.lineItemRenderer && i.lineItemRenderer.badge; return b && b.metadataBadgeRenderer && b.metadataBadgeRenderer.style; })));
+    if (isLive([ov && ov.style, runsText(ov && ov.text).toUpperCase()].concat(badges), it.duration_s)) it.live = true;
     return it;
 }
 // One TVHTML5 lockupViewModel (search answers, 2026-11) -> the same, or null when not a video: playlists
 // (contentId a list) and channels (no watchEndpoint). A short (LOCKUP_CONTENT_TYPE_SHORT, a reelWatchEndpoint) has
-// short:true. meta: the second metadata row, without badges.
+// short:true, a live one live:true. meta: the second metadata row, without badges.
 function lockupItem(l) {
     const cc = l.rendererContext && l.rendererContext.commandContext;
     const cmd = (cc && cc.onTap && cc.onTap.innertubeCommand) || {};
@@ -411,10 +420,12 @@ function lockupItem(l) {
     const rows = ((cm && cm.metadataRows) || []).map((r) => ((r && r.metadataParts) || []).map((x) => (x && x.text && x.text.content) || '').filter(Boolean));
     const tv = (l.contentImage && l.contentImage.thumbnailViewModel) || {};
     const ov = (tv.overlays || []).map((x) => x && x.thumbnailBottomOverlayViewModel).filter(Boolean)[0];
-    const len = ((ov && ov.badges) || []).map((x) => x && x.thumbnailBadgeViewModel && x.thumbnailBadgeViewModel.text).filter(Boolean)[0];
+    const bvs = ((ov && ov.badges) || []).map((x) => x && x.thumbnailBadgeViewModel).filter(Boolean);
+    const len = bvs.map((b) => b.text).filter(Boolean)[0];
     const it = { id: id, title: (m.title && m.title.content) || id, channel: (rows[0] || []).join(''), duration_s: hms(String(len)), meta: rows[1] || [] };
     if (!cmd.watchEndpoint) it.short = true;
     if (isMembers(l)) it.members = true;
+    if (isLive([].concat.apply([], bvs.map((b) => [b.badgeStyle, String(b.text || '').toUpperCase()])), it.duration_s)) it.live = true;
     return it;
 }
 // every video tile (or lockup) under o, in page order, each id once

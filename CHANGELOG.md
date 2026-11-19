@@ -26,6 +26,8 @@
 - Lists hold up to 100 videos. Feeds used to stop at 20 and a playlist at 50.
 - Shorts show only when the new Show Shorts setting is on (it is off by default), and they never count toward a
   list's 100.
+- Live streams and upcoming premieres show a red LIVE tag where the length goes. They can't be played yet, so a
+  tap says so instead of trying.
 - These need service 0.4.0. With an older service the new menu entries stay hidden and the app works as before.
 
 ## Service 0.4.0
@@ -48,6 +50,7 @@
 - New feeds `hist` (your watch history) and `liked` (your Liked videos), and a new `related` command with what
   YouTube plays after a video, kept 10 minutes. Feeds, search and related use the app's language and region.
 - Shorts are no longer dropped: they come with `short: true` and the app decides whether to show them.
+- Live streams and upcoming premieres come with `live: true` and no length.
 - Lists go up to 100 videos (they stopped at 50).
 - The History and Liked feed ids, the related videos and the Shorts handling come from @marilykinson-glitch's fork.
 - Playback recovers instead of stopping. A buffer underrun from the car's player starts the sound again where it

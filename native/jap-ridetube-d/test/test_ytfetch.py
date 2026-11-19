@@ -426,6 +426,30 @@ class Dns(unittest.TestCase):
         with self.assertRaises(socket.gaierror):
             ytfetch.resolve_a('nonexistent.invalid', ['1.1.1.1'])
 
+    def test_server_with_port(self):
+        # the car's uplink lease can give '127.0.0.1:5354' (a local forwarder), not a bare address on 53
+        self.assertEqual(ytfetch._server('1.1.1.1'), ('1.1.1.1', 53))
+        self.assertEqual(ytfetch._server('127.0.0.1:5354'), ('127.0.0.1', 5354))
+        self.assertEqual(ytfetch._server('[::1]:5354'), ('::1', 5354))
+        self.assertEqual(ytfetch._server('[::1]'), ('::1', 53))
+        self.assertEqual(ytfetch._server('2001:db8::1'), ('2001:db8::1', 53))
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(('127.0.0.1', 0))
+        port = srv.getsockname()[1]
+
+        def answer():
+            q, peer = srv.recvfrom(512)
+            end = ytfetch._skip_name(q, 12) + 4
+            rr = b'\xc0\x0c' + struct.pack('>HHIH', 1, 1, 60, 4) + socket.inet_aton('192.0.2.7')
+            srv.sendto(q[:2] + b'\x81\x80' + q[4:6] + b'\x00\x01\x00\x00\x00\x00' + q[12:end] + rr, peer)
+        t = threading.Thread(target=answer, daemon=True)
+        t.start()
+        try:
+            self.assertEqual(ytfetch.resolve_a('www.youtube.com', ['bad:port:x', f'127.0.0.1:{port}'], 2), ['192.0.2.7'])
+        finally:
+            t.join(3)
+            srv.close()
+
     def test_no_lease_keeps_resolver(self):
         self.assertEqual(ytfetch.install_dns(os.path.join(TMP, 'no-such-lease.json')), [])
         self.assertIs(socket.getaddrinfo, self.orig)

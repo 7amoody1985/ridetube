@@ -72,6 +72,8 @@ translation.
   phone can only search, play and ask what is playing; it never reaches the account, the feeds or the logs. At
   most one action a second. It turns off after an hour with no phone action, when RideTube closes, and when the
   service stops. One firewall rule opens the port while it is on, and is removed at off, at exit and at start.
+- Fixed: no video would start ("lease DNS" error) when the car's network lease gives its DNS server with a
+  port, such as `127.0.0.1:5354`. The fetcher now uses that port instead of 53.
 
 ## App 0.4.2
 

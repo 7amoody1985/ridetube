@@ -162,6 +162,17 @@ def _skip_name(b, i):
         i += n + 1
 
 
+def _server(srv):
+    """A lease DNS entry as (address, port): '1.1.1.1', '127.0.0.1:5354', '[::1]:5354' or a bare IPv6."""
+    if srv.startswith('['):
+        h, _, p = srv[1:].partition(']')
+        return h, int(p[1:]) if p.startswith(':') else 53
+    if srv.count(':') == 1:
+        h, p = srv.split(':')
+        return h, int(p)
+    return srv, 53
+
+
 def resolve_a(host, servers, timeout=3):
     qid = os.urandom(2)
     q = (qid + b'\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
@@ -169,10 +180,15 @@ def resolve_a(host, servers, timeout=3):
          + b'\x00\x00\x01\x00\x01')
     err = 'no server'
     for srv in servers:
-        s = socket.socket(socket.AF_INET6 if ':' in srv else socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            addr = _server(srv)
+        except ValueError:
+            err = f'{srv}: bad server'
+            continue
+        s = socket.socket(socket.AF_INET6 if ':' in addr[0] else socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.settimeout(timeout)
-            s.sendto(q, (srv, 53))
+            s.sendto(q, addr)
             r = s.recv(4096)
             while r[:2] != qid:
                 r = s.recv(4096)

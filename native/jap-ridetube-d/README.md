@@ -5,7 +5,19 @@ mgu-deploy tool with the video decoder `ytdec` (built in `../ytdec`). yt-dlp, se
 run on the car; nothing is downloaded for keeps: the cache holds the last few videos played.
 
 - audio: BMW MediaPlayer over SOME/IP (`/usr/lib/someip.node`), source 1046 → sink 1024,
-  `playFile` on `cache/<id>/audio.m4a`.
+  `playFile` on `cache/<id>/audio.m4a`. The two services' descriptions (`CommandControl` for the connection,
+  `MediaPlayer` for the player), each from the first source that has it, found once at start:
+  1. MainApp's `/usr/lib/oap-mainapp/src-gen/` (made from MainApp's own manifest when it was built; 2021 MainApps
+     do not list these two);
+  2. the unit's catalog `/etc/oap/someip/someip-interfaces.json`, through the firmware's own generator (loaded
+     from MainApp's `AppManagement.js` by `kit/tools/oapgen/gen.js`, shipped as `oapgen.js`; nothing of BMW's
+     ships). A child (`ytd.js --someip-gen`) does it, into the root-only `state/someip.json`, at each start;
+  3. a built-in description of our P18_23w44 unit's two services, limited to what `ytd.js` uses.
+
+  Logged once: `someip: CommandControl from MainApp|catalog|built-in`, MainApp's version and, when the catalog was
+  read, its entries for services 0xB020 and 0xB042 (name, version, instances). With a built-in description and
+  no answer, the log, the health check's `audio` row and the play error say `This car's software (<os-release
+  VERSION>) does not offer the audio connection RideTube uses`, logged again only when the reason changes.
 - video: `ytdec --dir cache/<id> --rect WxH [--fill] --log /var/opt/jap-ridetube-d/log/ytdec.log`, which
   writes `/dev/shm/mgu-video-ridetube` for mgu-render; paced by `clock <elapsed_ms> <mono_ms>` lines.
 - media: `/var/opt/jap-ridetube-d/cache/<id>/` {meta.json, thumb.rgba, audio.m4a, index.bin, video.h264, and
@@ -223,8 +235,10 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
 - What: `{"app","service","os","log"}`: the app's version (as the app sends it, digits and dots, else
   `unknown`), the service's, the first 5 lines of `/etc/os-release` (≤ 2 KB), and a log (≤ 200 KB, the newest
   lines kept): the last 300 lines of `ytdec.log`, then the daemon's last 1500 log lines (a ring in memory fed by
-  every log line, so nothing extra is written to disk), then the health check's lines (`--- health`, one
-  `health <key> ok|FAIL <text>` per check; the report waits up to 8 s for them).
+  every log line, so nothing extra is written to disk), then where the audio services' descriptions came from
+  (`--- someip`, the lines above, under "audio"), then the health check's lines (`--- health`, one
+  `health <key> ok|FAIL <text>` per check; the report waits up to 8 s for them). The `audio` row adds the sources
+  and MainApp's version.
 - Redacted first, the whole of it (`redactLog`, tested in `test_ytd.js`):
   - every value in the account file, and of a sign-in under way (client id and secret, tokens, device and user
     codes): `[secret]`; `Bearer` / `OAuth` tokens, `access_token`, `refresh_token`, `device_code`,

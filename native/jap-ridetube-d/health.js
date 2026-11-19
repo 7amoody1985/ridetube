@@ -120,11 +120,13 @@ function probes(d, version, ms, budget) {
             }, function (e) { put('free', false, 'free space unknown: df ' + e.message); });
         }],
         [['audio'], function (put) {
-            const cc = d.audio && d.audio.cc;
-            if (!cc) return put('audio', false, 'BMW audio service not connected yet');
+            // + where each service's description came from and MainApp's version (ytd.js Audio.sources), once known
+            const a0 = d.audio || {}, cc = a0.cc, src = typeof a0.sources === 'function' && a0.sources() ? '; ' + a0.sources() : '';
+            if (a0.unsupported) return put('audio', false, a0.unsupported);
+            if (!cc) return put('audio', false, 'BMW audio service not connected yet' + src);
             return within(Promise.resolve().then(function () { return cc.isAvailable(); }), ms).then(function (a) {
-                put('audio', a === true, a === true ? 'BMW audio service reachable' : 'BMW audio service not available');
-            }, function (e) { put('audio', false, 'BMW audio service: ' + e.message); });
+                put('audio', a === true, (a === true ? 'BMW audio service reachable' : 'BMW audio service not available') + src);
+            }, function (e) { put('audio', false, 'BMW audio service: ' + e.message + src); });
         }],
         [['socket'], function (put) {
             let mode = '';

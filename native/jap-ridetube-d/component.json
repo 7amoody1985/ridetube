@@ -44,6 +44,11 @@
       "mode": "0644"
     },
     {
+      "path": "oapgen.js",
+      "from": "../../kit/tools/oapgen/gen.js",
+      "mode": "0644"
+    },
+    {
       "path": "thumb.js",
       "from": "thumb.js",
       "mode": "0644"

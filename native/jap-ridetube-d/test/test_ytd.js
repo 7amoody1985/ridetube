@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = require('../ytd.js');
+const { Daemon, Audio, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = require('../ytd.js');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ytd-'));
 const cache = path.join(tmp, 'cache');
@@ -2559,6 +2559,146 @@ async function main() {
         await t('health.clean: one short printable line, addresses masked, versions and words kept', async () => {
             assert.strictEqual(H.clean('a\n\tb  192.168.1.1 fe80::1:2 AA-BB-CC-DD-EE-FF v22.23.4 2026.10.26 12:34:56 é'), 'a b [ip] [ip] [mac] v22.23.4 2026.10.26 12:34:56');
             assert.strictEqual(H.clean('x'.repeat(300)).length, 120);
+        });
+    }
+
+    // ---- 2021 firmware: where the two SOME/IP descriptions come from (Audio.descriptions) ----
+    {
+        const H = require('../health.js');
+        const sdir = path.join(tmp, 'someip'), mainapp = path.join(sdir, 'oap-mainapp'), sg = path.join(mainapp, 'src-gen');
+        fs.mkdirSync(sg, { recursive: true });
+        fs.writeFileSync(path.join(mainapp, 'package.json'), JSON.stringify({ name: 'oap-mainapp', version: '8.3.2-pr-847.1' }));
+        fs.writeFileSync(path.join(sdir, 'os-release'), 'NAME="BMW MGU"\nVERSION="I_21w12.2-1-4"\nID="mgu"\n');
+        const CC = 'org.genivi.am.commandinterface.CommandControl', MP = 'de.bmw.infotainment.entertainment.mediaplayer.MediaPlayer';
+        const names = (l) => l.reduce((o, n) => { o[n] = {}; return o; }, {});
+        // a synthetic catalog (names and ids only); mp: MediaPlayer's instances, or no MediaPlayer at all
+        const catalog = (name, mp) => {
+            const c = { version: '0.1.0', interfaces: {}, instanceIDs: {} };
+            c.interfaces[CC] = { name: 'CommandControl', serviceId: 45088, version: { major: 1, minor: 1 },
+                methods: names(['connect', 'disconnect', 'setSinkMuteState']), fields: names(['listOfMainConnections']), events: {} };
+            c.instanceIDs[CC] = { 1: 1 };
+            if (mp) {
+                c.interfaces[MP] = { name: 'MediaPlayer', serviceId: 45122, version: { major: 2, minor: 0 },
+                    methods: names(['sendButtonEvent', 'playFile', 'setTime']), fields: names(['playerState', 'currentItemTime']), events: names(['playbackErrorEvent']) };
+                c.instanceIDs[MP] = mp;
+            }
+            const f = path.join(sdir, name + '.json');
+            fs.writeFileSync(f, JSON.stringify(c));
+            return f;
+        };
+        // a stub of the firmware's generator in a bundle shaped like AppManagement.js (gen.js loads IFConfigGenerator out of
+        // it): each proxy of the manifest -> the catalog's members, and the proxy it was asked for (stub)
+        const bundle = path.join(sdir, 'AppManagement.js');
+        fs.writeFileSync(bundle, '(function (mods) { var cache = {}; function req(id) { if (!cache[id]) { var m = cache[id] = { exports: {} };' +
+            ' mods[id][0](function (n) { return req(mods[id][1][n]); }, m, m.exports); } return cache[id].exports; } return req; })({' +
+            '1: [function (require, module) { module.exports = require("someip-interfaces-generator/IFConfigGenerator"); }, {"someip-interfaces-generator/IFConfigGenerator":2}],' +
+            '2: [function (require, module) { module.exports = { generate: function (db, manifest) { var out = {}; Object.keys(manifest.proxies).forEach(function (n) {' +
+            ' var i = db.interfaces[n]; out[n] = { name: i.name, serviceId: i.serviceId, version: i.version, instances: db.instanceIDs[n], methods: i.methods,' +
+            ' fields: i.fields, events: i.events, eventGroups: {}, stub: manifest.proxies[n] }; }); return out; } }; }, {}]},{},[1])\n');
+        let built = [];
+        const rec = { buildProxy: async (cfg, inst) => { built.push([cfg, inst]); return { init: async () => {}, subscribe: () => {}, isAvailable: async () => true, getValue: async () => [] }; } };
+        let n = 0;
+        const audio = (o) => {
+            const logs = [];
+            const a = new Audio(Object.assign({ someip: rec, srcGen: sg, catalog: path.join(sdir, 'none.json'), appMgmt: bundle,
+                oapgen: path.join(__dirname, '..', '..', '..', 'kit', 'tools', 'oapgen', 'gen.js'), someipGenCmd: [process.execPath, path.join(__dirname, '..', 'ytd.js'), '--someip-gen'],
+                stateDir: path.join(sdir, 'state' + (++n)), etcDir: sdir, log: (m) => logs.push(m) }, o || {}), {});
+            a.logs = logs;
+            built = [];
+            return a;
+        };
+        const ccFile = path.join(sg, CC.replace(/\./g, '_') + '.json'), mpFile = path.join(sg, MP.replace(/\./g, '_') + '.json');
+
+        await t('someip: MainApp\'s src-gen there -> used as is, the catalog not read (no generator run)', async () => {
+            fs.writeFileSync(ccFile, JSON.stringify({ name: 'CommandControl', mine: 1 }));
+            fs.writeFileSync(mpFile, JSON.stringify({ name: 'MediaPlayer', mine: 2 }));
+            const a = audio({ catalog: catalog('full', { OapGenericMedia: 40 }) });
+            await a.init();
+            assert.deepStrictEqual(built.map((b) => [b[0].mine, b[1]]), [[1, '1'], [2, 'OapGenericMedia']]);
+            assert.deepStrictEqual(a.from, { CommandControl: 'MainApp', MediaPlayer: 'MainApp' });
+            assert.deepStrictEqual(a.logs, ['someip: CommandControl from MainApp', 'someip: MediaPlayer from MainApp', 'someip: MainApp v8.3.2-pr-847.1, catalog present, not needed']);
+            assert.ok(!fs.existsSync(path.join(a.opts.stateDir, 'someip.json')), 'no generator run');
+            [ccFile, mpFile].forEach((f) => fs.unlinkSync(f));
+        });
+        await t('someip: no src-gen, a catalog -> made by the generator from it (manifest: our members, MediaPlayer *), once, root-only', async () => {
+            const a = audio({ catalog: catalog('full', { OapGenericMedia: 40, BrowserMedia: 60 }) });
+            await a.init();
+            await a.descriptions();
+            assert.deepStrictEqual(built.map((b) => [b[0].serviceId, b[0].stub, b[1]]), [
+                [45088, { instances: '1', attributes: { listOfMainConnections: 'rs' }, methods: ['connect', 'disconnect'] }, '1'], [45122, '*', 'OapGenericMedia']]);
+            assert.deepStrictEqual(a.from, { CommandControl: 'catalog', MediaPlayer: 'catalog' });
+            assert.deepStrictEqual(a.logs, ['someip: CommandControl from catalog', 'someip: MediaPlayer from catalog', 'someip: MainApp v8.3.2-pr-847.1, catalog db v0.1.0',
+                'someip: catalog CommandControl 0xB020 v1.1 instances 1=1', 'someip: catalog MediaPlayer 0xB042 v2.0 instances OapGenericMedia=40 BrowserMedia=60']);
+            assert.strictEqual(fs.statSync(path.join(a.opts.stateDir, 'someip.json')).mode & 0o777, 0o600);
+            assert.strictEqual(fs.statSync(a.opts.stateDir).mode & 0o777, 0o700);
+            assert.strictEqual(a.sources(), 'CommandControl from catalog, MediaPlayer from catalog; MainApp v8.3.2-pr-847.1');
+        });
+        await t('someip: the catalog lacks a service or our instance -> that one built-in, said in the diagnostics', async () => {
+            const a = audio({ catalog: catalog('noinst', { BrowserMedia: 60 }) });
+            await a.init();
+            assert.deepStrictEqual(a.from, { CommandControl: 'catalog', MediaPlayer: 'built-in' });
+            assert.strictEqual(built[1][0].instances.OapGenericMedia, 40);
+            assert.strictEqual(a.logs[4], 'someip: catalog MediaPlayer 0xB042 v2.0 instances BrowserMedia=60');
+            const b = audio({ catalog: catalog('nomp', null) });
+            await b.descriptions();
+            assert.deepStrictEqual(b.from, { CommandControl: 'catalog', MediaPlayer: 'built-in' });
+            assert.strictEqual(b.logs[4], 'someip: catalog MediaPlayer none with service id 0xB042');
+            const c = audio({ catalog: catalog('full', { OapGenericMedia: 40 }), appMgmt: path.join(sdir, 'no-bundle.js') });
+            await c.descriptions();
+            assert.deepStrictEqual(c.from, { CommandControl: 'built-in', MediaPlayer: 'built-in' }, 'the generator failing');
+            assert.ok(/^someip: MainApp v8\.3\.2-pr-847\.1, catalog db v0\.1\.0, ENOENT/.test(c.logs[2]), c.logs[2]);
+        });
+        await t('someip: neither src-gen nor catalog -> both built-in (our unit\'s ids and versions)', async () => {
+            const a = audio();
+            await a.init();
+            assert.deepStrictEqual(a.from, { CommandControl: 'built-in', MediaPlayer: 'built-in' });
+            const [cc, mp] = built.map((b) => b[0]);
+            assert.deepStrictEqual([cc.serviceId, cc.version, cc.instances, cc.methods.connect.id, cc.methods.disconnect.id, cc.fields.listOfMainConnections.getter.id],
+                [0xB020, { major: 1, minor: 1 }, { 1: 1 }, 1, 2, 22]);
+            assert.deepStrictEqual([mp.serviceId, mp.version, mp.instances, mp.methods.playFile.id, mp.fields.currentItemTime.event.id, mp.events.playbackErrorEvent.groups],
+                [0xB042, { major: 2, minor: 0 }, { OapGenericMedia: 40 }, 258, 32783, [101]]);
+            assert.strictEqual(cc.methods.connect.retSchema.e[1].e.E_ALREADY_EXISTS, 5);
+            assert.strictEqual(a.logs[2], 'someip: MainApp v8.3.2-pr-847.1, catalog missing');
+        });
+        await t('someip: all three fail -> "this car\'s software ... does not offer" logged once over retries, in health and the report; ready when it comes', async () => {
+            let up = false;
+            const off = { buildProxy: async () => ({ init: async () => {}, subscribe: () => {}, isAvailable: async () => up, getValue: async () => [] }) };
+            const logs = [], xdir = path.join(sdir, 'd1');
+            fs.mkdirSync(path.join(xdir, 'cache'), { recursive: true });
+            const x = new Daemon({ someip: off, srcGen: sg, catalog: path.join(sdir, 'none.json'), etcDir: sdir, availWaitMs: 30, someipRetryMs: 10,
+                cacheDir: path.join(xdir, 'cache'), logDir: xdir, stateDir: path.join(xdir, 'state'), accountFile: path.join(xdir, 'account.json'),
+                sock: path.join(tmp, 'someip.sock'), noSetuid: true, spare: false, ytRequest: fakeYt, healthMs: 1500, log: (m) => logs.push(m) });
+            x.start();
+            const SAY = 'This car\'s software (I_21w12.2-1-4) does not offer the audio connection RideTube uses';
+            await waitUntil(() => x.audio.unsupported === SAY, 2000);
+            await sleep(400);   // ~10 more tries
+            assert.deepStrictEqual(logs.filter((l) => /someip not ready/.test(l)), ['someip not ready: ' + SAY + ' (CommandControl not available)']);
+            const k = {};
+            (await H.run(x, VERSION)).forEach((h) => { k[h.key] = h; });
+            assert.deepStrictEqual([k.audio.ok, k.audio.text], [false, SAY]);
+            assert.ok(/--- someip\nsomeip: CommandControl from built-in\nsomeip: MediaPlayer from built-in\nsomeip: MainApp v8\.3\.2-pr-847\.1, catalog missing\n--- health/.test(x.report('0.4.0', [{ key: 'audio', ok: false, text: SAY }]).log));
+            up = true;
+            await waitUntil(() => logs.indexOf('someip ready') >= 0, 2000);
+            assert.strictEqual(x.audio.unsupported, null);
+            await x.close();
+        });
+        await t('someip: the report carries the diagnostics block whole through redactLog; the health audio row says the sources', async () => {
+            const logs = [], xdir = path.join(sdir, 'd2');
+            fs.mkdirSync(path.join(xdir, 'cache'), { recursive: true });
+            const x = new Daemon({ someip: rec, srcGen: sg, catalog: catalog('noinst', { BrowserMedia: 60, 'ExternalDeviceUsbFrontAInstanceRearL': 11 }), appMgmt: bundle,
+                oapgen: path.join(__dirname, '..', '..', '..', 'kit', 'tools', 'oapgen', 'gen.js'), etcDir: sdir,
+                cacheDir: path.join(xdir, 'cache'), logDir: xdir, stateDir: path.join(xdir, 'state'), accountFile: path.join(xdir, 'account.json'),
+                sock: path.join(tmp, 'someip2.sock'), noSetuid: true, spare: false, ytRequest: fakeYt, healthMs: 1500, log: (m) => logs.push(m) });
+            await x.audio.init();
+            const block = ['--- someip', 'someip: CommandControl from catalog', 'someip: MediaPlayer from built-in', 'someip: MainApp v8.3.2-pr-847.1, catalog db v0.1.0',
+                'someip: catalog CommandControl 0xB020 v1.1 instances 1=1', 'someip: catalog MediaPlayer 0xB042 v2.0 instances BrowserMedia=60 ExternalDeviceUsbFrontAInstanceRearL=11'];
+            const ls = x.report('0.4.0').log.split('\n'), at = ls.indexOf('--- someip');
+            assert.deepStrictEqual(ls.slice(at, at + block.length), block);
+            assert.strictEqual(ls.length, at + block.length, 'last without a health block');
+            const k = {};
+            (await H.run(x, VERSION)).forEach((h) => { k[h.key] = h; });
+            assert.deepStrictEqual([k.audio.ok, k.audio.text], [true, 'BMW audio service reachable; CommandControl from catalog, MediaPlayer from built-in; MainApp v8.3.2-pr-847.1']);
+            await x.close();
         });
     }
 

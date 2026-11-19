@@ -71,6 +71,13 @@
   it reads files there only as plain files and leaves deleting them to the downloader's user. It refuses to start
   if its cache folder is not root's own.
 - Releases now ship `jap-node22` in RideTube's own catalog, the same file as mgu-apps publishes.
+- Sound on 2021 head unit software (seen on `I_21w12` and `J18_21w42`): two Send logs reports showed the service
+  never reaching the car's audio, because MainApp on those cars does not carry the description files the service
+  read. The service now makes them itself from the head unit's own SOME/IP catalog, with the generator in the head
+  unit's firmware, and falls back to a built-in description of what our car uses. This is not confirmed on those
+  cars yet. When none of it works, the log and the health check say the car's software does not offer the audio
+  connection RideTube uses, once, instead of the same error every minute. A Send logs report also says where each
+  description came from, MainApp's version and what the catalog lists for the two audio services.
 
 ## App 0.3.14
 

@@ -54,6 +54,25 @@ Thanks to @marilykinson-glitch, whose fork brought the History and Liked feeds, 
 handling, the dropout recovery and the command-sequence tests, and to 小白151 (JackieZ123430) for the Chinese
 translation.
 
+## App 0.5.0
+
+- Search page on the rail: Type a search (typing works only while parked), your last 10 searches as tiles that
+  run again with one press, a Clear tile, then the results. A Menu tile opens the car's RideTube menu (account,
+  settings, logs). The search page idea comes from @marilykinson-glitch's fork.
+- Phone remote (needs service 0.5.0): Phone remote in the menu shows a QR code. A passenger on the car's Wi-Fi
+  hotspot scans it, then pastes a YouTube link or types a search on the phone. A link plays as if tapped, with the
+  same parked rule; a search gets its results ready in RideTube. The phone page shows in the app's language.
+- The iDrive controller reaches every tile on every page by turning, keeps its place when the page changes, and
+  push left goes back on the logs, disclaimer and clock pages.
+
+## Service 0.5.0
+
+- The phone remote: a small web page served only while the remote is on, on the car's hotspot address, by a
+  process under its own user. Each time it is turned on it gets a new 128-bit key, carried in the QR code. The
+  phone can only search, play and ask what is playing; it never reaches the account, the feeds or the logs. At
+  most one action a second. It turns off after an hour with no phone action, when RideTube closes, and when the
+  service stops. One firewall rule opens the port while it is on, and is removed at off, at exit and at start.
+
 ## App 0.4.2
 
 - Video while driving now asks first. Switched on, it shows a disclaimer: only for passengers in a car coded for

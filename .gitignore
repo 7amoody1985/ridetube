@@ -3,3 +3,6 @@ dist/
 oap-sdk
 __pycache__/
 .DS_Store
+# BMW's generators, if copied locally next to gen.js: never committed (gen.js loads them from the unit's firmware)
+kit/tools/oapgen/IFConfigGenerator.js
+kit/tools/oapgen/AclGenerator.js

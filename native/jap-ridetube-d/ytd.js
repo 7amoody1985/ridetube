@@ -41,6 +41,13 @@ function defaults() {
     return {
         someip: env.MGU_YT_SOMEIP || '/usr/lib/someip.node',
         srcGen: env.MGU_YT_SRCGEN || '/usr/lib/oap-mainapp/src-gen',
+        // where a service MainApp's src-gen lacks is described from (Audio.descriptions): the unit's SOME/IP catalog, the
+        // firmware's own generator (inside AppManagement.js), and kit/tools/oapgen/gen.js (shipped as oapgen.js) to load it
+        catalog: env.MGU_YT_CATALOG || '/etc/oap/someip/someip-interfaces.json',
+        appMgmt: '/usr/lib/oap-mainapp/src/AppManagement/AppManagement.js',
+        oapgen: path.join(here, 'oapgen.js'),
+        someipGenCmd: [process.execPath, __filename, '--someip-gen'],
+        someipRetryMs: 5000, // the SOME/IP services not up yet (boot): tried again after this
         ytdec: env.MGU_YT_YTDEC || path.join(here, 'ytdec'),
         cacheDir: env.MGU_YT_CACHE || '/var/opt/jap-ridetube-d/cache',
         logDir: env.MGU_YT_LOGDIR || '/var/opt/jap-ridetube-d/log',
@@ -863,20 +870,193 @@ function metadataLine(v) {
     });
     return out.length ? out.join(' ') : 'no title, artist, album or cover';
 }
+// The two SOME/IP services' descriptions (the JSON someip.buildProxy takes). Per service, the first source that has it:
+// 1. 'MainApp': MainApp's src-gen, made from MainApp's own manifest when MainApp was built (2021 MainApps list neither
+//    service: their src-gen has no such file);
+// 2. 'catalog': made at start from the unit's catalog (/etc/oap/someip/someip-interfaces.json) by the firmware's own
+//    generator, the way MainApp's installer makes an app's someipInterfaces/ (kit/tools/oapgen/gen.js loads it; in a
+//    child, ytd.js --someip-gen: the catalog is 5 MB of JSON). The catalog is searched by service id, its name may differ;
+// 3. 'built-in': BUILTIN below.
+const IFACES = [
+    { key: 'CommandControl', id: 'org.genivi.am.commandinterface.CommandControl', serviceId: 0xB020, inst: '1',
+        proxy: { instances: '1', attributes: { listOfMainConnections: 'rs' }, methods: ['connect', 'disconnect'] },
+        uses: { methods: ['connect', 'disconnect'], fields: ['listOfMainConnections'], events: [] } },
+    { key: 'MediaPlayer', id: 'de.bmw.infotainment.entertainment.mediaplayer.MediaPlayer', serviceId: 0xB042, inst: 'OapGenericMedia', proxy: '*',
+        uses: { methods: ['sendButtonEvent', 'playFile', 'setTime'], fields: ['playerState', 'currentItemTime'], events: ['playbackErrorEvent'] } }
+];
+// what a description lacks of our instance and of what this file calls, subscribes to or reads ([]: usable)
+function lacking(d, i) {
+    if (!d || typeof d !== 'object') return ['everything'];
+    const out = d.instances && typeof d.instances[i.inst] === 'number' ? [] : ['instance ' + i.inst];
+    Object.keys(i.uses).forEach((kind) => i.uses[kind].forEach((n) => { if (!(d[kind] && d[kind][n])) out.push(n); }));
+    return out;
+}
+const usable = (d, i) => lacking(d, i).length === 0;
+// Last resort, used only when MainApp's src-gen and the catalog both lack a service: our own minimal description of the
+// two services as our P18_23w44 unit (MainApp 8.3.2) has them, limited to what this file uses (the enums it decodes in
+// full, the button enum to the three it sends). Ids, versions or instances may differ on other firmware: then the
+// service never answers, and Audio.why says the car does not offer it.
+const seqEnum = (names) => ({ t: 'Enum', w: 1, e: names.split(' ').reduce((o, n, i) => { o[n] = i; return o; }, {}) });
+const named = (n, t) => Object.assign({ n: n }, t);
+const struct = function () { return { t: 'Struct', e: Array.prototype.slice.call(arguments) }; };
+const u16 = (n) => ({ n: n, t: 'UInt16' }), u32 = (n) => ({ n: n, t: 'UInt32' });
+function builtin(key) {
+    const amError = () => named('amError', seqEnum('E_OK E_UNKNOWN E_OUT_OF_RANGE E_NOT_USED E_DATABASE_ERROR E_ALREADY_EXISTS E_NO_CHANGE E_NOT_POSSIBLE E_NON_EXISTENT E_ABORTED E_WRONG_FORMAT E_MAX'));
+    const ent = () => struct(named('EntError', seqEnum('OK GENERAL_ERROR BAD_ARGUMENT NOT_SUPPORTED NOT_AVAILABLE DESTINATION_FULL NOT_BOOKMARKABLE NOT_ENOUGH_SIMILAR_MUSIC METADATA_PROVIDER_OUT_OF_DATE MAX_NUMBER_DOWNLOADS_REACHED')));
+    const rel = (o) => Object.assign(o, { reliable: true });
+    if (key === 'CommandControl') {
+        return { name: 'CommandControl', serviceId: 0xB020, version: { major: 1, minor: 1 }, instances: { 1: 1 },
+            methods: {
+                connect: { id: 1, schema: struct(u16('sourceID'), u16('sinkID')), retSchema: struct(u16('mainConnectionID'), amError()) },
+                disconnect: { id: 2, schema: struct(u16('mainConnectionID')), retSchema: struct(amError()) }
+            },
+            fields: { listOfMainConnections: { schema: { n: 'am_MainConnection_L', t: 'ArrayD', nl: 0, xl: 100,
+                e: struct(u16('mainConnectionID'), u16('sourceID'), u16('sinkID'), { n: 'delay', t: 'Int16' },
+                    named('connectionState', seqEnum('CS_UNKNOWN CS_CONNECTING CS_CONNECTED CS_DISCONNECTING CS_DISCONNECTED CS_SUSPENDED CS_MAX'))) },
+            getter: { id: 22 }, event: { id: 32769, groups: [1] } } },
+            events: {},
+            eventGroups: { fields: { 32769: [1] }, events: {} } };
+    }
+    return { name: 'MediaPlayer', serviceId: 0xB042, version: { major: 2, minor: 0 }, instances: { OapGenericMedia: 40 },
+        methods: {
+            sendButtonEvent: rel({ id: 257, schema: struct(named('button', { t: 'Enum', w: 1, e: { PLAY: 0, PAUSE: 1, STOP: 2 } }), named('action', seqEnum('PRESS RELEASE'))), retSchema: ent() }),
+            playFile: rel({ id: 258, schema: struct({ n: 'path', t: 'Utf16D', bo: true }, u32('languageCode')), retSchema: ent() }),
+            setTime: rel({ id: 264, schema: struct(u32('newTimeElapsed')), retSchema: ent() })
+        },
+        fields: {
+            playerState: { schema: seqEnum('PLAYER_STATE_UNKNOWN PLAYER_STATE_PLAY PLAYER_STATE_STOP PLAYER_STATE_PAUSE PLAYER_STATE_FAST_FORWARD PLAYER_STATE_FAST_BACKWARD'),
+                getter: rel({ id: 1 }), event: rel({ id: 32769, groups: [1] }) },
+            currentItemTime: { schema: struct(u32('elapsed'), u32('total')), getter: rel({ id: 15 }), event: rel({ id: 32783, groups: [1] }) }
+        },
+        events: { playbackErrorEvent: rel({ id: 33025, groups: [101],
+            schema: struct(named('event', seqEnum('NO_ERROR ITEM_UNPLAYABLE ITEM_CORRUPTED ITEM_CHANGE_DELAYED ITEM_NO_DATA NO_NETWORK DRM PLAYLIST_EMPTY ITEM_BUFFER_UNDERRUN'))) }) },
+        eventGroups: { fields: { 32769: [1], 32783: [1] }, events: { 33025: [101] } } };
+}
+// os-release's VERSION ("P18_23w44.2-1-3"), for the line saying this car's software lacks the services
+function osVersion(etcDir) {
+    const m = /^VERSION="?([\w.-]{1,40})"?\s*$/m.exec(String(lines(path.join(etcDir, 'os-release')).join('\n')));
+    return m ? m[1] : 'unknown';
+}
+// "v8.3.2-pr-847.1" (the v: a four-part version would read as an IP address to redactLog and health.clean)
+function mainappVersion(srcGen) {
+    const dir = path.dirname(srcGen);
+    const v = (readJson(path.join(dir, 'package.json')) || {}).version || (readJson(path.join(dir, 'manifest.json')) || {}).version;
+    return typeof v === 'string' && /^[\w.+-]{1,40}$/.test(v) ? 'v' + v : 'unknown';
+}
+const hex = (n) => (typeof n === 'number' ? '0x' + n.toString(16).toUpperCase() : '?');
+const ver = (v) => (v && v.major !== undefined ? 'v' + v.major + '.' + v.minor : 'v?');
+const instText = (m) => (m && typeof m === 'object' ? Object.keys(m).map((k) => k + '=' + m[k]).join(' ') : 'none');
+// ytd.js --someip-gen <catalog> <out.json> <oapgen.js> <keys JSON> (root, OAP_APPMGMT: the generator's bundle): what the
+// catalog says of the two services (names and ids only) and, for the keys asked, their descriptions -> out.json
+function someipGen(catalog, out, oapgen, keys) {
+    const r = { info: {}, descs: {} };
+    try {
+        const db = JSON.parse(fs.readFileSync(catalog, 'utf8'));
+        const ifs = db.interfaces || {}, manifest = { proxies: {} };
+        r.db = String(db.version);
+        IFACES.forEach((i) => {
+            const name = Object.keys(ifs).filter((n) => ifs[n] && ifs[n].serviceId === i.serviceId)[0];
+            if (!name) return;
+            r.info[i.key] = { name: name, serviceId: i.serviceId, version: ifs[name].version, instances: (db.instanceIDs || {})[name] || null };
+            if (keys.indexOf(i.key) >= 0) manifest.proxies[name] = i.proxy;
+        });
+        if (Object.keys(manifest.proxies).length) {
+            const gen = require(oapgen).load('IFConfigGenerator').generate(db, manifest);
+            IFACES.forEach((i) => { if (r.info[i.key] && manifest.proxies[r.info[i.key].name]) r.descs[i.key] = gen[r.info[i.key].name] || null; });
+        }
+    } catch (e) { r.error = String(e && e.message || e).slice(0, 200); }
+    fs.writeFileSync(out, JSON.stringify(r), { mode: 0o600 });
+}
+
 function Audio(opts, handlers) {
     this.opts = opts;
     this.h = handlers; // {time(v), state(v), error(v)}
     this.cc = null;
     this.mp = null;
     this.connId = null;
+    this.descP = null;     // the descriptions, found once (descriptions)
+    this.from = null;      // {CommandControl, MediaPlayer}: 'MainApp' | 'catalog' | 'built-in'
+    this.diag = [];        // what the report says of the services: the lines logged once
+    this.unsupported = null; // the line saying this car lacks the services (why), while it does
 }
+// -> {CommandControl, MediaPlayer}: each from the first source that has it; once a daemon, never rejects
+Audio.prototype.descriptions = function () {
+    if (!this.descP) this.descP = this.resolve();
+    return this.descP;
+};
+Audio.prototype.resolve = async function () {
+    const o = this.opts, out = {}, from = {};
+    const missing = IFACES.filter((i) => {
+        const d = readJson(path.join(o.srcGen, i.id.replace(/\./g, '_') + '.json'));
+        if (!d) return true;
+        out[i.key] = d;
+        from[i.key] = 'MainApp';
+        return false;
+    });
+    const hasCatalog = fs.existsSync(o.catalog);
+    const cat = missing.length && hasCatalog ? await this.fromCatalog(missing.map((i) => i.key)) : null;
+    missing.forEach((i) => {
+        const d = cat && cat.descs && cat.descs[i.key];
+        if (usable(d, i)) { out[i.key] = d; from[i.key] = 'catalog'; } else { out[i.key] = builtin(i.key); from[i.key] = 'built-in'; }
+    });
+    this.from = from;
+    const diag = IFACES.map((i) => 'someip: ' + i.key + ' from ' + from[i.key]);
+    diag.push('someip: MainApp ' + mainappVersion(o.srcGen) + ', catalog ' + (!hasCatalog ? 'missing' : !cat ? 'present, not needed'
+        : (cat.db ? 'db v' + cat.db : 'not read') + (cat.error ? ', ' + cat.error : '')));
+    if (cat && cat.info) {
+        IFACES.forEach((i) => {
+            const x = cat.info[i.key];
+            diag.push('someip: catalog ' + i.key + ' ' + (!x ? 'none with service id ' + hex(i.serviceId) : (x.name === i.id ? '' : 'named ' + x.name + ' ') + hex(x.serviceId) +
+                ' ' + ver(x.version) + ' instances ' + instText(x.instances)));
+        });
+    }
+    // what goes to buildProxy, whatever its source (a src-gen file is used unchecked, as before)
+    IFACES.forEach((i) => {
+        const d = out[i.key] || {}, miss = lacking(d, i);
+        diag.push('someip: in use ' + i.key + ' ' + hex(d.serviceId) + ' ' + ver(d.version) + ' ' + i.inst + '=' +
+            (d.instances && d.instances[i.inst] !== undefined ? d.instances[i.inst] : 'none') + (miss.length ? ', lacks ' + miss.join(' ') : ''));
+    });
+    this.diag = diag;
+    diag.forEach((l) => o.log(l));
+    return out;
+};
+// the catalog route (child: ytd.js --someip-gen), into the root-only state folder, made again at each start (a firmware
+// update changes the catalog) -> its out.json, or {error}
+Audio.prototype.fromCatalog = function (keys) {
+    const o = this.opts, f = path.join(o.stateDir, 'someip.json');
+    return new Promise((resolve) => {
+        try {
+            if (!fs.existsSync(o.stateDir)) { mkdirp(path.dirname(o.stateDir)); fs.mkdirSync(o.stateDir, 0o700); }
+            try { fs.unlinkSync(f); } catch (e) { /* none yet */ }
+        } catch (e) { return resolve({ error: 'state dir: ' + e.message }); }
+        return cp.execFile(o.someipGenCmd[0], o.someipGenCmd.slice(1).concat([o.catalog, f, o.oapgen, JSON.stringify(keys)]),
+            { timeout: 60000, cwd: '/', env: { OAP_APPMGMT: o.appMgmt }, maxBuffer: 64 << 10 }, (e, stdout, stderr) => {
+                const r = readJson(f);
+                if (r) return resolve(r);
+                const last = String(stderr || '').trim().split('\n').pop();
+                return resolve({ error: e && e.killed ? 'generator: no answer in 60 s' : 'generator: ' + (last || (e && e.message) || 'no result').slice(0, 200) });
+            });
+    });
+};
+// a failed start -> the reason logged: with a built-in description, the car most likely lacks the service
+Audio.prototype.why = function (e) {
+    const f = this.from || {};
+    const guess = IFACES.some((i) => f[i.key] === 'built-in');
+    this.unsupported = guess ? 'This car\'s software (' + osVersion(this.opts.etcDir) + ') does not offer the audio connection RideTube uses' : null;
+    return this.unsupported ? this.unsupported + ' (' + e.message + ')' : e.message;
+};
+// "CommandControl from catalog, MediaPlayer from MainApp; MainApp v8.3.2-pr-847.1" (the health check's audio row), '' before
+Audio.prototype.sources = function () {
+    if (!this.from) return '';
+    return IFACES.map((i) => i.key + ' from ' + this.from[i.key]).join(', ') + '; MainApp ' + mainappVersion(this.opts.srcGen);
+};
 Audio.prototype.init = async function () {
     if (this.cc && this.mp) return;
     const someip = typeof this.opts.someip === 'string' ? require(this.opts.someip) : this.opts.someip;
-    const cfg = (f) => JSON.parse(fs.readFileSync(path.join(this.opts.srcGen, f), 'utf8'));
-    const cc = await someip.buildProxy(cfg('org_genivi_am_commandinterface_CommandControl.json'), '1');
+    const d = await this.descriptions();
+    const cc = await someip.buildProxy(d.CommandControl, IFACES[0].inst);
     await cc.init();
-    const mp = await someip.buildProxy(cfg('de_bmw_infotainment_entertainment_mediaplayer_MediaPlayer.json'), 'OapGenericMedia');
+    const mp = await someip.buildProxy(d.MediaPlayer, IFACES[1].inst);
     await mp.init();
     const h = this.h;
     const safe = (fn) => (v) => { try { fn(v); } catch (e) { this.opts.log('someip handler: ' + (e && e.stack || e)); } };
@@ -1326,16 +1506,20 @@ Daemon.prototype.start = async function () {
     this.timers.push(setInterval(() => this.guard(() => this.lockSocket()), this.opts.tickMs));   // a reinstall can change the app's uid
     this.keepWarm();
     this.prune();
-    // The SOME/IP services may come up after us at boot: retry until the leftover check ran.
-    for (let i = 0; ; i++) {
+    // The SOME/IP services may come up after us at boot: retry until the leftover check ran (logged when the reason changes)
+    for (let last = null; ;) {
         try {
             await this.audio.init();
             await this.audio.dropLeftovers();
+            this.audio.unsupported = null;
+            if (last) this.log('someip ready');
             this.readyResolve();
             break;
         } catch (e) {
-            if (i % 12 === 0) this.log('someip not ready: ' + e.message);
-            await sleep(5000);
+            const why = this.audio.why(e);
+            if (why !== last) this.log('someip not ready: ' + why);
+            last = why;
+            await sleep(this.opts.someipRetryMs);
         }
     }
 };
@@ -1644,7 +1828,7 @@ Daemon.prototype.report = function (app, health) {
     const ytdec = tailLines(path.join(this.opts.logDir, 'ytdec.log'), 300);
     const hl = (health || []).map((h) => 'health ' + h.key + ' ' + (h.ok ? 'ok' : 'FAIL') + ' ' + h.text);
     const log = ['--- ytdec.log, last ' + ytdec.length + ' lines'].concat(ytdec, ['--- jap-ridetube-d ' + VERSION + ', last ' + this.ring.length + ' lines'], this.ring,
-        hl.length ? ['--- health'].concat(hl) : []);
+        this.audio.diag.length ? ['--- someip'].concat(this.audio.diag) : [], hl.length ? ['--- health'].concat(hl) : []);
     return { app: /^[\d.]{1,12}$/.test(String(app)) ? String(app) : 'unknown', service: VERSION,
         os: lastBytes(red(lines(path.join(this.opts.etcDir, 'os-release')).slice(0, 5)), OS_MAX).join('\n'),
         log: lastBytes(red(log), REPORT_MAX).join('\n') };
@@ -1815,7 +1999,8 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, resto
     this.ticking = false;
     this.lastTickAt = Date.now();
     try {
-        await withTimeout(this.ready, 10000, 'audio service'); // never connect before the leftover sweep
+        // never connect before the leftover sweep; a car without the services: the line that says so
+        await withTimeout(this.ready, 10000, 'audio service').catch((e) => { throw this.audio.unsupported ? new Error(this.audio.unsupported) : e; });
         if (gen !== this.gen) return undefined;
         if (headMs !== null && !this.fullReady) this.head = { ms: headMs };
         if (own.paused) { // paused while it started (a paused quality restart): no sound until resume starts it at ms
@@ -2377,7 +2562,9 @@ function uplinkLookup(leaseFile) {
     };
 }
 
-if (require.main === module && process.argv[2] === '--fetch') {
+if (require.main === module && process.argv[2] === '--someip-gen') {
+    someipGen(process.argv[3], process.argv[4], process.argv[5], JSON.parse(process.argv[6] || '[]'));
+} else if (require.main === module && process.argv[2] === '--fetch') {
     // the fetch helper (as the fetch uid): one request from stdin, its answer on stdout
     let input = '';
     const out = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));

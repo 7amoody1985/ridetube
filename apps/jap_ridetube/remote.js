@@ -19,7 +19,7 @@ const VID_RE = /^[\w-]{11}$/, Q_MAX = 200;
 const URL_RE = /^http:\/\/(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})\/#[0-9a-f]{32}$/;
 
 module.exports = function remotePage(o) {
-    const { model, t, C, QR, TOP, H, W } = o;   // t: translate; o.message: a sentence with {values}; o.X0 per frame (fill)
+    const { model, t, C, QR, H, W } = o;   // t: translate; o.message: a sentence with {values}; o.X0 per frame (fill)
     const LIT = { literal: true }, LITB = { literal: true, font: 'bold' };
     const st = { on: false, url: null, expires: 0, at: 0, error: null, asking: false };
     const page = {
@@ -51,7 +51,7 @@ module.exports = function remotePage(o) {
         },
         down() { st.on = false; st.url = null; st.asking = false; },
         draw(cv) {
-            const X0 = o.X0;
+            const X0 = o.X0, TOP = o.TOP;
             if (!model.connected) return o.say(cv, o.OFF, o.OFF2);
             const bottom = H + (cv.own ? cv.extra : 0);
             const tw = cv.text(t('Phone remote'), X0, TOP + 44, 30, '#ffffff', LITB);

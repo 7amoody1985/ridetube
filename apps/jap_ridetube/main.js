@@ -5,7 +5,7 @@
  * and decodes the picture (ytdec) into
  * /dev/shm/mgu-video-ridetube, which the renderer (mgu-render) draws in this app's layer (op 19).
  *
- * Screens (a TV-style dark look: navy, neon pink and cyan, big 16:9 tiles):
+ * Screens (a TV-style dark look: YouTube's dark greys, neon pink and cyan, big 16:9 tiles):
  *   VIEW  (first) drawn page. Browsing: an icon rail on the left (Search, Home, Subscriptions,
  *         Watch later, Playlists; the page shown lit, a pink mark) and, right of it, rows of tiles: a 320 x 180
  *         thumb (its length in a pill), the title in up to two lines, "channel · 125K views · 1 day ago".
@@ -78,7 +78,7 @@ const W = 1600, H = 520;
 const BOX = { x: 12, y: 38, w: 1576, h: 432 };          // the video, in the page's visible part (y 38..520)
 const VID = 1, VPATH = process.env.MGU_YT_VIDEO || '/dev/shm/mgu-video-ridetube';     // (env: tests)
 const POOL0 = 8, POOL = 56;                               // picture ids POOL0.. for the thumbs drawn (a pool, by video)
-const TOP = 38;                                          // the page shows from here down (the kit: y 38..520 + extra)
+let TOP = 38;                                            // the page shows from here down (the kit: y 38..520 + extra; fill: 12, inset())
 const RAIL0 = 116, TILE_X = 136;                         // the icon rail, x 12..116, and the first tile's left
 let RX = 0, RAIL_W = RAIL0, X0 = TILE_X;                 // inset() moves both right of the HMI's back arrow column
 let TW = 320, TH = 180, PITCH = 348;                     // tiles: 16:9 thumbs, four a row, the fifth peeking (inset())
@@ -640,7 +640,7 @@ mgu.run({
             return s.slice(0, lo).replace(/\s+$/, '') + '…';     // (no trimEnd on the unit's Node 8)
         };
         const LIT = { literal: true }, LITB = { literal: true, font: 'bold' };
-        const C = { bg: '#0b0f1e', card: '#1a2038', ph: '#232a46', text: '#f1f3ff', dim: '#a4abc8', red: '#ff3f8e', cyan: '#3ad6ff', amber: '#ffd36b' };   // red: the accent (neon pink)
+        const C = { bg: '#0f0f0f', card: '#212121', ph: '#272727', text: '#f1f1f1', dim: '#aaaaaa', red: '#ff3f8e', cyan: '#3ad6ff', amber: '#ffd36b' };   // YouTube's dark greys   // red: the accent (neon pink)
         const browsing = () => mode !== 'player';
 
         // thumbs: a pool of picture ids by video, least recently drawn reused (the renderer holds 64 pictures an app)
@@ -915,7 +915,7 @@ mgu.run({
                 if (cv.own && shown && row.hs) {
                     if (off > 0) after.push(chevron(cv, X0 + 4, ty + TH / 2, -1, () => { st.off[ri] = Math.max(0, off - PER_ROW); dirty = true; }, letter + ':' + ri + ':<'));
                     if (off < max) {
-                        after.push(() => { for (let k = 0; k < 6; k++) cv.fillRect(W - 108 + k * 16, ty - 10, 16, TILE_H + 16, [15, 15, 15, Math.round(255 * (0.3 + k * 0.14))]); });
+                        if (!RX) after.push(() => { for (let k = 0; k < 6; k++) cv.fillRect(W - 108 + k * 16, ty - 10, 16, TILE_H + 16, [15, 15, 15, Math.round(255 * (0.3 + k * 0.14))]); });
                         after.push(chevron(cv, W - 48, ty + TH / 2, 1, () => { st.off[ri] = Math.min(max, off + PER_ROW); dirty = true; }, letter + ':' + ri + ':>'));
                     }
                 }
@@ -969,8 +969,9 @@ mgu.run({
             const pl = cv.place;
             RX = pl && pl.scale ? Math.max(0, Math.ceil((HMI.left - pl.ox) / pl.scale) + 4 - 16) : 0;   // (16: the rail's targets' left)
             RAIL_W = RAIL0 + RX; X0 = TILE_X + RX; MID = (RAIL_W + W) / 2;
-            // moved right, four tiles still end before the shelf's fade and arrow (W - 108): a little narrower
-            if (RX) { TW = 304; TH = 171; PITCH = 330; } else { TW = 320; TH = 180; PITCH = 348; }
+            // fill: the whole screen is the app's, so the page starts near the top and four tiles reach the right edge
+            // (W - 16; a shelf's next arrow sits over the fourth tile); otherwise four tiles and the fifth peeking
+            if (RX) { TOP = 12; TW = 328; TH = 184; PITCH = 354; } else { TOP = 38; TW = 320; TH = 180; PITCH = 348; }
             TILE_H = TH + 98;
         }
         function say(cv, msg, sub) {
@@ -980,8 +981,8 @@ mgu.run({
         }
         let OFF = translate('The RideTube service (jap-ridetube-d) is not running');
         let OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
-        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, count, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
-        remote = require('./remote')({ model, send: (o) => ctl.send(o), changed, lang: getLanguage, say, fit, t: whole, message: whole, C, QR, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
+        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, count, C, focus: () => focusKey, get X0() { return X0; }, get TOP() { return TOP; }, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
+        remote = require('./remote')({ model, send: (o) => ctl.send(o), changed, lang: getLanguage, say, fit, t: whole, message: whole, C, QR, focus: () => focusKey, get X0() { return X0; }, get TOP() { return TOP; }, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
         PAGES.remote = remote.draw;
         // a phone action, as a tap: a search shows its results, a video plays (the picture only as the parked rule allows)
         remote.onDo = (a) => { if (a.do === 'search') search(a.q, true); else play(a.id); changed(); };

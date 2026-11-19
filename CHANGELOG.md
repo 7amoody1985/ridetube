@@ -30,6 +30,11 @@
   list's 100.
 - Live streams and upcoming premieres show a red LIVE tag where the length goes. They can't be played yet, so a
   tap says so instead of trying.
+- Russian: the app, its menus and its settings can now show in Russian, from the same package as English. A new
+  Language setting offers Auto, English, Русский and 中文. Auto follows the car's language and falls back to
+  English. Texts the service sends (health check rows, its error messages) stay in English. Russian YouTube feeds
+  (Russian titles and shelves) need service 0.4.0; an older service keeps sending the feeds it sent before. The
+  package grows from about 2.5 MB to 6.8 MB because the Chinese fonts now ship in it too.
 - These need service 0.4.0. With an older service the new menu entries stay hidden and the app works as before.
 
 ## Service 0.4.0

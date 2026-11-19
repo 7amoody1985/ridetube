@@ -161,6 +161,30 @@
   ],
   "settings": [
     {
+      "key": "language",
+      "label": "Language",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "Auto"
+        ],
+        [
+          "en",
+          "English"
+        ],
+        [
+          "ru",
+          "Русский"
+        ],
+        [
+          "zh-CN",
+          "中文"
+        ]
+      ]
+    },
+    {
       "key": "fill",
       "label": "Fill the screen (crops the video; off: black side bars)",
       "type": "bool",

@@ -314,6 +314,9 @@ async function appFrames() {
     hu.ctx.hideButton = (id, hide) => disp.hideButton(id, hide);
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
     hu.ctx.focus = (k) => disp.focusPage(k);
+    // the car's HMI language (kit/mgu.js: CurrentVehicleUnits): en_GB here until WP7 turns it to Russian
+    const hmiLang = { now: 'en_GB', fns: [] };
+    hu.ctx.hmiLanguage = (fn) => { if (fn) hmiLang.fns.push(fn); return hmiLang.now; };
     assert.strictEqual(typeof hu.ctx.onTouch, 'function', 'the stub has onTouch, as kit/mgu.js');
     const wp5 = wp5Spies(hu);
     hu.start();
@@ -972,6 +975,7 @@ async function appFrames() {
     }
     if (own) await wp5Frames({ hu, d, disp, keys, drawn, texts, wp5, rock: (v) => rockerH({ operationPushButtonAudioAutomaticTuningSteeringWheel: v }), speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     else console.log('skip WP5 frames (the stub does not run the screen)');
+    if (own) await wp7Frames({ hu, d, disp, drawn, texts, file, hmiLang, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
 }
@@ -1311,6 +1315,93 @@ async function wp5Frames(x) {
     assert.strictEqual(wp5.spells, sp, 'no text entry opened while moving');
     d.send({ ev: 'state', state: 'idle' }); parked();
     console.log('ok   WP5 nothing new opens text entry while moving');
+}
+
+// ======== WP7 Language: the Language setting switches the whole app at run time
+async function wp7Frames(x) {
+    const { hu, d, disp, drawn, texts, file, hmiLang, speed } = x;
+    const tgt = (k) => disp.pageTargets.find((t) => t.key === k);
+    const set = hu.ctx.settings, ver = require('../../apps/jap_ridetube/app.json').version;
+    speed(0);
+    d.send({ ev: 'state', state: 'idle' });
+    d.send({ ev: 'auth', state: 'signed_in' });
+    hu.handlers.BTN_HOME(); await sleep(300); await drawn();      // (an unchanged page redraws after 250 ms)
+    const before = texts.slice(), size0 = fs.statSync(file).size;
+    // English chosen: the same as Auto in the stub (no HMI language there): nothing changes, no second hello
+    const nHello = d.cmds('hello').length;
+    set.set('language', 'en'); await sleep(300); await drawn();
+    assert.deepStrictEqual([texts, d.cmds('hello').length], [before, nHello], 'English chosen: the same page, no hello');
+    // Русский: hello again with ru / RU before the page's feed is asked again; the drawn page in Russian
+    const n0 = d.got.length, hmi = {}, ot = hu.ui.text;
+    hu.ui.text = (n, t) => { hmi[n] = t; return ot.apply(hu.ui, arguments); };
+    set.set('language', 'ru');
+    await until(() => d.cmds('hello').length > nHello, 2000, 'hello again');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'ru', region: 'RU' }, 'hello: ru, RU');
+    // Home was on its way (asked in English): its answer comes, then Home is asked again in Russian
+    await sleep(50);
+    assert.ok(!d.got.slice(n0).some((m) => m.cmd === 'feed'), 'not asked twice while on its way');
+    d.send({ ev: 'feed', which: 'home', items: [] });
+    await until(() => d.got.slice(n0).some((m) => m.cmd === 'feed' && m.which === 'home'), 2000, 'Home asked again');
+    const after = d.got.slice(n0).map((m) => m.cmd);
+    assert.ok(after.indexOf('hello') < after.indexOf('feed'), 'hello first, then the feed: ' + after);
+    const RU_FEED = [{ id: 'RUSVIDEO001', title: 'Новости дня', channel: 'Первый канал', duration_s: 300, meta: ['3 тыс. просмотров'] }];
+    ['home', 'subs', 'wl', 'hist'].forEach((w) => d.send({ ev: 'feed', which: w, items: RU_FEED }));
+    // every page: no English word of the catalog left (names and the fake service's own text aside)
+    const words = new Set();
+    rideTubeWords().forEach((w) => words.add(w));
+    const seen = [];
+    const english = () => texts.filter((t) => t.split(/[^A-Za-z]+/).some((w) => words.has(w.toLowerCase())));
+    const page = async (what, open) => { await open(); await sleep(300); await drawn(); seen.push(what + ': ' + texts.join(' | ')); assert.deepStrictEqual(english(), [], what + ' in Russian: ' + texts.join(' | ')); };
+    hu.ui.text = ot;
+    assert.deepStrictEqual([hmi.BTN_S1, hmi.BTN_S3, hmi.BTN_PLAY, hmi.BTN_ACCOUNT, hmi.MAIN_INFO], ['News', 'Музыка', 'Смотреть', 'Выйти', 'Найдите видео или выберите недавний запрос ниже'],
+        'the HMI menu\'s own texts again in Russian (the recent searches as typed, then the suggestions): ' + JSON.stringify(hmi));
+    await page('home', async () => hu.handlers.BTN_HOME());
+    assert.ok(texts.indexOf('Главная') >= 0 && texts.indexOf('Позже') >= 0 && texts.indexOf('Подписки') >= 0, 'the rail in Russian, the short Позже: ' + texts.join('|'));
+    await page('subs', async () => hu.handlers.BTN_SUBS());
+    await page('wl', async () => hu.handlers.BTN_WL());
+    await page('pl', async () => { hu.handlers.BTN_PL(); d.send({ ev: 'playlists', items: [{ id: 'PLru', title: 'Мой плейлист', count: 5 }] }); });
+    assert.ok(texts.indexOf('5 видео') >= 0 && texts.indexOf('1 плейлист') >= 0, 'counts in Russian: ' + texts.join('|'));
+    await page('hist', async () => hu.handlers.BTN_HIST());
+    await page('health', async () => { hu.handlers.BTN_HEALTH(); d.send({ ev: 'health', key: 'dns', ok: false, text: 'нет ответа' }); d.send({ ev: 'health', key: 'tls', ok: false, text: 'нет ответа' }); d.send({ ev: 'health', done: true }); });
+    assert.ok(texts.indexOf('2 проверки не пройдены') >= 0, 'few: ' + texts.join('|'));
+    await page('logs', async () => hu.handlers.BTN_LOGS());
+    await page('logs cancel', async () => tgt('logs:cancel').run());
+    await page('player', async () => { d.send({ ev: 'state', state: 'playing', id: 'RUSVIDEO001', title: 'Новости дня' }); d.send({ ev: 'time', elapsed: 1000, total: 300000 }); hu.handlers.BTN_NOW(); await sleep(300); await hu.loopFn(); });
+    await page('signed out', async () => { d.send({ ev: 'state', state: 'idle' }); d.send({ ev: 'auth', state: 'code', code: 'ABC-DEF', url: 'https://www.google.com/device' }); hu.handlers.BTN_HOME(); });
+    assert.ok(texts.indexOf('Введите этот код на телефоне') >= 0, 'the sign-in card: ' + texts.join('|'));
+    // the rail's labels fit the 90 px under their icon (bold, the page lit)
+    const { Canvas } = require(path.join(hu.kitDir, 'canvas'));
+    const cv = new Canvas(200, 40);
+    ['Главная', 'Подписки', 'Позже', 'Плейлисты', 'История', 'Играет', 'Поиск'].forEach((l) => assert.ok(cv.textWidth(l, 18, { literal: true, font: 'bold' }) <= 90, l + ' fits the rail'));
+    // back to English: the same page as before, hello en without a region
+    d.send({ ev: 'auth', state: 'signed_in' });
+    set.set('language', 'en');
+    await until(() => d.cmds('hello').slice(-1)[0].lang === 'en', 2000, 'hello en');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'en' }, 'hello: en, no region');
+    hu.handlers.BTN_HOME(); await sleep(300); await drawn();
+    assert.ok(texts.indexOf('Home') >= 0 && texts.indexOf('Watch later') >= 0 && texts.indexOf('Subs') >= 0 && !texts.some((t) => /[\u0400-\u04ff]/.test(t) && !/Новости|Первый|просмотров/.test(t)), 'English again: ' + texts.join('|'));
+    // Auto: follows the car's language, at the switch and when the car changes it (one listener, from the start)
+    assert.strictEqual(hmiLang.fns.length, 1, 'one languageChanged listener');
+    hmiLang.now = 'ru_RU'; set.set('language', 'auto');
+    await until(() => d.cmds('hello').slice(-1)[0].lang === 'ru', 2000, 'Auto: hello ru');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'ru', region: 'RU' }, 'Auto on a Russian car: ru, RU');
+    hmiLang.now = 'en_GB'; hmiLang.fns[0]('en_GB');
+    await until(() => d.cmds('hello').slice(-1)[0].lang === 'en', 2000, 'Auto: hello en');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'en' }, 'Auto after the car went English: en');
+    set.set('language', 'en'); hmiLang.now = 'ru_RU'; hmiLang.fns[0]('ru_RU'); await sleep(100);
+    assert.strictEqual(d.cmds('hello').slice(-1)[0].lang, 'en', 'English chosen: the car\'s language is ignored');
+    assert.strictEqual(hmiLang.fns.length, 1, 'still one listener');
+    hmiLang.now = 'en_GB';
+    assert.ok(fs.statSync(file).size > size0, 'frames went on');
+    console.log('ok   WP7 Language: Русский redraws every page in Russian, hello ru/RU then the feed again; English again as before; Auto follows the car');
+}
+// the English words of RideTube's strings (tests/test_runtime.js's list): none may show while Russian is chosen
+function rideTubeWords() {
+    const ru = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'ru.json'), 'utf8'));
+    const keep = /^(ridetube|youtube|jap|ridetube|mgu|store|render|gpu|sponsorblock|sponsor|ajay|app|github|wi|fi|shorts|google|com|device|cc|by|nc|sa|p|s|v|query|name|count|percent|title|seconds|time|date|soc|limit|error|www|https|ok)$/;
+    const out = new Set();
+    Object.keys(ru).forEach((k) => k.split(/[^A-Za-z]+/).forEach((w) => { w = w.toLowerCase(); if (w.length > 1 && !keep.test(w)) out.add(w); }));
+    return out;
 }
 
 clientAndModel().then(helloCaps).then(wp5Model).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });

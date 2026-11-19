@@ -557,6 +557,16 @@ async function runInner(impl) {
         signals: require('./signals'),
         theme: () => themes.theme(settings.get('theme')),
         /**
+         * hmiLanguage(fn): the car's HMI language ("ru_RU", "en_GB": the SDK's CurrentVehicleUnits, the same source
+         * that picks the string table the HMI shows), null when unknown; fn(lang) when it changes.
+         */
+        hmiLanguage(fn) {
+            const u = app.currentVehicleUnits;
+            if (!u || typeof u.getLanguage !== 'function') return null;
+            if (fn && typeof u.on === 'function') u.on('languageChanged', () => { try { fn(u.getLanguage()); } catch (e) { log.error('language', e); } });
+            try { return u.getLanguage() || null; } catch (e) { return null; }
+        },
+        /**
          * controller.grab(true): the iDrive controller's knob, press and tilt go to this app only
          * (the HMI stops moving its focus or opening its menus); BACK, MENU and the touchscreen
          * still work. Read the controller with signals (FrontCCU). Only while shown; release with

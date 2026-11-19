@@ -141,6 +141,16 @@ class Model {
     can(cap) { return this.caps.indexOf(cap) >= 0; }
     _changed() { this.rev++; }
 
+    /** a new display language (the Language setting): hello again with it (the service keeps a connection's last
+     *  hello), so the feeds, search and related come in it; watch-next is asked again, the page shown reloads (main.js) */
+    relang(hi) {
+        this.hi = hi;
+        this.related = null;
+        // a feed on its way was asked in the old language (the service answers it once): asked again when it comes
+        Object.keys(this.feeds).forEach((w) => { if (this.feeds[w].loading) this.feeds[w].again = true; });
+        this._changed();
+        return this.connected ? this.send(Object.assign({ cmd: 'hello' }, this.hi)) : false;
+    }
     setConnected(on) {
         this.connected = on;
         if (on) { this.send(Object.assign({ cmd: 'hello' }, this.hi)); this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.videoOn = null; this._video(); } else {
@@ -231,6 +241,7 @@ class Model {
                 if (!f.shelves.length) f.shelves = null;
                 this._prune();
             }
+            if (f.again) { f.again = false; this.feed(m.which); }
         } else if (m.ev === 'positions') {
             this.pos = {};
             valid(m.items, 300).forEach((r) => { if (r.total > 0) this.pos[r.id] = r; });

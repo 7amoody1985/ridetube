@@ -50,7 +50,7 @@ const path = require('path');
 const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const QR = require('./kit/qr');
-const { t: translate, dict, getLanguage } = require('./kit/i18n');
+const { t: translate, plural, dict, getLanguage, setLanguage, languages, BAKED } = require('./kit/i18n');
 
 function message(key, values) {
     return translate(key).replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
@@ -59,6 +59,12 @@ function message(key, values) {
 function whole(key, values) {
     const s = Object.prototype.hasOwnProperty.call(dict, key) ? translate(key) : key;
     return values ? s.replace(/\{(\w+)\}/g, (_, name) => String(values[name])) : s;
+}
+// "{count} video" / "{count} videos" for n: the catalog's plural row (one form per plural rule: Russian has three),
+// else the English form as before (through tr: translate, or whole for a page that never mixes)
+function count(n, one, other, tr) {
+    const s = Object.prototype.hasOwnProperty.call(dict, one + '|' + other) ? plural(n, one, other) : (tr || translate)(n === 1 ? one : other);
+    return s.replace(/\{count\}/g, String(n));
 }
 const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
@@ -86,7 +92,8 @@ const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Pla
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
-const [LANG, REGION] = String(getLanguage()).split('-');   // hello's: "zh-CN" -> zh, CN; "en" -> en, no region
+// hello's lang and region for a display language: "zh-CN" -> zh, CN; "ru" -> ru, RU; "en" -> en, no region
+const helloLang = (lang) => { const p = String(lang).split('-'), r = p[1] || ({ ru: 'RU' })[p[0]]; return r ? { lang: p[0], region: r } : { lang: p[0] }; };
 const CLOCK_MSG = 'The head unit\'s clock is wrong (it says {date}). RideTube is skipping the certificate date check so videos still play. While the clock is wrong, the security of the app and of your car can be compromised. Set the car\'s date and time to fix it.';
 const LOGS_MS = 45000;                                   // a log report with no answer by then failed (the service gives up at 31 s)
 const LOGS_ERR = { closed: 'Log reporting is closed for now', busy: 'Too many reports right now - try again later',
@@ -97,6 +104,15 @@ process.on('uncaughtException', (e) => { try { mgu.log.error('uncaught', e); } c
 mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
+        // the Language setting: a catalog the package has, else Auto: the car's HMI language when there is a catalog
+        // for it (ru_RU, zh_CN), else the package's own (English; a zh-CN build's Chinese)
+        const pickLanguage = () => {
+            const want = settings.get('language') || 'auto', have = languages();
+            if (want !== 'auto') return have.indexOf(want) >= 0 ? want : BAKED;
+            const hmi = String((ctx.hmiLanguage && ctx.hmiLanguage()) || ''), tag = /^ru/.test(hmi) ? 'ru' : /^zh_CN/.test(hmi) ? 'zh-CN' : null;
+            return tag && have.indexOf(tag) >= 0 ? tag : BAKED;
+        };
+        setLanguage(pickLanguage());
         const parked = Parked.watch(ctx, log, { strict: true });
         // the drive lock: Video while driving counts only once switched on while parked, so a press while moving
         // cannot bring the picture up; switching it off works at once
@@ -109,7 +125,7 @@ mgu.run({
 
         /* ---------- the daemon ---------- */
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);
-        const model = new Model((o) => ctl.send(o), { app: APP_VERSION, lang: LANG, region: REGION });
+        const model = new Model((o) => ctl.send(o), Object.assign({ app: APP_VERSION }, helloLang(getLanguage())));
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
         const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); };
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
@@ -165,7 +181,7 @@ mgu.run({
         const RECENT = path.join(ctx.dataDir, 'recent.json');
         let recent = [];
         try { recent = JSON.parse(fs.readFileSync(RECENT, 'utf8')).filter((s) => typeof s === 'string').slice(0, SLOTS.length); } catch (e) { /* none yet */ }
-        const suggestions = SUGGEST.map(translate);
+        let suggestions = SUGGEST.map(translate);
         const slots = () => recent.concat(suggestions.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length);
         const showSlots = () => slots().forEach((s, i) => ui.text(SLOTS[i], s, 0, 'Text', { literal: true }));
         function search(q) {
@@ -213,8 +229,8 @@ mgu.run({
         function info() {
             let s;
             if (!model.connected) s = translate('The RideTube service (jap-ridetube-d) is not running');
-            else if (model.searchError) s = translate('Search: ') + model.searchError;
-            else if (model.error) s = translate('Error: ') + model.error;
+            else if (model.searchError) s = translate('Search: ') + whole(model.searchError);
+            else if (model.error) s = translate('Error: ') + whole(model.error);
             else if (model.active()) s = (model.state === 'preparing' ? message('Preparing {percent} %: ', { percent: Math.round(model.pct) }) : model.state === 'paused' ? translate('Paused: ') : translate('Playing: ')) + model.title;
             else s = translate('Search, or pick a recent search below');
             if (model.connected && model.clock) s = whole('Wrong clock ({date}): security reduced', { date: model.clock }) + ' · ' + s;
@@ -667,7 +683,7 @@ mgu.run({
                 const cx = 62 + RX, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
                 if (on) { cv.roundRect(18 + RX, cy - 38, 90, 84, 16, bg); cv.roundRect(18 + RX, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
-                cv.text(translate(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
+                cv.text(translate(name === 'Subscriptions' ? 'Subs' : name === 'Watch later' && dict.Later ? 'Later' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
                 const th = Math.min(84, Math.floor(pitch));     // (more entries: the targets as tall as the pitch, never overlapping)
                 if (cv.own) cv.target(16 + RX, cy + 4 - th / 2, 92, th, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
             });
@@ -722,7 +738,7 @@ mgu.run({
             const pid = th && cv.place ? slot(r.thumb, th) : null;
             if (pid) cv.picture(pid, x, y, TW, TH, 12);
             else { cv.roundRect(x, y, TW, TH, 12, C.ph); listGlyph(cv, x + TW / 2, y + TH / 2, 60, '#ffffff38'); }
-            const n = r.count === null || r.count === undefined ? translate('Playlist') : r.count === 0 ? translate('No videos') : message(r.count === 1 ? '{count} video' : '{count} videos', { count: r.count });
+            const n = r.count === null || r.count === undefined ? translate('Playlist') : r.count === 0 ? translate('No videos') : count(r.count, '{count} video', '{count} videos');
             const nw = cv.textWidth(n, 20, LITB) + 52;
             cv.roundRect(x + TW - 8 - nw, y + TH - 36, nw, 28, 6, '#000000cc');
             listGlyph(cv, x + TW - nw + 12, y + TH - 22, 18, '#ffffff');
@@ -773,19 +789,19 @@ mgu.run({
         function chanSections() {
             const ch = model.chans;
             if (!ch || (!ch.items.length && ch.loading)) return [{ title: translate('Channels'), sub: translate('Loading...'), items: [], chan: true }];
-            if (!ch.items.length) return ch.error ? [{ title: translate('Channels'), sub: ch.error, items: [], chan: true }] : [];
+            if (!ch.items.length) return ch.error ? [{ title: translate('Channels'), sub: whole(ch.error), items: [], chan: true }] : [];
             const find = { id: '::find', title: chanQ ? translate('Search again') : translate('Search channels'), sub: translate('A letter, or a word'), act: findChannel, glyph: KEYS };
-            if (!chanQ) return [{ title: translate('Channels'), sub: message('{count} subscriptions, A-Z', { count: ch.items.length }), items: [find].concat(ch.items), chan: true }];
+            if (!chanQ) return [{ title: translate('Channels'), sub: count(ch.items.length, '{count} subscriptions, A-Z', '{count} subscriptions, A-Z'), items: [find].concat(ch.items), chan: true }];
             const hits = model.findChannels(chanQ);
-            const all = { id: '::all', title: translate('All channels'), sub: message('{count} subscriptions', { count: ch.items.length }), act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
+            const all = { id: '::all', title: translate('All channels'), sub: count(ch.items.length, '{count} subscriptions', '{count} subscriptions'), act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
             return [{ title: message(chanQ.length === 1 ? 'Channels starting with “{query}”' : 'Channels matching “{query}”', { query: chanQ }),
-                sub: hits.length ? message(hits.length === 1 ? '{count} channel' : '{count} channels', { count: hits.length }) : translate('none'), items: [find, all].concat(hits), chan: true, grid: true }];
+                sub: hits.length ? count(hits.length, '{count} channel', '{count} channels') : translate('none'), items: [find, all].concat(hits), chan: true, grid: true }];
         }
         function drawChannel(cv) {
             const c = model.chan;
             if (!model.connected) return say(cv, OFF, OFF2);
             if (!c) return say(cv, translate('Pick a channel in Subscriptions'));
-            if (!c.items.length) return say(cv, c.loading ? message('Loading {name}...', { name: c.title || translate('the channel') }) : c.error === 'feed offline' ? translate('The video service is not reachable - check the car\'s internet connection') : c.error || translate('No videos on this channel'), c.title || null);
+            if (!c.items.length) return say(cv, c.loading ? message('Loading {name}...', { name: c.title || translate('the channel') }) : c.error === 'feed offline' ? translate('The video service is not reachable - check the car\'s internet connection') : whole(c.error) || translate('No videos on this channel'), c.title || null);
             const hid = hidden.indexOf(c.title) >= 0;
             const tog = { id: '::hide', title: hid ? translate('Show this channel') : translate('Hide this channel'), sub: hid ? translate('Hidden from Home, Subscriptions, Search') : translate('From Home, Subscriptions and Search'),
                 act: () => toggleHidden(c.title), glyph: hid ? SHOW : BLOCK };
@@ -912,13 +928,13 @@ mgu.run({
             cv.text(fit(cv, msg, 34, 1360, LIT), browsing() ? MID : W / 2, 290, 34, '#ffffff', { literal: true, align: 'center' });
             if (sub) cv.text(fit(cv, sub, 24, 1360, LIT), browsing() ? MID : W / 2, 336, 24, C.dim, { literal: true, align: 'center' });
         }
-        const OFF = translate('The RideTube service (jap-ridetube-d) is not running');
-        const OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
-        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, OFF, OFF2 });
+        let OFF = translate('The RideTube service (jap-ridetube-d) is not running');
+        let OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
+        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, count, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
             if (model.searching) return say(cv, message('Searching "{query}"...', { query: model.q }));
-            if (model.searchError) return say(cv, translate('Search: ') + model.searchError, translate('Try again from Search'));
+            if (model.searchError) return say(cv, translate('Search: ') + whole(model.searchError), translate('Try again from Search'));
             if (!model.results.length) return say(cv, model.q ? message('Nothing found for "{query}"', { query: model.q }) : translate('Search (bar button) to find videos'), model.q ? translate('Try other words') : null);
             drawPage(cv, [{ title: message('Results for “{query}”', { query: model.q }), items: shown(model.results), grid: true }]);
         }
@@ -930,7 +946,7 @@ mgu.run({
             const chans = which === 'subs' && model.chans && model.chans.items.length;   // the channels show without the videos
             if ((!f || !f.items.length) && !chans) {
                 return say(cv, !f || f.loading ? message('Loading {name}...', { name: translate(NAMES[which]) }) : f.error === 'feed offline' ? translate('The video service is not reachable - check the car\'s internet connection')
-                    : f.error ? translate(NAMES[which]) + ': ' + f.error : which === 'wl' ? translate('Nothing in Watch later') : translate('No videos here yet'), which === 'wl' && f && !f.loading && !f.error ? translate('Videos you save for later show here') : null);
+                    : f.error ? translate(NAMES[which]) + ': ' + whole(f.error) : which === 'wl' ? translate('Nothing in Watch later') : translate('No videos here yet'), which === 'wl' && f && !f.loading && !f.error ? translate('Videos you save for later show here') : null);
             }
             let secs;
             if (which === 'home') {
@@ -938,13 +954,13 @@ mgu.run({
                 secs = (model.resume.length ? [{ title: translate('Continue watching'), items: model.resume }] : [])
                     .concat(f.shelves || [{ title: translate('Recommended'), items: f.items, grid: true }])
                     .concat(wl && wl.items.length ? [{ title: translate('Watch later'), items: wl.items.slice(0, SHELF_MAX) }] : []);
-            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: translate(NAMES[which]), sub: message('{count} videos', { count: f.items.length }), items: f.items, grid: true }];
+            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: translate(NAMES[which]), sub: count(f.items.length, '{count} videos', '{count} videos'), items: f.items, grid: true }];
             if (which === 'subs') secs = chanSections().concat(chanQ || !f || !f.items.length ? [] : secs);
             drawPage(cv, secs.map((sc) => (sc.chan ? sc : Object.assign({}, sc, { items: shown(sc.items) }))).filter((sc) => sc.chan || sc.items.length));
         }
         // the account's playlists, a grid; one opens as its videos (the Playlists page stays lit on the rail)
         function openPlaylist(p) { model.openPlaylist(p.id, p.title); show('list'); vs('list').sy = 0; vs('list').off = {}; }
-        const OFFLINE = translate('The video service is not reachable - check the car\'s internet connection');
+        let OFFLINE = translate('The video service is not reachable - check the car\'s internet connection');
         function drawPlaylists(cv) {
             const p = model.pls, a = model.auth.state;
             if (!model.connected) return say(cv, OFF, OFF2);
@@ -952,21 +968,21 @@ mgu.run({
             if (a !== 'signed_in') return drawSignIn(cv);
             if (!p || !p.items.length) {
                 if (p && p.error === 'unknown cmd playlists') return say(cv, translate('Playlists need a newer jap-ridetube-d tool on the car'), translate('Update the RideTube service in the MGU Store'));
-                return say(cv, !p || p.loading ? message('Loading {name}...', { name: translate('Playlists') }) : p.error === 'feed offline' ? OFFLINE : p.error ? translate('Playlists') + ': ' + p.error : translate('No playlists yet'),
+                return say(cv, !p || p.loading ? message('Loading {name}...', { name: translate('Playlists') }) : p.error === 'feed offline' ? OFFLINE : p.error ? translate('Playlists') + ': ' + whole(p.error) : translate('No playlists yet'),
                     p && !p.loading && !p.error ? translate('Playlists you make or save on YouTube show here') : null);
             }
-            drawPage(cv, [{ title: translate('Playlists'), sub: message(p.items.length === 1 ? '{count} playlist' : '{count} playlists', { count: p.items.length }), items: p.items, grid: true, pl: true }]);
+            drawPage(cv, [{ title: translate('Playlists'), sub: count(p.items.length, '{count} playlist', '{count} playlists'), items: p.items, grid: true, pl: true }]);
         }
         function drawPlaylist(cv) {
             const p = model.plist;
             if (!model.connected) return say(cv, OFF, OFF2);
             if (!p) return say(cv, translate('Pick a playlist in Playlists'));
             if (!p.items.length) return say(cv, p.loading ? message('Loading {name}...', { name: p.title || translate('the playlist') }) : p.error === 'feed offline' ? OFFLINE
-                : p.error === 'unknown cmd playlists' ? translate('Playlists need a newer jap-ridetube-d tool on the car') : p.error || translate('This playlist is empty'), p.title || null);
+                : p.error === 'unknown cmd playlists' ? translate('Playlists need a newer jap-ridetube-d tool on the car') : whole(p.error) || translate('This playlist is empty'), p.title || null);
             // as Watch later: members-only videos (the setting off) and hidden channels left out, and said so
             const vids = shown(p.items), off = p.items.length - vids.length;
-            if (!vids.length) return say(cv, message('Nothing to show in {name}', { name: p.title || translate('this playlist') }), message(off === 1 ? '{count} video hidden: members-only (Settings) or a hidden channel' : '{count} videos hidden: members-only (Settings) or a hidden channel', { count: off }));
-            drawPage(cv, [{ title: p.title || translate('Playlist'), sub: message(vids.length === 1 ? '{count} video' : '{count} videos', { count: vids.length }) + (off ? ' · ' + message('{count} hidden', { count: off }) : ''), items: vids, grid: true }]);
+            if (!vids.length) return say(cv, message('Nothing to show in {name}', { name: p.title || translate('this playlist') }), count(off, '{count} video hidden: members-only (Settings) or a hidden channel', '{count} videos hidden: members-only (Settings) or a hidden channel'));
+            drawPage(cv, [{ title: p.title || translate('Playlist'), sub: count(vids.length, '{count} video', '{count} videos') + (off ? ' · ' + count(off, '{count} hidden', '{count} hidden') : ''), items: vids, grid: true }]);
         }
         // not signed in: a QR code for the sign-in page, the code to enter there in big letters, on a card
         function drawSignIn(cv) {
@@ -1060,7 +1076,7 @@ mgu.run({
                 if (p > 0) cv.arc(cx, cy - 20, 44, 52, 0, p * 3.6, C.red, { round: true });
                 cv.text(Math.round(p) + '%', cx, cy - 10, 30, '#ffffff', { literal: true, font: 'bold', align: 'center' });
                 cv.text(prepText(), cx, cy + 82, 26, '#dddddd', { literal: true, align: 'center' });
-            } else if (model.state === 'error') mid = translate('Error: ') + (model.error || translate('playback stopped'));
+            } else if (model.state === 'error') mid = translate('Error: ') + (model.error ? whole(model.error) : translate('playback stopped'));
             else if (!model.active()) mid = model.state === 'ended' ? translate('Finished') : translate('Pick a video on Home or Search');
             else if (noVideo()) mid = translate('Video stops while driving - the sound plays on');
             else if (!cv.place || !gpu()) mid = translate('The picture needs the GPU renderer (mgu-render) - the sound plays');
@@ -1175,7 +1191,7 @@ mgu.run({
                 cv.roundRect(x0, SH - 96, w2, 64, 32, wn ? '#4a3a10' : '#1f3d1f');
                 cv.text(tt, x0 + 30, SH - 54, 26, wn ? '#ffd27a' : '#7ee07e', LIT);
             }
-            if (model.state === 'error') cv.text(fit(cv, translate('Error: ') + (model.error || translate('playback stopped')), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
+            if (model.state === 'error') cv.text(fit(cv, translate('Error: ') + (model.error ? whole(model.error) : translate('playback stopped')), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
         }
         function drawFull(cv) {
             const pl = cv.place, s = pl.scale, SW = pl.w / s, SH = pl.h / s, dx = pl.ox / s, dy = pl.oy / s;
@@ -1241,7 +1257,7 @@ mgu.run({
             // middle: -10 s, play / pause, +10 s; preparing: the ring with the percentage
             let mid = null;
             if (!model.connected) mid = OFF;
-            else if (model.state === 'error') mid = translate('Error: ') + (model.error || translate('playback stopped'));
+            else if (model.state === 'error') mid = translate('Error: ') + (model.error ? whole(model.error) : translate('playback stopped'));
             const up = upNext;
             if (up) {
                 mid = message('Up next in {seconds} s: {title}', { seconds: Math.max(1, Math.ceil((nextAt - Date.now()) / 1000)), title: up.title || up.id });
@@ -1369,6 +1385,24 @@ mgu.run({
             return ui.image('VIEW_GFX', last);
         }
         ctx.loop('VIEW', 10, render);
+        // the Language setting changed (or, on Auto, the car's language): the new catalog, hello again with its lang and
+        // region (feeds, search and related come in it), the page shown asks again, every text drawn or sent again
+        function relang() {
+            const lang = pickLanguage();
+            if (lang === getLanguage() || !setLanguage(lang)) return;
+            log.info('language ' + lang);
+            model.relang(Object.assign({ app: APP_VERSION }, helloLang(lang)));
+            OFF = translate('The RideTube service (jap-ridetube-d) is not running');
+            OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
+            OFFLINE = translate('The video service is not reachable - check the car\'s internet connection');
+            suggestions = SUGGEST.map(translate);
+            showSlots();
+            lastPlay = lastList = lastAcct = null;
+            labels(); info(); openFeed();
+            dirty = true;
+        }
+        if (settings.onChange) settings.onChange((key) => { if (key === 'language') relang(); });
+        if (ctx.hmiLanguage) ctx.hmiLanguage(() => { if ((settings.get('language') || 'auto') === 'auto') relang(); });
         log.info('ridetube app started');
     },
 });

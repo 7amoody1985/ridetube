@@ -5,7 +5,7 @@
  * type, so it works driving or parked. Where the HMI runs the screen (no buttons drawn), the menu entry pressed
  * again runs it again. The service sends the rows as each check finishes, then done.
  *
- *   const drawHealth = require('./health')({ model, say, fit, t, message, C, focus, X0, TOP, H, W, OFF, OFF2 });
+ *   const drawHealth = require('./health')({ model, say, fit, t, message, count, C, focus, X0, TOP, H, W, OFF, OFF2 });
  *   drawHealth(cv)        // from render, mode 'health'
  */
 module.exports = function healthPage(o) {
@@ -29,8 +29,8 @@ module.exports = function healthPage(o) {
         const h = model.health || { items: [], loading: false };
         const bottom = H + (cv.own ? cv.extra : 0), rows = h.items.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r.key) - rank(b.r.key) || a.i - b.i).map((x) => x.r);
         const bad = rows.filter((r) => !r.ok && !unknown(r)).length;
-        const head = h.loading ? t('Checking...') : h.error ? t('Health check: ') + h.error
-            : !rows.length ? t('No result yet') : bad ? o.message(bad === 1 ? '{count} check failed' : '{count} checks failed', { count: bad }) : t('Everything works');
+        const head = h.loading ? t('Checking...') : h.error ? t('Health check: ') + t(h.error)
+            : !rows.length ? t('No result yet') : bad ? o.count(bad, '{count} check failed', '{count} checks failed', t) : t('Everything works');
         const tw = cv.text(t('Health check'), X0, TOP + 44, 30, '#ffffff', LITB);
         cv.text(fit(cv, head, 22, 700, LIT), X0 + tw + 18, TOP + 44, 22, bad ? '#ff8f8f' : C.dim, LIT);
         // the rows: one column, two when they do not fit (the rest counted)

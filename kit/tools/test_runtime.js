@@ -2,7 +2,8 @@
 
 // Kit runtime (display.js, renderd.js, mgu.js Settings) against a stand-in mgu-render on a Unix socket: the
 // unchanged-frame skip and its keepalive, a sheet that throws, X_STATE front flips, a reconnect after a cut
-// message, the theme kept on a fresh install. No SDK, renderer or car needed:
+// message, the theme kept on a fresh install, the Russian catalog (plurals, rows, glyphs, the HMI table). No SDK,
+// renderer or car needed:
 //   node kit/tools/test_runtime.js
 
 const assert = require('assert');
@@ -291,6 +292,112 @@ test('Romanian ș ț Ș Ț draw as ş ţ Ş Ţ, an accented letter the atlas lac
     const w = cv.text('Știri', 0, 40, 32, '#ffffff', { literal: true });
     assert.strictEqual(w, cv.text('Ştiri', 0, 40, 32, '#ffffff', { literal: true }));
     assert.ok(w > cv.text('tiri', 0, 40, 32, '#ffffff', { literal: true }));
+});
+
+// ======== WP7 Language: the Russian catalog (kit/runtime/locales/ru.json), chosen at run time
+// the RideTube strings a catalog must have: wrapped call sites, the tables drawn through translate / whole, app.json's labels
+function rideTubeStrings() {
+    const read = (f) => fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8');
+    const src = read('apps/jap_ridetube/main.js') + '\n' + read('apps/jap_ridetube/health.js');
+    const LIT = String.raw`('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")`;
+    const un = (s) => s.slice(1, -1).replace(/\\(.)/g, '$1');
+    const out = new Set();
+    const add = (s) => { s = s.trim(); if (/[A-Za-z]{2}/.test(s)) out.add(s); };
+    let m;
+    const call = new RegExp(String.raw`\b(?:translate|whole|message|t)\(\s*` + LIT, 'g');
+    while ((m = call.exec(src))) add(un(m[1]));
+    const tern = new RegExp(String.raw`\b(?:translate|whole|message|t)\([^()]*?\?\s*` + LIT + String.raw`\s*:\s*` + LIT, 'g');
+    while ((m = tern.exec(src))) { add(un(m[1])); add(un(m[2])); }
+    const cnt = new RegExp(String.raw`\bcount\([^,]+,\s*` + LIT + String.raw`,\s*` + LIT, 'g');
+    while ((m = cnt.exec(src))) out.add(un(m[1]) + '|' + un(m[2]));
+    // tables drawn through translate / whole: NAMES, SUGGEST, the SponsorBlock names, the log errors, the clock text,
+    // the bar and account labels, the logs page's buttons, the rail's own names
+    const table = (name) => { const b = src.match(new RegExp('const ' + name + ' = ([\\s\\S]*?);\\n')); if (!b) throw new Error('no ' + name); const r = new RegExp(LIT, 'g'); let x; const v = []; while ((x = r.exec(b[1]))) v.push(un(x[1])); return v; };
+    table('NAMES').filter((s) => /[A-Z]/.test(s[0])).forEach(add);
+    table('SUGGEST').forEach(add);
+    table('LOGS_ERR').filter((s) => / /.test(s)).forEach(add);
+    table('CLOCK_MSG').forEach(add);
+    table('SB').filter((s) => / |-/.test(s) || s === 'sponsor' || s === 'intro').forEach(add);
+    ['Play', 'Pause', 'Now playing', 'Player', 'Sign in', 'Sign out', 'Press again to sign out', 'Send', 'Cancel', 'Close',
+        'Home', 'Subscriptions', 'Subs', 'Watch later', 'Playlists', 'History', 'Playing', 'Search', 'segment'].forEach(add);
+    // yt.js: the skipped toast
+    ['Skipped', 'self-promotion', 'like & subscribe reminder'].forEach(add);
+    // app.json: title, screens, buttons, menu items, settings and their options (the HMI and the drawn sheet)
+    const spec = JSON.parse(read('apps/jap_ridetube/app.json'));
+    add(spec.title);
+    for (const sc of spec.screens) { if (sc.title) add(sc.title); (sc.buttons || []).forEach((b) => add(b[1])); (sc.items || []).forEach((it) => it[2] && add(it[2])); }
+    for (const s of spec.settings) { add(s.label); (s.options || []).forEach((o) => { if (s.key !== 'language') add(o[1]); }); }
+    // the kit's drawn settings sheet
+    ['Settings', 'Done', 'Back', 'Version'].forEach(add);
+    return [...out];
+}
+const RT_SOURCES = ['apps/jap_ridetube/main.js', 'apps/jap_ridetube/health.js', 'apps/jap_ridetube/yt.js', 'apps/jap_ridetube/app.json', 'kit/runtime/sheet.js']
+    .map((f) => fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8')).join('\n').replace(/\\(['"])/g, '$1');
+const RU = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'ru.json'), 'utf8'));
+const BRAND = /^(RideTube|720p)$/;   // names, no row
+
+test('ru plurals: one, few, many (11-14 many), the catalog\'s three forms; English and zh-CN keep two', () => {
+    const i18n = require('../runtime/i18n');
+    assert.ok(i18n.languages().indexOf('ru') >= 0 && i18n.languages().indexOf('zh-CN') >= 0, 'the catalogs: ' + i18n.languages());
+    try {
+        assert.ok(i18n.setLanguage('ru'));
+        const v = (n) => i18n.plural(n, '{count} channel', '{count} channels').replace('{count}', n);
+        assert.deepStrictEqual([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111, 0].map(v),
+            ['1 канал', '2 канала', '4 канала', '5 каналов', '11 каналов', '12 каналов', '14 каналов', '21 канал', '22 канала', '25 каналов', '101 канал', '111 каналов', '0 каналов']);
+        assert.deepStrictEqual([1, 3, 7].map((n) => i18n.plural(n, '{count} subscriptions', '{count} subscriptions')), ['{count} подписка', '{count} подписки', '{count} подписок']);
+        assert.strictEqual(i18n.t('Home'), 'Главная');
+        assert.ok(i18n.setLanguage('zh-CN'));
+        assert.strictEqual(i18n.plural(5, '{count} channel', '{count} channels'), '{count} channels', 'zh-CN: no plural row, the English form (then t())');
+        assert.strictEqual(i18n.t('Home'), '首页');
+        assert.strictEqual(i18n.setLanguage('xx'), false, 'an unknown language: nothing changes');
+        assert.strictEqual(i18n.getLanguage(), 'zh-CN');
+    } finally { i18n.setLanguage('en'); }
+    assert.deepStrictEqual([i18n.t('Home'), i18n.plural(1, 'a', 'b'), i18n.plural(2, 'a', 'b'), Object.keys(i18n.dict).length], ['Home', 'a', 'b', 0], 'English again: nothing translated');
+});
+
+test('ru.json: every key is in the source, every string RideTube translates has a row, plural rows have three forms', () => {
+    const gone = Object.keys(RU).filter((k) => k.split('|').some((part) => RT_SOURCES.indexOf(part) < 0));
+    assert.deepStrictEqual(gone, [], 'keys no source has');
+    const missing = rideTubeStrings().filter((s) => !BRAND.test(s) && !Object.prototype.hasOwnProperty.call(RU, s));
+    assert.deepStrictEqual(missing, [], 'strings without a Russian row');
+    Object.keys(RU).filter((k) => k.indexOf('|') >= 0).forEach((k) => assert.strictEqual(RU[k].split('|').length, 3, k));
+    Object.keys(RU).forEach((k) => {
+        const ph = (s) => (s.match(/\{\w+\}/g) || []).sort().join();
+        RU[k].split('|').forEach((v) => assert.strictEqual(ph(v), ph(k.split('|')[0]), 'the same {placeholders}: ' + k));
+        assert.ok(/[\u0400-\u04ff]/.test(RU[k]), 'Russian: ' + k);
+    });
+});
+
+test('ru.json: every character draws from the Cyrillic atlases (label, bold, light, num), none dropped', () => {
+    const fonts = require('../runtime/fonts');
+    const text = Object.keys(RU).map((k) => RU[k]).join('');
+    [['label', 18], ['label', 24], ['bold', 24], ['bold', 32], ['light', 32], ['num', 40]].forEach(([fam, size]) => {
+        const f = fonts.get(fam, size, 'Я');
+        assert.strictEqual(f.family, fam + '_cyr');
+        const lost = Array.from(new Set(Array.from(text))).filter((ch) => !fonts.glyph(f, ch));
+        assert.deepStrictEqual(lost, [], fam + ' ' + size + ': no glyph for ' + lost.join(' '));
+    });
+    // the Language setting's own names in the atlases an English package draws them with
+    assert.ok(Array.from('Русский').every((ch) => fonts.glyph(fonts.get('label', 28, 'Русский'), ch)), 'Русский');
+});
+
+test('the built package (dist/jap_ridetube): the car\'s ru_RU table has the menu and settings in Russian, en_GB as before', () => {
+    const dir = path.join(__dirname, '..', '..', 'dist', 'jap_ridetube', 'rhmiData', 'strings');
+    if (!fs.existsSync(path.join(dir, 'ru_RU.json'))) { console.log('      (skipped: python3 kit/tools/build.py jap_ridetube first)'); return; }
+    const table = (l) => JSON.parse(fs.readFileSync(path.join(dir, l + '.json'), 'utf8'));
+    const en = table('en_GB'), ru = table('ru_RU'), de = table('de_DE');
+    const spec = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'jap_ridetube', 'app.json'), 'utf8'));
+    const labels = [].concat(...spec.screens.map((sc) => (sc.items || []).map((it) => it[2]).concat((sc.buttons || []).map((b) => b[1]))),
+        ...spec.settings.map((s) => [s.label].concat(s.key === 'language' ? [] : (s.options || []).map((o) => o[1])))).filter((x) => x && !BRAND.test(x) && !/^\d+ %$/.test(x));
+    const enValues = Object.keys(en).map((k) => en[k]), ruValues = Object.keys(ru).map((k) => ru[k]);
+    labels.forEach((l) => {
+        assert.ok(enValues.indexOf(l) >= 0, 'en_GB has ' + l);
+        assert.ok(ruValues.indexOf(RU[l]) >= 0, 'ru_RU has ' + RU[l] + ' (' + l + ')');
+        assert.ok(ruValues.indexOf(l) < 0, 'ru_RU has no English ' + l);
+    });
+    assert.deepStrictEqual(Object.keys(ru), Object.keys(en), 'the same string ids');
+    assert.deepStrictEqual(de, en, 'a car language without a catalog: the English table');
+    assert.ok(enValues.filter((v) => /[\u0400-\u04ff]/.test(v)).every((v) => v === 'Русский'), 'en_GB: no Russian but the language\'s own name');
 });
 
 (async () => {

@@ -71,9 +71,12 @@ const BOX = { x: 12, y: 38, w: 1576, h: 432 };          // the video, in the pag
 const VID = 1, VPATH = process.env.MGU_YT_VIDEO || '/dev/shm/mgu-video-ridetube';     // (env: tests)
 const POOL0 = 8, POOL = 56;                               // picture ids POOL0.. for the thumbs drawn (a pool, by video)
 const TOP = 38;                                          // the page shows from here down (the kit: y 38..520 + extra)
-const RAIL_W = 116;                                      // the icon rail, x 12..116
-const X0 = 136, TW = 320, TH = 180, PITCH = 348, PER_ROW = 4;   // tiles: 16:9 thumbs, four a row, the fifth peeking
-const TILE_H = TH + 98, HEAD_H = 50, SHELF_GAP = 30, GRID_GAP = 22;   // a tile with its text; a shelf's title row
+const RAIL0 = 116, TILE_X = 136;                         // the icon rail, x 12..116, and the first tile's left
+let RX = 0, RAIL_W = RAIL0, X0 = TILE_X;                 // inset() moves both right of the HMI's back arrow column
+let TW = 320, TH = 180, PITCH = 348;                     // tiles: 16:9 thumbs, four a row, the fifth peeking (inset())
+const PER_ROW = 4;
+let TILE_H = TH + 98;
+const HEAD_H = 50, SHELF_GAP = 30, GRID_GAP = 22;   // a tile with its text; a shelf's title row
 const OVERLAY_MS = 4000;                                 // the player's controls hide this long after a tap (playing)
 const SEARCH_MS = 8000;                                  // a search with no answer by then is an error on screen
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'];
@@ -595,10 +598,11 @@ mgu.run({
             return e.pid;
         }
 
-        // a title in at most two lines of TW px (the second one ellipsised), cached by title
+        // a title in at most two lines of TW px (the second one ellipsised), cached by title and width
         const wraps = new Map();
         function wrap(cv, s) {
-            let v = wraps.get(s);
+            const wk = TW + '|' + s;
+            let v = wraps.get(wk);
             if (v) return v;
             const words = s.split(/\s+/).filter(Boolean);
             let l1 = '', i = 0;
@@ -611,7 +615,7 @@ mgu.run({
             }
             v = rest ? [l1, fit(cv, rest, 24, TW, LITB)] : [l1];
             if (wraps.size > 400) wraps.clear();
-            wraps.set(s, v);
+            wraps.set(wk, v);
             return v;
         }
         if (ctx.onLayout) ctx.onLayout(() => wraps.clear());          // (text widths follow the scale)
@@ -660,12 +664,12 @@ mgu.run({
             const items = cv.own && model.active() ? rail.concat([PLAYING]) : rail;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
             items.forEach(([m, name, glyph], i) => {
-                const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
-                if (on) { cv.roundRect(18, cy - 38, 90, 84, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
+                const cx = 62 + RX, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
+                if (on) { cv.roundRect(18 + RX, cy - 38, 90, 84, 16, bg); cv.roundRect(18 + RX, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
                 cv.text(translate(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
                 const th = Math.min(84, Math.floor(pitch));     // (more entries: the targets as tall as the pitch, never overlapping)
-                if (cv.own) cv.target(16, cy + 4 - th / 2, 92, th, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
+                if (cv.own) cv.target(16 + RX, cy + 4 - th / 2, 92, th, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
             });
         }
 
@@ -892,7 +896,17 @@ mgu.run({
         });
 
         // a message in the middle of the page (RideTube's mark over it), a grey line under it
-        const MID = (RAIL_W + W) / 2;
+        let MID = (RAIL_W + W) / 2;
+        // "fill" draws the page from the screen's left edge, under the HMI's back arrow column (x 0..84), whose
+        // taps stay the HMI's (they close the app): the rail, the tiles and the pages start right of it
+        function inset(cv) {
+            const pl = cv.place;
+            RX = pl && pl.scale ? Math.max(0, Math.ceil((HMI.left - pl.ox) / pl.scale) + 4 - 16) : 0;   // (16: the rail's targets' left)
+            RAIL_W = RAIL0 + RX; X0 = TILE_X + RX; MID = (RAIL_W + W) / 2;
+            // moved right, four tiles still end before the shelf's fade and arrow (W - 108): a little narrower
+            if (RX) { TW = 304; TH = 171; PITCH = 330; } else { TW = 320; TH = 180; PITCH = 348; }
+            TILE_H = TH + 98;
+        }
         function say(cv, msg, sub) {
             if (browsing()) logo(cv, MID, 200, 76);
             cv.text(fit(cv, msg, 34, 1360, LIT), browsing() ? MID : W / 2, 290, 34, '#ffffff', { literal: true, align: 'center' });
@@ -900,7 +914,7 @@ mgu.run({
         }
         const OFF = translate('The RideTube service (jap-ridetube-d) is not running');
         const OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
-        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, C, focus: () => focusKey, X0, TOP, H, W, OFF, OFF2 });
+        PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, OFF, OFF2 });
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
             if (model.searching) return say(cv, message('Searching "{query}"...', { query: model.q }));
@@ -1336,6 +1350,7 @@ mgu.run({
                 dirty = false; lastRev = model.rev; lastT = now;
                 const cv = ctx.canvas(W, H).clear(C.bg);
                 frameNo++;
+                inset(cv);
                 if (mode === 'player' && cv.own && cv.place && cv.place.full) drawFull(cv);
                 else {
                     if (browsing()) drawRail(cv);

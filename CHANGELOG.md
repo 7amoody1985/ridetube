@@ -9,7 +9,7 @@
 ## App 0.4.0
 
 - Full screen: RideTube now covers the whole screen. The car's title bar and left column are gone, so the rail,
-  the tiles and the player get all 1920 × 720 pixels. Touch works as before.
+  the tiles and the player get all 1920 × 720 pixels. Touch works as before. The rail sits just right of the car's back-arrow strip at the left edge, because a tap there still goes to the car and closes the app; the tiles are a little narrower so four still fit in a row.
 - Error messages no longer start with "fetch:".
 - A wrong head unit clock: while the service skips the certificate date check (see Service 0.4.0), a security
   warning shows once, until you press OK, and the menu's info line starts with "Wrong clock" until the clock is

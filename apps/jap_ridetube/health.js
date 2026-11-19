@@ -9,7 +9,7 @@
  *   drawHealth(cv)        // from render, mode 'health'
  */
 module.exports = function healthPage(o) {
-    const { model, say, fit, t, C, X0, TOP, H, W } = o;   // t: translate; o.message: a sentence with {values}
+    const { model, say, fit, t, C, TOP, H, W } = o;   // t: translate; o.message: a sentence with {values}; o.X0 per frame (fill)
     const LIT = { literal: true }, LITB = { literal: true, font: 'bold' };
     const GREEN = '#35d07f', GREY = '#5c6380';
     // the service's keys in the order shown (the rows come as each probe ends); others after them, as they came
@@ -24,6 +24,7 @@ module.exports = function healthPage(o) {
         else { cv.line(x - 6, y - 6, x + 6, y + 6, 4, '#ffffff'); cv.line(x - 6, y + 6, x + 6, y - 6, 4, '#ffffff'); }
     };
     return function drawHealth(cv) {
+        const X0 = o.X0;
         if (!model.connected) return say(cv, o.OFF, o.OFF2);
         const h = model.health || { items: [], loading: false };
         const bottom = H + (cv.own ? cv.extra : 0), rows = h.items.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r.key) - rank(b.r.key) || a.i - b.i).map((x) => x.r);

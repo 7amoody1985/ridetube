@@ -875,6 +875,42 @@ async function appFrames() {
         assert.ok(disp.pageTargets.some((t) => /^rail:/.test(t.key)) && !disp.pageTargets.some((t) => t.key === 'ov:play'), 'and the page stays: ' + disp.pageTargets.map((t) => t.key).slice(0, 6));
         console.log('ok   steering wheel next / previous: a tap skips through the list (previous to the start after 3 s), held seeks, browsing stays');
     }
+    // the wrong clock (the service skips the certificate dates): the warning once an app session over the page shown,
+    // OK (or any page) closes it; the menu's info line says it while it lasts; nothing from a service that never says
+    {
+        const WARN = 'Security warning', tgt = (k) => disp.pageTargets.find((x) => x.key === k);
+        const MSG = 'The head unit\'s clock is wrong (it says 2026-10-13). RideTube is skipping the certificate date check so videos still play. While the clock is wrong, the security of the app and of your car can be compromised. Set the car\'s date and time to fix it.';
+        const infos = [], ut = hu.ui.text;
+        hu.ui.text = function (n, t) { if (n === 'MAIN_INFO') infos.push(String(t)); return ut.apply(this, arguments); };
+        hu.handlers.BTN_HOME();
+        await drawn();
+        assert.ok(texts.indexOf(WARN) < 0, 'a service that never said clock: no warning');
+        d.send({ ev: 'clock', clock: '2026-10-13' });
+        await sleep(100); await drawn();
+        assert.ok(texts.indexOf(WARN) >= 0, 'the warning: ' + texts.join('|'));
+        const at = texts.indexOf(WARN) + 1;
+        assert.strictEqual(texts.slice(at, at + 6).join(' ').slice(0, MSG.length), MSG, 'the whole disclaimer, wrapped');
+        if (own) {
+            assert.ok(tgt('clock:ok'), 'OK to dismiss: ' + keys());
+            tgt('clock:ok').run();
+        } else hu.handlers.BTN_SUBS();        // (the HMI's own screen: no OK drawn, any page goes on)
+        await drawn();
+        assert.ok(texts.indexOf(WARN) < 0, 'dismissed');
+        if (own) assert.ok(tgt('rail:home'), 'back on the page it showed over: ' + keys());
+        d.send({ ev: 'clock', clock: '2026-10-14' });
+        await sleep(100); await drawn();
+        hu.handlers.BTN_WL(); await drawn();
+        assert.ok(texts.indexOf(WARN) < 0, 'once an app session');
+        // (the stub never shows MAIN, whose 1 s refresh writes the line: Close, with nothing playing, writes it too)
+        hu.handlers.BTN_CLOSE();
+        assert.ok(infos.length && infos.slice(-1)[0].indexOf('Wrong clock (2026-10-14): security reduced · ') === 0, 'the info line: ' + infos.slice(-1));
+        d.send({ ev: 'clock', clock: null });
+        await sleep(100);
+        hu.handlers.BTN_CLOSE();
+        assert.ok(infos.slice(-1)[0].indexOf('Wrong clock') < 0, 'set right: the line goes: ' + infos.slice(-1));
+        hu.ui.text = ut;
+        console.log('ok   wrong clock: the warning once, OK closes it, the info line while it lasts, nothing from an older service');
+    }
     // Send logs to the developer: the menu entry asks first (Send / Cancel), then the code; the error screen's second button
     {
         const ASK = 'Send RideTube\'s recent logs to the developer?', tgt = (k) => disp.pageTargets.find((x) => x.key === k);
@@ -1036,9 +1072,21 @@ async function helloCaps() {
     await until(() => got.length, 2000, 'ev_related');
     await sleep(50);
     assert.deepStrictEqual([got, m.rev], [['abcdefghijk'], rev + 1], 'handled once, one change');
+    // the wrong clock: hello's clock (a date only), clock events after it; an old service or one with the clock right: none
+    assert.strictEqual(m.clock, null, 'no clock from a 0.4.0 hello without it');
+    d.send({ ev: 'hello', service: '0.4.0', caps: ['related', 'hist'], clock: '2026-10-13' });
+    await until(() => m.clock, 2000, 'hello clock');
+    assert.deepStrictEqual([m.clock, m.caps], ['2026-10-13', ['related', 'hist']]);
+    for (const [x, want] of [['2026-10-14', '2026-10-14'], [null, null], ['2026-10-15', '2026-10-15'], ['<b>bad</b>', null], [20261013, null]]) {
+        d.send({ ev: 'clock', clock: x });
+        await until(() => m.clock === want, 2000, 'clock ' + x);
+    }
+    d.send({ ev: 'clock', clock: '2026-10-13' });
+    await until(() => m.clock, 2000, 'clock again');
     d.conn.destroy();
     await until(() => !m.connected, 2000, 'down');
     assert.deepStrictEqual(m.caps, [], 'the service gone: no caps until it says again');
+    assert.strictEqual(m.clock, null, 'nor a clock');
     ctl.close();
     d.server.close();
     console.log('ok   hello: sent on connect with the build language; an old service = no caps; caps gate; ev_<name> hook');

@@ -79,7 +79,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 
 | cmd | |
 |---|---|
-| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
+| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps, clock?}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
 | `{"cmd":"status"}` | → `state` (and `time` when known) |
 | `{"cmd":"search","q":".."}` | → `results` (InnerTube), or `error` `empty search` / `search offline` |
 | `{"cmd":"thumb","id":".."}` | → `thumb` (cache `thumb.rgba` first, else `thumb.js` on the car; nothing if neither works, or if the length is neither 57600 nor 230400) |
@@ -112,7 +112,11 @@ landed: `{"ev":"error","cmd":"<cmd>","msg":"not implemented <cmd>"}`; the app se
 
 Daemon → app:
 
-- `{"ev":"hello","service":"0.4.0","caps":[..]}`: the answer to `hello` (above).
+- `{"ev":"hello","service":"0.4.0","caps":[..]}`: the answer to `hello` (above). `"clock":"2026-10-13"` is added
+  only while the head unit's clock is wrong (below, "Security notes"): the date the head unit shows. The app then warns
+  the driver.
+- `{"ev":"clock","clock":"2026-10-13"|null}`: the clock went wrong, or right again (`null`), after `hello`. Checked at
+  each fetch, lookup, request and health check.
 - `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`; 0.5.0 (not yet
   implemented, cap `stream`) adds `"stored":"ram|flash"`: where the playing video is held.
 - `{"ev":"time","elapsed","total"}` (ms, ≤ 4/s).
@@ -187,6 +191,8 @@ number, empty env, cwd `/`). The request, with the secret, tokens and body, goes
 (never argv or env: `ps` shows those); `{status, body}` or `{error}` comes back on its stdout. 10 s
 timeout (a log report: 30 s; the child is killed 1 s after), 8 MiB body. Plain `http:` only to 127.0.0.1 or
 localhost (the tests' fake relay); any other URL goes out over TLS. The child never touches the account file.
+While the head unit's clock is wrong (below, "Security notes") the child is `ytfetch.py request --no-cert-time`
+instead, with the same stdin and stdout.
 
 The uid is picked as mgu-updater's `js/uids.js` picks its own, at start and on first need:
 
@@ -260,6 +266,17 @@ daemon then posts one report and the app shows the code the relay answers. Nothi
 
 ## Security notes
 
+- The head unit's clock. TLS checks that a certificate's dates hold for the head unit's own date, so a clock that is
+  weeks behind makes every certificate look not yet valid, and nothing plays. When the clock reads a date before this
+  build's release day (`BUILT` in `ytd.js`), the clock must be wrong. Only then does every TLS connection the
+  service makes skip the certificate's validity dates (OpenSSL's `X509_V_FLAG_NO_CHECK_TIME`, through
+  `ytfetch.py --no-cert-time`). The certificate must still chain to a trusted CA and match the host name. This covers
+  every host the service talks to: YouTube and googlevideo (yt-dlp and ytfetch.py), the sign-in and the feeds,
+  SponsorBlock and the log relay (in `ytfetch.py request`, since Node 8 cannot skip only the dates). The risk: someone
+  who holds an old, expired certificate of one of these hosts, with its private key, and can reach the car's traffic
+  could pose as that host. The app says so on screen while it lasts (`hello` `clock`), and the health check's TLS line
+  says the dates are skipped. A clock ahead of real time cannot be proven wrong: its errors stay ("Wrong head unit
+  clock"). Thumbnails (`thumb.js`, Node 22) keep the full check, so they do not show while the clock is wrong.
 - The daemon runs as root: it talks SOME/IP to BMW's MediaPlayer. Every internet request runs as the fetch uid
   instead (above).
 - ytdec also runs as root (accepted risk, not verified otherwise on the car). It opens the GPU's render node

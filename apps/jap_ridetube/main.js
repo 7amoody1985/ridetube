@@ -35,6 +35,9 @@
  *   logs  (a VIEW page) Send logs to the developer: from the menu or the player's error screen. Asks first (Send /
  *         Cancel; where the HMI runs the screen, the menu entry pressed again sends), then "Sending...", then the
  *         code the service's log relay answered (to quote in a GitHub issue) or why it was not sent.
+ *   clock (a VIEW page) the wrong-clock warning: the service skips the certificate dates while the head unit's clock is
+ *         wrong (hello's clock). Shown once an app session, the first time a page is drawn, until OK (or any page).
+ *         The menu's info line keeps a short "Wrong clock" while it lasts.
  *
  * Video only while parked (kit parked.js), unless the "Video while driving" setting is on (for a car coded
  * for video in motion): driving off turns the picture off (daemon `video off`,
@@ -81,6 +84,7 @@ const FEED_MS = 15000;                                   // a feed with no answe
 const SIGNIN_URL = 'https://www.google.com/device';
 const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
 const [LANG, REGION] = String(getLanguage()).split('-');   // hello's: "zh-CN" -> zh, CN; "en" -> en, no region
+const CLOCK_MSG = 'The head unit\'s clock is wrong (it says {date}). RideTube is skipping the certificate date check so videos still play. While the clock is wrong, the security of the app and of your car can be compromised. Set the car\'s date and time to fix it.';
 const LOGS_MS = 45000;                                   // a log report with no answer by then failed (the service gives up at 31 s)
 const LOGS_ERR = { closed: 'Log reporting is closed for now', busy: 'Too many reports right now - try again later',
     offline: 'No connection - try again later', failed: 'Sending failed - try again later', old: 'Sending logs needs a newer jap-ridetube-d tool on the car' };
@@ -117,10 +121,12 @@ mgu.run({
             if (mode === 'subs') model.loadChannels();                    // Home's last shelf (one request at a time: idempotent)
         };
         const backKey = {};                              // page -> the tile the controller was on when it was left
+        let clockSeen = false, clockFrom = 'home';   // the wrong-clock warning: shown once this app session, left from there
         function show(m) {
+            if (mode === 'clock' && m !== 'clock') clockSeen = true;
             if (m !== mode) { dirty = true; if (laid.mode === mode && laid.where[focusKey]) backKey[mode] = focusKey; }   // (a tile of this page)
             mode = m;
-            if (m !== 'player' && m !== 'logs') browse = m; else if (m === 'player') wake();
+            if (m !== 'player' && m !== 'logs' && m !== 'clock') browse = m; else if (m === 'player') wake();
             openFeed(); sync(); labels();
         }
         function goBack(m) {
@@ -208,6 +214,7 @@ mgu.run({
             else if (model.error) s = translate('Error: ') + model.error;
             else if (model.active()) s = (model.state === 'preparing' ? message('Preparing {percent} %: ', { percent: Math.round(model.pct) }) : model.state === 'paused' ? translate('Paused: ') : translate('Playing: ')) + model.title;
             else s = translate('Search, or pick a recent search below');
+            if (model.connected && model.clock) s = whole('Wrong clock ({date}): security reduced', { date: model.clock }) + ' · ' + s;
             ui.text('MAIN_INFO', s, 0, 'Text', { literal: true });
         }
         info();
@@ -993,6 +1000,22 @@ mgu.run({
             btn(MID + 180, 'Cancel', 'logs:cancel', back);
             return undefined;
         }
+        // the wrong-clock warning: drawn as the logs page; OK (or any other page) goes back to where it showed over
+        function drawClock(cv) {
+            const lines = String(whole(CLOCK_MSG, { date: model.clock || '?' })).split(' ').reduce((ls, w) => {
+                const t = ls.length ? ls[ls.length - 1] + ' ' + w : w;
+                if (ls.length && cv.textWidth(t, 28, LIT) <= 1240) ls[ls.length - 1] = t; else ls.push(w);
+                return ls;
+            }, []);
+            cv.text(whole('Security warning'), MID, 104, 34, C.amber, { literal: true, font: 'bold', align: 'center' });
+            lines.slice(0, 6).forEach((l, i) => cv.text(l, MID, 160 + i * 40, 28, '#ffffff', { literal: true, align: 'center' }));
+            if (!cv.own) return cv.text(whole('Pick any page to go on'), MID, 440, 24, C.dim, { literal: true, align: 'center' });
+            const w = 300, h = 76, y = 410, f = focusKey === 'clock:ok';
+            cv.roundRect(MID - w / 2, y, w, h, 38, f ? '#ffffff' : C.red);
+            cv.text(whole('OK'), MID, y + 49, 30, f ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
+            cv.target(MID - w / 2, y, w, h, () => { goBack(clockFrom); dirty = true; }, 'clock:ok', 38);
+            return undefined;
+        }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
             cv.fillRect(BOX.x, BOX.y, BOX.w, BOX.h, '#000000');
@@ -1296,6 +1319,9 @@ mgu.run({
         function render() {
             const now = Date.now();
             upNext = autoNext();
+            // the wrong-clock warning, the first time a page (not the player or the logs) is drawn this app session
+            if (model.clock && !clockSeen && mode !== 'clock' && mode !== 'player' && mode !== 'logs') { clockFrom = mode; show('clock'); }
+            else if (mode === 'clock' && !model.clock) goBack(clockFrom);   // set right meanwhile
             // redraw on a change (and 4 times a second); unchanged, the same frame again keeps the layer alive (>= 1 message/s)
             if (!last || dirty || model.rev !== lastRev || now - lastT > 250) {
                 dirty = false; lastRev = model.rev; lastT = now;
@@ -1305,7 +1331,7 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
-                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

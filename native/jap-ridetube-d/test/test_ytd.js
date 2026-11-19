@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL } = require('../ytd.js');
+const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = require('../ytd.js');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ytd-'));
 const cache = path.join(tmp, 'cache');
@@ -1523,6 +1523,56 @@ async function main() {
         assert.deepStrictEqual([d.hl, d.gl], [null, null], 'a new connection starts with none');
     });
 
+    await t('a wrong clock: before BUILT only; hello says it, the fetcher and the lookups get --no-cert-time, `clock` when it changes', async () => {
+        const day = 86400000, built = Date.parse(BUILT);
+        assert.ok(/^\d{4}-\d\d-\d\d$/.test(BUILT) && built <= Date.now(), 'BUILT is a date, never in the future: ' + BUILT);
+        assert.deepStrictEqual([clockBehind(built - 36 * day), clockBehind(built - 1), clockBehind(built), clockBehind(built + 400 * day)],
+            [new Date(built - 36 * day).toISOString().slice(0, 10), new Date(built - 1).toISOString().slice(0, 10), null, null],
+            'behind BUILT: the date; at or after it (a clock ahead too): nothing');
+        const wrong = Date.parse('2026-10-13T08:00:00Z');
+        assert.ok(wrong < built);
+        const job = (id) => { d.spawnJob(['extract', '--cache-dir', cache, '--', id, path.join(tmp, id + '.json')]); };
+        const jobArgv = async (id) => { await waitUntil(() => fs.existsSync(ctl + '.extract') && JSON.parse(fs.readFileSync(ctl + '.extract', 'utf8')).argv.indexOf(id) >= 0); return JSON.parse(fs.readFileSync(ctl + '.extract', 'utf8')).argv; };
+        job('ClockRight1');
+        assert.deepStrictEqual(await jobArgv('ClockRight1'), ['extract', '--cache-dir', cache, '--', 'ClockRight1', path.join(tmp, 'ClockRight1.json')], 'the clock right: no flag');
+        d.opts.now = () => wrong;
+        c.clear(); logs.length = 0;
+        c.send({ cmd: 'hello', app: '0.4.0' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'hello'), { ev: 'hello', service: VERSION, caps: CAPS, clock: '2026-10-13' });
+        assert.ok(logs.indexOf('clock wrong (2026-10-13): certificate dates not checked') >= 0, logs.join('|'));
+        job('ClockWrong1');
+        assert.deepStrictEqual(await jobArgv('ClockWrong1'), ['extract', '--no-cert-time', '--cache-dir', cache, '--', 'ClockWrong1', path.join(tmp, 'ClockWrong1.json')], 'the clock wrong: the flag');
+        assert.ok(!c.evs.some((x) => x.ev === 'clock'), 'the same date: no clock event');
+        d.opts.now = () => wrong + day;
+        d.certTime();
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'clock'), { ev: 'clock', clock: '2026-10-14' }, 'the date shown moves on');
+        c.clear();
+        d.opts.now = null;               // the driver set the clock
+        job('ClockRight2');
+        assert.ok((await jobArgv('ClockRight2')).indexOf('--no-cert-time') < 0, 'set right: no flag at the next spawn');
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'clock'), { ev: 'clock', clock: null });
+        c.send({ cmd: 'hello', app: '0.4.0' });
+        assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'hello'), { ev: 'hello', service: VERSION, caps: CAPS }, 'no clock key when it is right');
+    });
+
+    await t('a wrong clock: the daemon\'s own requests go through ytfetch.py request --no-cert-time (Node 8 cannot skip only the dates)', async () => {
+        const fl = path.join(tmp, 'clockfetch.log');
+        const dq = new Daemon({ cacheDir: cache, noSetuid: true, accountFile: path.join(tmp, 'acct-clock.json'), leaseFile: path.join(tmp, 'lease-clock.json'),
+            fetchCmd: [process.execPath, path.join(__dirname, 'fake_fetch.js'), fl + '.node', 'ok'],
+            fetcher: [process.execPath, path.join(__dirname, 'fake_fetch.js'), fl, 'ok'], log: () => {} });
+        dq.fetchUid = process.getuid();
+        const rq = { method: 'POST', url: 'https://www.youtube.com/youtubei/v1/search', headers: { Authorization: 'Bearer X' }, body: { q: 1 }, timeoutMs: 2000 };
+        assert.deepStrictEqual(await dq.opts.ytRequest(rq.method, rq.url, rq.headers, rq.body, rq.timeoutMs), { status: 200, body: 'hello' });
+        assert.ok(fs.existsSync(fl + '.node') && !fs.existsSync(fl), 'the clock right: ytd.js --fetch, as before');
+        dq.opts.now = () => Date.parse('2026-10-13T08:00:00Z');
+        assert.deepStrictEqual(await dq.opts.ytRequest(rq.method, rq.url, rq.headers, rq.body, rq.timeoutMs), { status: 200, body: 'hello' });
+        const l = JSON.parse(fs.readFileSync(fl, 'utf8'));
+        assert.deepStrictEqual(l.argv.slice(4), ['request', '--no-cert-time', '--cache-dir', path.join(cache, 'ytdlp'), '--lease', path.join(tmp, 'lease-clock.json')]);
+        assert.deepStrictEqual(l.req, Object.assign({}, rq, { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1', Authorization: 'Bearer X' } }),
+            'the request on stdin, with the User-Agent ytRequest would add');
+        assert.ok(l.argv.join(' ').indexOf('Bearer') < 0, 'secrets on stdin only');
+    });
+
     await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before', async () => {
         for (const m of [{ cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
             c.clear();
@@ -2375,6 +2425,14 @@ async function main() {
             const run = JSON.parse(fs.readFileSync(hctl + '.log', 'utf8'));
             assert.deepStrictEqual(run.argv, ['check', '--json', '--cache-dir', hcache, '--lease', lease]);
             clean(evs);
+            // the clock wrong: the check runs with --no-cert-time and the TLS row says the dates are skipped
+            const wx = hd({ now: () => Date.parse('2026-10-13T08:00:00Z') });
+            const tls = byKey(await health(wx)).tls;
+            assert.deepStrictEqual(tls, { ev: 'health', key: 'tls', ok: true, text: 'TLS to youtube.com works with the certificate date check skipped: wrong clock (2026-10-13)' });
+            assert.deepStrictEqual(JSON.parse(fs.readFileSync(hctl + '.log', 'utf8')).argv, ['check', '--json', '--cache-dir', hcache, '--lease', lease, '--no-cert-time']);
+            fs.writeFileSync(hctl, 'expired');   // a clock ahead (expired certificates): no skip, the clock named
+            assert.strictEqual(byKey(await health(hd())).tls.text, 'no TLS to youtube.com: wrong clock: 2030-01-01');
+            fs.writeFileSync(hctl, 'ok');
             x.sockUid = 23457;
             assert.deepStrictEqual(byKey(await health(x)).socket, { ev: 'health', key: 'socket', ok: true, text: 'control socket: the RideTube app only' });
             x.sockUid = 0;

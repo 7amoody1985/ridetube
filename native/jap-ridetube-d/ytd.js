@@ -24,6 +24,9 @@ const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
 const VERSION = '0.4.0';   // component.json's (test_ytd.js checks): sent with a log report
+// the day this build was released (UTC), bumped with VERSION at each release (tools/release.py refuses one in the
+// future). A head unit clock before it is provably wrong: only then does TLS skip the certificate dates (certTime)
+const BUILT = '2026-11-19';
 // what `hello` says this build answers for real. The frozen names: health, related, hist (feed hist|liked), ytdlp,
 // remote, proxy, stream. A package adds its name here (through the integrator) once its command works
 const CAPS = ['related', 'hist', 'health'];
@@ -1072,9 +1075,25 @@ Daemon.prototype.uid = function () {
     if (this.fetchUid === null) throw Object.assign(new Error('no internet uid on the car (see the log)'), { noUid: true });
     return this.fetchUid;
 };
-// youtube.com, as the fetch uid
+// youtube.com, as the fetch uid. The clock wrong: ytfetch.py makes the request (`request`, the same answer), because
+// Node 8 has no way to skip only the certificate dates, and rejectUnauthorized:false would skip the whole check
 Daemon.prototype.fetch = function (req) {
-    try { return fetchRequest(this.opts, this.uid(), req); } catch (e) { return Promise.reject(e); }
+    try {
+        if (!this.certTime()) return fetchRequest(this.opts, this.uid(), req);
+        const o = Object.assign({}, this.opts, { fetchCmd: this.opts.fetcher.concat(['request', '--no-cert-time', '--cache-dir', this.ytc(), '--lease', this.opts.leaseFile]) });
+        return fetchRequest(o, this.uid(), Object.assign({}, req, { headers: Object.assign({ 'User-Agent': TV_UA }, req.headers || {}) }));
+    } catch (e) { return Promise.reject(e); }
+};
+// the head unit's date while its clock is wrong (TLS then skips the certificate dates), else null; asked at each
+// fetcher spawn, since the clock may be set while driving. A change after hello is told to the app (`clock`)
+Daemon.prototype.certTime = function () {
+    const c = clockBehind((this.opts.now || Date.now)());
+    if (this.clockSaid !== undefined && c !== this.clockSaid) {
+        this.clockSaid = c;
+        this.log(c ? 'clock wrong (' + c + '): certificate dates not checked' : 'clock right again: certificate dates checked');
+        this.emit({ ev: 'clock', clock: c });
+    }
+    return c;
 };
 // a helper (ytfetch.py, thumb.js) as the fetch uid, as fetchRequest spawns its child
 Daemon.prototype.spawnFetchUid = function (cmd, args, stdin) {
@@ -1193,6 +1212,7 @@ Daemon.prototype.skipSegments = function () {
 // ---- speed: a warm ytfetch.py (yt-dlp loaded: ~1.2 s on the car) takes the next job, and the stream lookup
 // (~2.5 s) runs while the controller rests on a tile (prefetch), so a play skips both
 Daemon.prototype.spawnJob = function (job) {
+    if (this.certTime()) job = [job[0], '--no-cert-time'].concat(job.slice(1));
     const s = this.spare;
     this.spare = null;
     if (s && s.child.exitCode === null && s.child.signalCode === null) { // still loading: serve reads the job once warm
@@ -1422,6 +1442,7 @@ Daemon.prototype.onClient = function (c) {
     }
     this.client = c;
     this.hl = this.gl = null;   // hello's lang and region hold for this connection only
+    this.clockSaid = undefined; // what hello (then `clock`) told this connection about the clock; undefined: no hello yet
     c.setEncoding('utf8');
     let buf = '';
     c.on('data', (d) => {
@@ -1491,7 +1512,11 @@ Daemon.prototype.hello = function (m) {
     this.gl = typeof m.region === 'string' && REGION_RE.test(m.region) ? m.region : null;
     const bad = (m.lang !== undefined && !this.hl ? ' (bad lang dropped)' : '') + (m.region !== undefined && !this.gl ? ' (bad region dropped)' : '');
     this.log('hello: app ' + (/^\d+(\.\d+){0,3}$/.test(String(m.app)) ? m.app : 'unknown') + ', lang ' + (this.hl || '-') + ', region ' + (this.gl || '-') + bad);
-    return this.emit({ ev: 'hello', service: VERSION, caps: CAPS.slice() });
+    this.clockSaid = undefined;
+    const clk = this.certTime();
+    this.clockSaid = clk;
+    if (clk) this.log('clock wrong (' + clk + '): certificate dates not checked');
+    return this.emit(Object.assign({ ev: 'hello', service: VERSION, caps: CAPS.slice() }, clk ? { clock: clk } : {}));
 };
 // commands of the frozen protocol whose package has not landed: each answers this until its package replaces the body
 Daemon.prototype.notImplemented = function (cmd) { return this.emit({ ev: 'error', cmd: cmd, msg: 'not implemented ' + cmd }); };
@@ -2298,7 +2323,11 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { BUILT: BUILT, clockBehind: clockBehind, qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+
+// the head unit's date (YYYY-MM-DD) when its clock is provably wrong (before BUILT), else null. A clock ahead of real
+// time cannot be proven wrong: it gets nothing
+function clockBehind(now) { return now < Date.parse(BUILT) ? new Date(now).toISOString().slice(0, 10) : null; }
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before

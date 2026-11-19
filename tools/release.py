@@ -16,7 +16,7 @@ Then:         python3 tools/release.py [--base URL] [--node22 PATH|URL]
 --base: where the car downloads the assets from; default the public release download of the `catalog`
 release. For a private repository, list the assets' API URLs instead (docs/PUBLISHING.md of the Store).
 """
-import argparse, gzip, hashlib, io, json, os, shutil, sys, tarfile
+import argparse, gzip, hashlib, io, json, os, re, shutil, sys, tarfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = 'JustAnotherPU/ridetube'
@@ -98,6 +98,11 @@ def main():
     if tools['jap-ridetube-d']['requires'].get('jap-node22') != NODE22['version']:
         sys.exit('release.py: jap-ridetube-d requires jap-node22 %s, NODE22 pins %s'
                  % (tools['jap-ridetube-d']['requires'].get('jap-node22'), NODE22['version']))
+    # ytd.js BUILT: a head unit clock before it skips the certificate dates, so a day still ahead would do that on a
+    # car whose clock is right
+    built = re.search(r"^const BUILT = '(\d{4}-\d\d-\d\d)';", open(os.path.join(ROOT, 'native', 'jap-ridetube-d', 'ytd.js')).read(), re.M)
+    if not built or built.group(1) > time.strftime('%Y-%m-%d', time.gmtime()):
+        sys.exit("release.py: ytd.js BUILT must be today's date (UTC) or earlier: %s" % (built and built.group(1)))
     pkg = os.path.join(ROOT, 'dist', '%s@%s.tgz' % (APP, app['version']))
     if not os.path.isfile(pkg):
         sys.exit('release.py: %s missing (python3 kit/tools/build.py %s)' % (pkg, APP))

@@ -5,6 +5,8 @@
   ytfetch.py extract <id> <info.json> --cache-dir <d> [...]
   ytfetch.py serve --cache-dir <d> [...]
   ytfetch.py check [<id>] --cache-dir <d> [--uid N] [--node P] [--lease P] [--pyz P] [--json]
+  ytfetch.py request --cache-dir <d> [--lease P]      (one request as JSON on stdin, see request_cmd)
+  --no-cert-time (any command): TLS skips only the certificates' validity dates (the head unit's clock is wrong)
 
 fetch writes <dir>/meta.json, audio.m4a, video.h264 (+ .part while running) and index.bin, and prints
 one JSON event per line on stdout: meta, audio, audio_head, audio_ready, video, done | error (then exit 1).
@@ -90,6 +92,42 @@ def clock_wrong(e):
     if 'certificate is not yet valid' not in t and 'certificate has expired' not in t:
         return None
     return "Wrong head unit clock (" + time.strftime('%Y-%m-%d', time.gmtime()) + "): set the car's date and time"
+
+
+# --no-cert-time: the daemon found the head unit's clock before the service's build date (ytd.js BUILT), so every
+# certificate would look not yet valid. Only the validity dates are then not checked: OpenSSL still verifies the chain
+# against the trusted CAs, and the host name still has to match.
+NO_CHECK_TIME = 0x200000  # OpenSSL's X509_V_FLAG_NO_CHECK_TIME
+cert_time = True
+
+
+def tls_ctx():
+    """The TLS context of every request ytfetch.py makes itself (yt-dlp's get the same flag: cert_time_hook)."""
+    ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+    if not cert_time:
+        ctx.verify_flags |= NO_CHECK_TIME
+    return ctx
+
+
+def cert_time_hook(yt_dlp):
+    """yt-dlp builds each request handler's context in RequestHandler._make_sslcontext: the flag goes on there, read
+    when the context is made (a serve spare loads yt-dlp before its job says --no-cert-time). A yt-dlp without it:
+    its dates stay checked (said on stderr), never a yt-dlp that does not load."""
+    rh = getattr(getattr(getattr(yt_dlp, 'networking', None), 'common', None), 'RequestHandler', None)
+    if rh is None:
+        print('cert_time_hook: no yt_dlp.networking.common.RequestHandler: certificate dates stay checked', file=sys.stderr)
+        return
+    if getattr(rh._make_sslcontext, '_cert_time', False):
+        return
+    orig = rh._make_sslcontext
+
+    def make_sslcontext(self, *args, **kw):
+        ctx = orig(self, *args, **kw)
+        if not cert_time:
+            ctx.verify_flags |= NO_CHECK_TIME
+        return ctx
+    make_sslcontext._cert_time = True
+    rh._make_sslcontext = make_sslcontext
 
 
 def fail(msg):
@@ -696,7 +734,12 @@ def load_ytdlp(pyz, cache_dir):
     else:
         os.environ['TMPDIR'] = cache_dir
     import yt_dlp
+    try:
+        import yt_dlp.networking.common  # noqa: F401 - cert_time_hook's
+    except ImportError:
+        pass
     no_captions(yt_dlp)
+    cert_time_hook(yt_dlp)
     return yt_dlp
 
 
@@ -838,7 +881,7 @@ def audio_ranged(a, ya, info, meta, udta=lambda: b''):
             gate.set()
             emit(ev='audio_head', ms=r[1], bytes=r[0])
 
-    ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+    ctx = tls_ctx()
     try:
         ranged_get(f['url'], f.get('http_headers') or {}, src, total, on_chunk, conns=AUDIO_CONNS, first=AUDIO_FIRST,
                    chunk=AUDIO_CHUNK, ctx=ctx, gate=gate)
@@ -892,7 +935,7 @@ def fetch(a):
     art = {'cover': None}
 
     def cover():
-        art['cover'] = fetch_cover(a.id, ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None))
+        art['cover'] = fetch_cover(a.id, tls_ctx())
 
     tc = threading.Thread(target=cover, daemon=True)
     tc.start()
@@ -998,7 +1041,7 @@ def check(a):
     try:
         import ssl
         import urllib.request
-        ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+        ctx = tls_ctx()
         with urllib.request.urlopen('https://www.youtube.com/robots.txt', context=ctx, timeout=10) as r:
             line('tls robots.txt', r.status == 200, t, f'HTTP {r.status} {len(r.read())} B')
     except Exception as e:  # noqa: BLE001
@@ -1024,7 +1067,8 @@ def check(a):
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
     cmd = [sys.executable, '-I', os.path.abspath(__file__), 'fetch', vid, out, '--cache-dir', cache,
-           '--height', str(a.height), '--node', a.node, '--lease', a.lease] + (['--pyz', a.pyz] if a.pyz else [])
+           '--height', str(a.height), '--node', a.node, '--lease', a.lease] + (['--pyz', a.pyz] if a.pyz else []) + \
+        ([] if cert_time else ['--no-cert-time'])
     t = time.monotonic()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={}, cwd='/')
     t_audio = t_head = t_lead = t_dl = None  # t_dl: first progress event, after yt-dlp's 'sleep as required by the site'
@@ -1111,13 +1155,47 @@ def check_json(a):
         line('tls', False, t, 'skipped: no DNS')
     else:
         try:
-            ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
+            ctx = tls_ctx()
             with urllib.request.urlopen('https://www.youtube.com/robots.txt', context=ctx, timeout=5) as r:
                 line('tls', r.status == 200, t, f'HTTP {r.status}')
         except Exception as e:  # noqa: BLE001
             line('tls', False, t, _why(e))
     print(json.dumps({'ev': 'done', 'ok': all(ok_all)}), flush=True)
     return 0 if all(ok_all) else 1
+
+
+REQUEST_MAX = 8 << 20
+
+
+def request_cmd():
+    """request: one HTTP request for the daemon, as its `ytd.js --fetch` child does it (the daemon runs this one instead
+    while the clock is wrong: Node 8 cannot skip only the certificate dates). {method, url, headers, body (JSON or
+    null), timeoutMs} on stdin; {status, body (utf8)} or {error} on stdout. No redirects, 8 MiB at most, plain http
+    only to this machine (the tests' fake relay)."""
+    try:
+        q = json.loads(sys.stdin.read())
+        u = urllib.parse.urlsplit(str(q['url']))
+        loop = u.scheme == 'http' and u.hostname in ('127.0.0.1', 'localhost')
+        if u.scheme != 'https' and not loop:
+            raise ValueError('https only')
+        body = None if q.get('body') is None else json.dumps(q['body'], separators=(',', ':'), ensure_ascii=False).encode()
+        h = dict(q.get('headers') or {})
+        if body is not None:
+            h['Content-Type'] = 'application/json'
+        timeout = (q.get('timeoutMs') or 10000) / 1000
+        c = (http.client.HTTPConnection(u.hostname, u.port, timeout=timeout) if loop
+             else http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=tls_ctx()))
+        c.request(str(q.get('method') or 'GET'), (u.path or '/') + ('?' + u.query if u.query else ''), body=body, headers=h)
+        r = c.getresponse()
+        data = r.read(REQUEST_MAX + 1)
+        if len(data) > REQUEST_MAX:
+            raise ValueError('answer too big')
+        out = {'status': r.status, 'body': data.decode('utf-8', 'replace')}
+    except Exception as e:  # noqa: BLE001 - every failure is the daemon's error text
+        out = {'error': clock_wrong(e) or str(e)[:300] or type(e).__name__}
+    sys.stdout.write(json.dumps(out))
+    sys.stdout.flush()
+    return 0
 
 
 def validate(index_path, h264_path):
@@ -1136,7 +1214,7 @@ def validate(index_path, h264_path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('cmd', choices=('fetch', 'extract', 'serve', 'check'))
+    ap.add_argument('cmd', choices=('fetch', 'extract', 'serve', 'check', 'request'))
     ap.add_argument('id', nargs='?')
     ap.add_argument('dir', nargs='?')
     ap.add_argument('--cache-dir', required=True)
@@ -1147,7 +1225,13 @@ def main(argv=None):
     ap.add_argument('--uid', type=int)
     ap.add_argument('--info')
     ap.add_argument('--json', action='store_true', help='check: the health probes only, as JSON lines')
+    ap.add_argument('--no-cert-time', action='store_true', help="TLS: skip only the certificate's validity dates")
     a = ap.parse_args(argv)
+    global cert_time
+    cert_time = not a.no_cert_time
+    if a.cmd == 'request':
+        install_dns(a.lease)
+        return request_cmd()
     if a.cmd == 'check':
         return check(a)
     if a.cmd == 'serve':

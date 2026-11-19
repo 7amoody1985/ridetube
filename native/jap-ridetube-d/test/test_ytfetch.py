@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -443,6 +444,145 @@ class ClockWrong(unittest.TestCase):
         e.verify_message = 'unable to get local issuer certificate'
         e.args = (1, 'certificate verify failed: unable to get local issuer certificate')
         self.assertEqual(ytfetch._why(e), 'certificate not trusted')
+
+
+def openssl(*args, cwd):
+    subprocess.run(['openssl'] + list(args), cwd=cwd, check=True, capture_output=True)
+
+
+def make_certs(d):
+    """In d: ca.pem (a test CA, valid now), future.pem (localhost, signed by it, valid only from 2099) and
+    stranger.pem (localhost, from 2099 too, self-signed: no trusted CA), each with its .key. X509-strict extensions:
+    Python 3.13+ verifies with VERIFY_X509_STRICT."""
+    with open(os.path.join(d, 'ext.cnf'), 'w') as f:
+        f.write('[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n'
+                'subjectKeyIdentifier=hash\n'
+                '[leaf]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n'
+                'extendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost\nsubjectKeyIdentifier=hash\n'
+                'authorityKeyIdentifier=keyid\n')
+    later = ['-not_before', '20990101000000Z', '-not_after', '21000101000000Z']
+    openssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', 'ca.key',
+            '-out', 'ca.pem', '-subj', '/CN=RideTube test CA', '-days', '30', '-config', 'ext.cnf', '-extensions', 'ca',
+            cwd=d)
+    openssl('req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', 'future.key',
+            '-out', 'future.csr', '-subj', '/CN=localhost', cwd=d)
+    openssl('x509', '-req', '-in', 'future.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-out', 'future.pem',
+            '-extfile', 'ext.cnf', '-extensions', 'leaf', *later, cwd=d)
+    openssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', 'stranger.key',
+            '-out', 'stranger.pem', '-subj', '/CN=localhost', '-config', 'ext.cnf', '-extensions', 'leaf', *later,
+            cwd=d)
+
+
+def tls_server(cert, key):
+    """An HTTPS server on 127.0.0.1 answering 200 'ok' with cert; its port."""
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'ok')
+
+        def log_message(self, *a):
+            pass
+
+    class S(http.server.ThreadingHTTPServer):
+        def handle_error(self, *a):
+            pass  # the handshakes the client refuses
+    srv = S(('127.0.0.1', 0), H)
+    sc = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    sc.load_cert_chain(cert, key)
+    srv.socket = sc.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def has_not_before():
+    try:
+        return '-not_before' in subprocess.run(['openssl', 'x509', '-help'], capture_output=True, text=True).stderr
+    except OSError:
+        return False
+
+
+@unittest.skipUnless(has_not_before(), 'needs an openssl CLI with -not_before (OpenSSL 3.4+)')
+class CertTime(unittest.TestCase):
+    """--no-cert-time skips only the validity dates: a chain to an untrusted CA and a wrong host name still fail."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(dir=TMP)
+        make_certs(cls.tmp)
+        cls.ca = os.path.join(cls.tmp, 'ca.pem')
+        cls.future = tls_server(os.path.join(cls.tmp, 'future.pem'), os.path.join(cls.tmp, 'future.key'))
+        cls.stranger = tls_server(os.path.join(cls.tmp, 'stranger.pem'), os.path.join(cls.tmp, 'stranger.key'))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.future.shutdown()
+        cls.stranger.shutdown()
+        shutil.rmtree(cls.tmp)
+
+    def setUp(self):
+        self.saved = ytfetch.CA, ytfetch.cert_time
+        ytfetch.CA = self.ca
+
+    def tearDown(self):
+        ytfetch.CA, ytfetch.cert_time = self.saved
+
+    def hello(self, srv, host='localhost'):
+        """A TLS handshake with tls_ctx() to srv, naming host: None, or the verify error's code."""
+        with socket.create_connection(('127.0.0.1', srv.server_address[1]), timeout=5) as raw:
+            try:
+                with ytfetch.tls_ctx().wrap_socket(raw, server_hostname=host):
+                    return None
+            except ssl.SSLCertVerificationError as e:
+                return e.verify_code
+
+    def test_dates_only(self):
+        NOT_YET_VALID, SELF_SIGNED, HOST_MISMATCH = 9, 18, 62  # OpenSSL's X509_V_ERR_*
+        ytfetch.cert_time = True
+        self.assertFalse(ytfetch.tls_ctx().verify_flags & ytfetch.NO_CHECK_TIME)
+        self.assertEqual(self.hello(self.future), NOT_YET_VALID, 'without the flag: not yet valid')
+        ytfetch.cert_time = False
+        self.assertTrue(ytfetch.tls_ctx().verify_flags & ytfetch.NO_CHECK_TIME, 'the bit is set on the context')
+        self.assertTrue(ytfetch.tls_ctx().check_hostname and ytfetch.tls_ctx().verify_mode == ssl.CERT_REQUIRED)
+        self.assertIsNone(self.hello(self.future), 'with it: a not yet valid certificate of a trusted CA works')
+        self.assertEqual(self.hello(self.stranger), SELF_SIGNED, 'a certificate of no trusted CA still fails')
+        self.assertEqual(self.hello(self.future, 'www.youtube.com'), HOST_MISMATCH, 'another host name still fails')
+
+    def test_request_command(self):
+        url = f'https://localhost:{self.future.server_address[1]}/x'
+        q = json.dumps({'method': 'GET', 'url': url, 'headers': {'User-Agent': 'test'}, 'body': None, 'timeoutMs': 5000})
+
+        def run(*flags):
+            # in a child, as the daemon runs it (CA pointed at the test CA through a wrapper module)
+            code = ('import sys; sys.path.insert(0, %r); import ytfetch; ytfetch.CA = %r; sys.exit(ytfetch.main(sys.argv[1:]))'
+                    % (ROOT, self.ca))
+            r = subprocess.run([sys.executable, '-I', '-c', code, 'request', '--cache-dir', self.tmp,
+                                '--lease', os.path.join(self.tmp, 'none.json'), *flags],
+                               input=q, capture_output=True, text=True, timeout=30)
+            return json.loads(r.stdout)
+        self.assertEqual(run('--no-cert-time'), {'status': 200, 'body': 'ok'})
+        self.assertTrue(run()['error'].startswith('Wrong head unit clock ('), 'no flag: the clock message')
+
+    def test_ytdlp_contexts(self):
+        """yt-dlp's own contexts (RequestHandler._make_sslcontext) get the flag too: build/ytdlp.pyz, or the yt-dlp
+        source in YTDLP_SRC (a folder holding yt_dlp and yt_dlp_ejs only)."""
+        src = PYZ if os.path.isfile(PYZ) else os.environ.get('YTDLP_SRC')
+        if not src:
+            self.skipTest('no build/ytdlp.pyz and no YTDLP_SRC')
+        url = f'https://localhost:{self.future.server_address[1]}/x'
+        code = '\n'.join([
+            'import sys; sys.path.insert(0, %r); import ytfetch' % ROOT,
+            'ytfetch.CA = %r; ytfetch.cert_time = sys.argv[1] == "on"' % self.ca,
+            'yt = ytfetch.load_ytdlp(%r, %r)' % (src, self.tmp),
+            'try:',
+            '    print(yt.YoutubeDL({"quiet": True, "no_warnings": True}).urlopen(%r).read().decode())' % url,
+            'except Exception as e:',
+            '    print("error", e)'])
+        # -S: yt-dlp alone, as in the pyz (no site-packages beside it)
+        out = lambda flag: subprocess.run([sys.executable, '-I', '-S', '-c', code, flag], capture_output=True, text=True,
+                                          timeout=60, cwd='/').stdout.strip()
+        self.assertIn('certificate is not yet valid', out('on'))
+        self.assertEqual(out('off'), 'ok')
 
 
 class NoCaptions(unittest.TestCase):

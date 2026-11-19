@@ -21,6 +21,8 @@
  *                         logs_sent{id}: the code to quote in a GitHub issue; logs_error{msg:closed|busy|offline|failed}
  *                         hello{service,caps}: what the service really answers (0.4.0 on); an older one answers
  *                         error "unknown cmd hello": no caps. Entries for a feature hide unless can(<its cap>)
+ *                         hello's clock "2026-10-13", then clock{clock|null}: the head unit's clock is wrong and the
+ *                         service skips the certificate dates (main.js warns the driver); an older service: never
  *                         health{key,ok,text} per check, then health{done:true}; related{id,items|error}
  *                         a tile may carry short:true (a Short: shown only with the Show Shorts setting)
  *          Thumbs are asked lazily (Model.wantThumb, from the screens' draw path): only for the tiles drawn.
@@ -103,6 +105,7 @@ class Model {
         this.send = send;
         this.hi = hi || {};
         this.caps = [];              // hello's: what the service answers beyond 0.3 (none from an older one)
+        this.clock = null;           // hello's clock: the head unit's wrong date while the service skips the certificate dates
         this.connected = false;
         this.q = null; this.searching = false;
         this.results = [];           // [{id,title,channel,duration_s}]
@@ -141,7 +144,7 @@ class Model {
     setConnected(on) {
         this.connected = on;
         if (on) { this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.send(Object.assign({ cmd: 'hello' }, this.hi)); this.videoOn = null; this._video(); } else {
-            this.caps = [];
+            this.caps = []; this.clock = null;
             this.searching = false; this.state = 'idle'; this.pending.clear();
             this.auth = { state: 'unknown', code: null, url: null, msg: null };
             Object.keys(this.feeds).forEach((w) => { this.feeds[w].loading = false; });
@@ -247,6 +250,7 @@ class Model {
             this.toast = { text: 'Skipped ' + (names[m.category] || 'segment') + ' · ' + clock(m.ms), until: Date.now() + 4000 };
         } else if (m.ev === 'hello') {
             this.caps = Array.isArray(m.caps) ? m.caps.filter((x) => typeof x === 'string') : [];
+            this.ev_clock(m);
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
@@ -495,6 +499,8 @@ class Model {
         const i = h.items.findIndex((x) => x.key === row.key);
         if (i >= 0) h.items[i] = row; else h.items.push(row);
     }
+    /** the clock went wrong or right again (hello's clock, then clock events): a date as YYYY-MM-DD, else none */
+    ev_clock(m) { this.clock = typeof m.clock === 'string' && /^\d{4}-\d\d-\d\d$/.test(m.clock) ? m.clock : null; }
     /** a fresh play's first tick past 10 s while playing: the service resumed it there (5 s notice, Start over) */
     _resumeTick(now) {
         if (!this.resumeWait || this.state !== 'playing') return;

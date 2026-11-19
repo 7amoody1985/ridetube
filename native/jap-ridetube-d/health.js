@@ -19,7 +19,7 @@ const TEXT_MAX = 120;
 // what ytfetch.py check --json may say in "info" (its _why): anything else shows as "failed"
 const PHRASES = ['loaded', 'resolved', 'no uplink lease', 'skipped: no DNS', 'name not resolved', 'timed out', 'certificate not trusted',
     'TLS error', 'connection refused', 'connection reset', 'network unreachable', 'no route to host', 'not found', 'failed'];
-const phrase = (x) => (PHRASES.indexOf(x) >= 0 || /^HTTP \d{3}$/.test(x) ? x : 'failed');
+const phrase = (x) => (PHRASES.indexOf(x) >= 0 || /^(HTTP \d{3}|wrong clock: \d{4}-\d\d-\d\d)$/.test(x) ? x : 'failed');
 
 function clean(s) {
     return String(s).replace(/[^\x20-\x7e]+/g, ' ')
@@ -50,9 +50,11 @@ function readLease(f) {
 
 // ytfetch.py check --json as the fetch uid (as every ytfetch.py runs): ytdlp, dns, tls, each put as its line lands, so
 // a kill past ms keeps what it already said. Its output is the fetch uid's: only the three names, ok only when true
+// (the clock wrong: with --no-cert-time, as every fetch then, and the TLS row says so)
 function fetcherCheck(d, ms, put) {
     return new Promise(function (resolve, reject) {
-        const child = d.spawnFetchUid(d.opts.fetcher, ['check', '--json', '--cache-dir', d.opts.cacheDir, '--lease', d.opts.leaseFile]);
+        const clk = d.certTime();
+        const child = d.spawnFetchUid(d.opts.fetcher, ['check', '--json', '--cache-dir', d.opts.cacheDir, '--lease', d.opts.leaseFile].concat(clk ? ['--no-cert-time'] : []));
         let size = 0, lastErr = '', done = false;
         const kill = function () { try { child.kill('SIGKILL'); } catch (e) { /* gone */ } };
         const t = setTimeout(function () { kill(); reject(new Error('no answer in ' + Math.round(ms / 100) / 10 + ' s')); }, ms);
@@ -71,7 +73,7 @@ function fetcherCheck(d, ms, put) {
             } else if (o.name === 'dns') {
                 put('dns', ok, ok ? 'youtube.com resolves through the uplink DNS' : 'DNS for youtube.com: ' + info);
             } else if (o.name === 'tls') {
-                put('tls', ok, ok ? 'TLS to youtube.com works' : 'no TLS to youtube.com: ' + info);
+                put('tls', ok, !ok ? 'no TLS to youtube.com: ' + info : clk ? 'TLS to youtube.com works with the certificate date check skipped: wrong clock (' + clk + ')' : 'TLS to youtube.com works');
             }
         });
         child.on('close', function (code) {

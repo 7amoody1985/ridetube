@@ -99,6 +99,13 @@ One car only so far. Reports from other cars are welcome in the issues.
 - Signing in uses the TV device sign-in that YouTube's TV apps use. The client id is read from YouTube's TV
   page when you sign in; RideTube ships none.
 - The switch from the first seconds of sound to the full file may be heard as a short break.
+- A wrong head unit clock. If the head unit's date is earlier than this release's day, the clock is wrong for
+  sure. RideTube then skips one TLS check, the certificate's dates, so videos still play. The certificate must
+  still come from a trusted authority and name the right host. The app warns you once, and the menu says "Wrong
+  clock" until you set the car's date and time. The risk while it lasts: someone who holds an old, expired
+  certificate of YouTube or another host RideTube uses, with its private key, and can reach the car's traffic,
+  could pose as that host. Thumbnails do not show while the clock is wrong. See
+  `native/jap-ridetube-d/README.md`, "Security notes".
 - RideTube's service runs as root. Its control socket is open only to the RideTube app's own user. If the
   service cannot read which user that is on a fresh install, the socket is open to every app until it can; see
   `native/jap-ridetube-d/README.md`, "Security notes".

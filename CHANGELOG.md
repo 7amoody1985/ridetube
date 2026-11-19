@@ -9,6 +9,9 @@
 ## App 0.4.0
 
 - Error messages no longer start with "fetch:".
+- A wrong head unit clock: while the service skips the certificate date check (see Service 0.4.0), a security
+  warning shows once, until you press OK, and the menu's info line starts with "Wrong clock" until the clock is
+  set. An older service sends nothing, so nothing shows.
 - History: a new page on the rail and in the menu with the videos you watched, as YouTube lists them on your
   account. It needs you signed in, like Subscriptions.
 - Health check: a new menu entry that runs the service's checks on the car and shows one row per check, ok or
@@ -27,9 +30,18 @@
 
 ## Service 0.4.0
 
-- When the head unit's clock is wrong, YouTube's certificate looks invalid and every video failed with a long TLS
-  error. The error now says "Wrong head unit clock (date): set the car's date and time", the video is not retried,
-  and the health check's TLS line says the same. Seen in a Send logs report where the clock was 5 weeks behind.
+- A wrong head unit clock. A Send logs report showed every video failing with a TLS error. The head unit's clock
+  was 5 weeks behind, so YouTube's certificate looked not yet valid. When the clock reads a date before this
+  release's day (`BUILT` in `ytd.js`), the clock is wrong for sure, and the service now skips one TLS check: the
+  certificate's validity dates (OpenSSL's `X509_V_FLAG_NO_CHECK_TIME`). The certificate must still chain to a
+  trusted CA and match the host name. This covers yt-dlp, the fetcher's own downloads, the health check and the
+  service's other requests (sign-in, feeds, search, SponsorBlock, Send logs). Those go through
+  `ytfetch.py request` while the clock is wrong, because Node 8 cannot skip only the dates. The risk: someone who
+  holds an old, expired certificate of one of these hosts, with its private key, could pose as that host.
+  `hello` carries `clock` (the wrong date) and a `clock` event follows any change, so the app can warn the driver.
+  The health check's TLS line says when the dates are skipped. A clock ahead of real time cannot be proven wrong:
+  its error still says "Wrong head unit clock (date): set the car's date and time" and the video is not retried.
+  Thumbnails keep the full check, so they do not show while the clock is wrong.
 - `hello`: the app and the service say which version they are and what the service can do, so a new app knows
   what an older service lacks. The service README lists every command and event, and a test keeps that table in
   step with the code.

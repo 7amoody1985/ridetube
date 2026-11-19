@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // stands in for `ytfetch.py check --json` in test_ytd.js's health tests: argv = [ctl, 'check', '--json', ...]. Logs its
-// argv and pid to <ctl>.log. <ctl>: "ok" (default) | "offline" (DNS fails, TLS skipped) | "hang" (yt-dlp, then nothing)
+// argv and pid to <ctl>.log. <ctl>: "ok" (default) | "offline" (DNS fails, TLS skipped) | "expired" (TLS: wrong clock) | "hang" (yt-dlp, then nothing)
 // | "hostile" (an unknown name, a non-boolean ok, addresses, an id, a title, newlines, a long text) | "crash" (yt-dlp, then a
 // traceback on stderr and exit 1 with no done line).
 const fs = require('fs');
@@ -30,6 +30,9 @@ if (mode === 'hang') {
     if (mode === 'offline') {
         line('dns', false, 'name not resolved', { servers: 2 });
         line('tls', false, 'skipped: no DNS');
+    } else if (mode === 'expired') {
+        line('dns', true, 'resolved', { servers: 2 });
+        line('tls', false, 'wrong clock: 2030-01-01');
     } else {
         line('dns', true, 'resolved', { servers: 2 });
         line('tls', true, 'HTTP 200');

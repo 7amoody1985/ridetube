@@ -401,11 +401,40 @@ test('ru.json: every character draws from the Cyrillic atlases (label, bold, lig
     assert.ok(Array.from('Русский').every((ch) => fonts.glyph(fonts.get('label', 28, 'Русский'), ch)), 'Русский');
 });
 
+// the Latin catalogs (fr, nl, de, es, it, pt): complete like ru.json, the same {placeholders}, two plural forms, every
+// letter in the atlases an English package draws with
+const LATIN = fs.readdirSync(path.join(__dirname, '..', 'runtime', 'locales')).map((f) => f.replace(/\.json$/, '')).filter((t) => /^[a-z]{2}$/.test(t) && t !== 'ru');
+test('every catalog is offered in the Language setting', () => {
+    const spec = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'jap_ridetube', 'app.json'), 'utf8'));
+    const offered = spec.settings.find((s) => s.key === 'language').options.map((o) => o[0]);
+    require('../runtime/i18n').languages().forEach((t) => assert.ok(offered.indexOf(t) >= 0, t + ' has no Language option'));
+});
+LATIN.forEach((tag) => test(tag + '.json: complete, the same placeholders, two plural forms, every letter drawn', () => {
+    const cat = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', tag + '.json'), 'utf8'));
+    const gone = Object.keys(cat).filter((k) => k.split('|').some((part) => RT_SOURCES.indexOf(part) < 0));
+    assert.deepStrictEqual(gone, [], 'keys no source has');
+    const missing = rideTubeStrings().filter((x) => !BRAND.test(x) && !Object.prototype.hasOwnProperty.call(cat, x));
+    assert.deepStrictEqual(missing, [], 'strings without a row');
+    const ph = (x) => (x.match(/\{\w+\}/g) || []).sort().join();
+    Object.keys(cat).forEach((k) => {
+        assert.ok(typeof cat[k] === 'string' && cat[k].trim(), 'a value: ' + k);
+        if (k.indexOf('|') >= 0) assert.strictEqual(cat[k].split('|').length, 2, k);
+        cat[k].split('|').forEach((v) => assert.strictEqual(ph(v), ph(k.split('|')[0]), 'the same {placeholders}: ' + k));
+    });
+    assert.ok(Object.keys(cat).filter((k) => cat[k] !== k).length > Object.keys(cat).length * 0.8, 'mostly translated');
+    const fonts = require('../runtime/fonts'), text = Object.values(cat).join('');
+    [['label', 18], ['label', 24], ['bold', 24], ['bold', 32], ['light', 32], ['num', 40]].forEach(([fam, size]) => {
+        const f = fonts.get(fam, size, 'a');
+        const lost = Array.from(new Set(Array.from(text))).filter((ch) => ch.trim() && !fonts.glyph(f, ch));
+        assert.deepStrictEqual(lost, [], fam + ' ' + size + ': no glyph for ' + lost.join(' '));
+    });
+}));
+
 test('the built package (dist/jap_ridetube): the car\'s ru_RU table has the menu and settings in Russian, en_GB as before', () => {
     const dir = path.join(__dirname, '..', '..', 'dist', 'jap_ridetube', 'rhmiData', 'strings');
     if (!fs.existsSync(path.join(dir, 'ru_RU.json'))) { console.log('      (skipped: python3 kit/tools/build.py jap_ridetube first)'); return; }
     const table = (l) => JSON.parse(fs.readFileSync(path.join(dir, l + '.json'), 'utf8'));
-    const en = table('en_GB'), ru = table('ru_RU'), de = table('de_DE');
+    const en = table('en_GB'), ru = table('ru_RU'), de = table('sv_SE');
     const spec = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'jap_ridetube', 'app.json'), 'utf8'));
     const labels = [].concat(...spec.screens.map((sc) => (sc.items || []).map((it) => it[2]).concat((sc.buttons || []).map((b) => b[1]))),
         ...spec.settings.map((s) => [s.label].concat(s.key === 'language' ? [] : (s.options || []).map((o) => o[1])))).filter((x) => x && !BRAND.test(x) && !/^\d+ %$/.test(x));
@@ -416,7 +445,16 @@ test('the built package (dist/jap_ridetube): the car\'s ru_RU table has the menu
         assert.ok(ruValues.indexOf(l) < 0, 'ru_RU has no English ' + l);
     });
     assert.deepStrictEqual(Object.keys(ru), Object.keys(en), 'the same string ids');
-    assert.deepStrictEqual(de, en, 'a car language without a catalog: the English table');
+    assert.deepStrictEqual(de, en, 'a car language without a catalog (sv_SE): the English table');
+    // every Latin catalog fills its car languages' tables (fr_FR from fr.json...), nothing left in English but names
+    const cars = fs.readdirSync(dir).map((f) => f.replace(/\.json$/, ''));
+    LATIN.forEach((tag) => {
+        const cat = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', tag + '.json'), 'utf8'));
+        cars.filter((l) => l.startsWith(tag + '_')).forEach((l) => {
+            const vals = Object.values(table(l));
+            labels.forEach((x) => assert.ok(vals.indexOf(cat[x]) >= 0 || cat[x] === x, l + ' has ' + cat[x] + ' (' + x + ')'));
+        });
+    });
     assert.ok(enValues.filter((v) => /[\u0400-\u04ff]/.test(v)).every((v) => v === 'Русский'), 'en_GB: no Russian but the language\'s own name');
 });
 

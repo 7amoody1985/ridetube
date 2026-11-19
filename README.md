@@ -2,7 +2,8 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-RideTube shows in English, Russian or Simplified Chinese (Language setting). Chinese translation by 小白151
+RideTube shows in English, French, Dutch, German, Spanish, Italian, Portuguese, Russian or Simplified Chinese
+(Language setting). Chinese translation by 小白151
 (JackieZ123430). The [Chinese guide](README.zh-CN.md) includes setup, playback settings, and font coverage.
 
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
@@ -66,8 +67,8 @@ video decoder) and `jap-node22`, the Node.js 22 that the service runs on, with i
 
 ## Settings
 
-- **Language**: Auto (follows the car: Russian or Chinese when the car is set to it, else English), English,
-  Русский or 中文. YouTube's language and country follow the car's iDrive language setting (on Auto; the
+- **Language**: Auto (follows the car's language when RideTube has it, else English), English, Français,
+  Nederlands, Deutsch, Español, Italiano, Português, Русский or 中文. YouTube's language and country follow the car's iDrive language setting (on Auto; the
   country always), so feeds and search match what the car is set to.
 - **Video while driving**: off by default. Leave it off unless the car is coded for video in motion and only
   passengers can see the screen. Switched on, it first shows a disclaimer and counts only once you press I agree;
@@ -152,6 +153,29 @@ python3 tools/release.py      # dist/release/ (with mgu-apps' jap-node22, sha256
 ```
 
 The tests need Node 18 or newer, Python 3.12 and ffmpeg.
+
+## Translations
+
+The app's menus come in English, French, Dutch, German, Spanish, Italian, Portuguese, Russian and Simplified
+Chinese. Pull requests that add a language are welcome, and I will merge them. If you would rather not do it
+yourself, open an issue that names the language you want.
+
+To add one:
+
+1. Copy `kit/runtime/locales/fr.json` to `kit/runtime/locales/<code>.json`, where `<code>` is the two-letter
+   language code (`sv` for Swedish, `pl` for Polish). Keep the keys, which are the English text, and translate
+   the values.
+2. Keep every `{placeholder}` as it is. A key with `|` in it is a plural: write the singular and the plural form,
+   separated by `|`.
+3. Keep the rail names (Home, Subs, Later, Playlists, History) short: each has about 90 pixels.
+4. Add the language to the Language setting in `apps/jap_ridetube/app.json`: its code and its own name
+   (`["sv", "Svenska"]`).
+5. Run `node kit/tools/test_runtime.js`. It checks that every string has a row, that the placeholders match and
+   that the fonts have every letter.
+
+Auto and the car's menu for RideTube pick up the new language by themselves. A language that needs more than
+two plural forms, or letters outside the Latin fonts, takes a little more work in the code: say so in the pull
+request and I will help.
 
 ## License
 

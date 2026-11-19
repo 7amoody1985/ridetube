@@ -26,8 +26,8 @@ short. Each version's own section below has the details.
 
 ### Languages
 
-- The app can show in Russian or Simplified Chinese (中文), from the same package. The Language setting's Auto
-  follows the car. (0.4.0)
+- The app can show in French, Dutch, German, Spanish, Italian, Portuguese, Russian or Simplified Chinese (中文),
+  from the same package. The Language setting's Auto follows the car. (0.4.0, 0.4.2)
 - YouTube's language and country follow the car's iDrive setting. (0.4.1)
 - Titles in Cyrillic, Romanian (ș ț) and Vietnamese keep their letters. (0.3.11, 0.3.14)
 
@@ -59,7 +59,12 @@ translation.
 - Video while driving now asks first. Switched on, it shows a disclaimer: only for passengers in a car coded for
   video in motion, follow the law where you drive, and RideTube's authors are not responsible for any misuse,
   accident, fine or damage. The setting counts only once you press I agree; Cancel, or leaving the page, turns
-  it off again. A car where it was already on keeps it. In English, Russian and Chinese.
+  it off again. A car where it was already on keeps it.
+- Six more languages for the app's menus, pages and settings: French, Dutch (also for Flemish), German, Spanish,
+  Italian and Portuguese. On Auto, RideTube follows the car's iDrive language; the Language setting can also pick
+  one. A car in a language RideTube does not have (Swedish, say) keeps the app in English, while YouTube still
+  follows the car. The car's own menu for RideTube shows in the same languages. Texts the service sends (health
+  check rows, its error messages) stay in English.
 
 ## App 0.4.1
 

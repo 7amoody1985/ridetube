@@ -98,7 +98,8 @@ def unicode_resources(ui, strings, language='en'):
 
 
 # the HMI's string tables a catalog fills in an English build (the SDK picks the table of the car's language)
-HMI_LANGUAGES = {'ru': ['ru_RU'], 'zh-CN': ['zh_CN']}
+# (a two-letter catalog, locales/fr.json, fills every car language of that letter pair: fr_FR; pt: pt_PT and pt_BR)
+HMI_LANGUAGES = {'zh-CN': ['zh_CN']}
 
 
 def hmi_tables(strings, language, langs):
@@ -106,11 +107,11 @@ def hmi_tables(strings, language, langs):
     language a catalog covers its translation (ru_RU from ru.json), so menus and settings show in the car's language."""
     tables = {lang: strings for lang in langs}
     if language == 'en':
-        for tag, hmis in HMI_LANGUAGES.items():
-            if tag in languages():
-                words = load_locale(tag)
-                table = {key: text(value, words) for key, value in strings.items()}
-                for hmi in hmis:
-                    if hmi in tables:
-                        tables[hmi] = table
+        for tag in languages()[1:]:
+            hmis = HMI_LANGUAGES.get(tag) or [l for l in langs if l.startswith(tag + '_')]
+            words = load_locale(tag)
+            table = {key: text(value, words) for key, value in strings.items()}
+            for hmi in hmis:
+                if hmi in tables:
+                    tables[hmi] = table
     return tables

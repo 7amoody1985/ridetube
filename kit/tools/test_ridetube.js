@@ -1407,7 +1407,13 @@ async function wp7Frames(x) {
     await until(() => d.cmds('hello').slice(-1)[0].lang === 'de', 2000, 'Auto: hello de');
     assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'de', region: 'DE' }, 'Auto on a German car: YouTube in German for Germany');
     hu.handlers.BTN_HOME(); await sleep(300); await drawn();
-    assert.ok(texts.indexOf('Home') >= 0, 'no German catalog: the app itself stays English: ' + texts.join('|'));
+    const DE = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'de.json'), 'utf8'));
+    assert.ok(texts.indexOf(DE.Home) >= 0 && texts.indexOf('Home') < 0, 'a German car on Auto: the app in German too: ' + texts.join('|'));
+    hmiLang.now = 'sv_SE'; hmiLang.fns[0]('sv_SE');
+    await until(() => d.cmds('hello').slice(-1)[0].lang === 'sv', 2000, 'Auto: hello sv');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'sv', region: 'SE' }, 'Auto on a Swedish car: YouTube in Swedish for Sweden');
+    await sleep(300); await drawn();
+    assert.ok(texts.indexOf('Home') >= 0, 'no Swedish catalog: the app itself stays English: ' + texts.join('|'));
     hmiLang.now = 'en_GB'; hmiLang.fns[0]('en_GB');
     await until(() => d.cmds('hello').slice(-1)[0].lang === 'en', 2000, 'Auto: hello en again');
     set.set('language', 'en'); hmiLang.now = 'ru_RU'; hmiLang.fns[0]('ru_RU'); await sleep(100);

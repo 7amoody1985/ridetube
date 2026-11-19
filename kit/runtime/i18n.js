@@ -23,6 +23,7 @@ const PLURAL_RULES = {
         return mod10 >= 2 && mod10 <= 4 ? 1 : 2;
     },
     'zh-CN': () => 0,
+    fr: (n) => (n === 0 || n === 1 ? 0 : 1),   // French: 0 and 1 take the singular (de, nl, es, it, pt: English's rule)
 };
 function plural(n, one, other, lang) {
     const key = one + '|' + other, lng = lang || language;

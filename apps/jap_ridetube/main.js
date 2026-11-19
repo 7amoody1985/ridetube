@@ -112,11 +112,11 @@ mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
         // the Language setting: a catalog the package has, else Auto: the car's HMI language when there is a catalog
-        // for it (ru_RU, zh_CN), else the package's own (English; a zh-CN build's Chinese)
+        // for it (ru_RU, zh_CN, fr_FR, nl_NL...), else the package's own (English; a zh-CN build's Chinese)
         const pickLanguage = () => {
             const want = settings.get('language') || 'auto', have = languages();
             if (want !== 'auto') return have.indexOf(want) >= 0 ? want : BAKED;
-            const hmi = String((ctx.hmiLanguage && ctx.hmiLanguage()) || ''), tag = /^ru/.test(hmi) ? 'ru' : /^zh_CN/.test(hmi) ? 'zh-CN' : null;
+            const hmi = String((ctx.hmiLanguage && ctx.hmiLanguage()) || ''), tag = /^zh_CN/.test(hmi) ? 'zh-CN' : /^[a-z]{2}(?=[_-]|$)/.test(hmi) ? hmi.slice(0, 2) : null;
             return tag && have.indexOf(tag) >= 0 ? tag : BAKED;
         };
         setLanguage(pickLanguage());

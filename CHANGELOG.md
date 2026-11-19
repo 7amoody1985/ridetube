@@ -39,9 +39,12 @@
   release's day (`BUILT` in `ytd.js`), the clock is wrong for sure, and the service now skips one TLS check: the
   certificate's validity dates (OpenSSL's `X509_V_FLAG_NO_CHECK_TIME`). The certificate must still chain to a
   trusted CA and match the host name. This covers yt-dlp, the fetcher's own downloads, the health check and the
-  service's other requests (sign-in, feeds, search, SponsorBlock, Send logs). Those go through
-  `ytfetch.py request` while the clock is wrong, because Node 8 cannot skip only the dates. The risk: someone who
-  holds an old, expired certificate of one of these hosts, with its private key, could pose as that host.
+  service's other requests (feeds, search, SponsorBlock, Send logs). Those go through `ytfetch.py request` while
+  the clock is wrong, because Node 8 cannot skip only the dates. Sign-in never skips the dates: with a wrong clock
+  it fails with the clock error and you stay signed in, so signed-in feeds stop within about an hour until the
+  clock is set. The skip only starts once the app has said `hello`, so the warning can show. The risk: someone
+  who holds a certificate ever issued for one of these hosts by a trusted CA, expired or not, with its private
+  key, could pose as that host.
   `hello` carries `clock` (the wrong date) and a `clock` event follows any change, so the app can warn the driver.
   The health check's TLS line says when the dates are skipped. A clock ahead of real time cannot be proven wrong:
   its error still says "Wrong head unit clock (date): set the car's date and time" and the video is not retried.
@@ -71,7 +74,9 @@
   unit could use it. The service remembers that user across restarts, and makes the socket root only once
   RideTube is uninstalled. The service also no longer acts as root inside the folders the downloader writes to:
   it reads files there only as plain files and leaves deleting them to the downloader's user. It refuses to start
-  if its cache folder is not root's own.
+  if its cache folder is not root's own. Every app on the head unit can write the folder above MainApp's app
+  registry, so the service trusts the registry only when MainApp (or root) owns each part of its path, with no
+  symlink and nothing world-writable.
 - Releases now ship `jap-node22` in RideTube's own catalog, the same file as mgu-apps publishes.
 - Sound on 2021 head unit software (seen on `I_21w12` and `J18_21w42`): two Send logs reports showed the service
   never reaching the car's audio, because MainApp on those cars does not carry the description files the service

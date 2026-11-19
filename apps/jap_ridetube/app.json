@@ -25,6 +25,7 @@
       "kind": "canvas",
       "title": "RideTube",
       "hmi": false,
+      "fill": true,
       "bg": "#0f0f0f",
       "buttons": [
         [

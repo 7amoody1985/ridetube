@@ -54,7 +54,7 @@ Thanks to @marilykinson-glitch, whose fork brought the History and Liked feeds, 
 handling, the dropout recovery and the command-sequence tests, and to 小白151 (JackieZ123430) for the Chinese
 translation.
 
-## App 0.5.1
+## App 0.4.4
 
 - YouTube's dark greys: a #0f0f0f background with grey cards. In fill mode the pages use the whole screen: they
   start at the top, and four wider tiles reach the right edge, with a shelf's next arrow over the fourth tile.

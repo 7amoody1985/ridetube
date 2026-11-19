@@ -192,5 +192,22 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "Video tijdens het rijden is alleen voor passagiers, in een auto gecodeerd voor video tijdens de rit. De bestuurder mag nooit kijken. Volg de wet waar je rijdt. Je gebruikt deze instelling op eigen risico: de makers van RideTube zijn niet aansprakelijk voor enig misbruik, ongeval, boete of schade.",
   "Video while driving": "Video tijdens het rijden",
   "I agree": "Akkoord",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "Akkoord kan alleen via het touchscreen. Kies een pagina om het uit te laten"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "Akkoord kan alleen via het touchscreen. Kies een pagina om het uit te laten",
+  "Phone remote": "Telefoon als afstandsbediening",
+  "Please wait...": "Even geduld...",
+  "Switched on": "Aan",
+  "Switched off": "Uit",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Verbind de telefoon met de Wi-Fi-hotspot van de auto",
+  "2. Scan this code with its camera": "2. Scan deze code met de camera van de telefoon",
+  "3. Paste a YouTube link or type a search, then send": "3. Plak een YouTube-link of typ een zoekopdracht en verstuur",
+  "Address {address} · turns off by itself in {minutes} min": "Adres {address} · gaat vanzelf uit over {minutes} min",
+  "Anyone with this code can send videos while it is on": "Iedereen met deze code kan video's sturen zolang het aan staat",
+  "Turn off": "Uitzetten",
+  "Waiting for the car's Wi-Fi hotspot": "Wachten op de Wi-Fi-hotspot van de auto",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Zet de Wi-Fi-hotspot van de auto aan, dan verschijnt de code hier",
+  "A passenger's phone sends videos and searches to RideTube": "De telefoon van een passagier stuurt video's en zoekopdrachten naar RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "De telefoon maakt verbinding met de Wi-Fi-hotspot van de auto en scant een code die hier staat; de pagina komt van de auto zelf.",
+  "Could not turn it on: {error}": "Aanzetten mislukt: {error}",
+  "Turn on": "Aanzetten",
+  "To switch it, press Phone remote in the menu again": "Druk nogmaals op Telefoon als afstandsbediening in het menu om het aan of uit te zetten"
 }

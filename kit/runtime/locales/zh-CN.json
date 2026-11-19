@@ -224,5 +224,22 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "行驶中播放视频仅供乘客观看，且车辆须已编码为允许行驶中播放视频。驾驶员绝不能观看。请遵守当地法律。使用此设置的风险由您自行承担：RideTube 的作者对任何误用、事故、罚款或损失概不负责。",
   "Video while driving": "行驶中播放视频",
   "I agree": "我同意",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "同意需要使用触摸屏。选择任意页面即可保持关闭"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "同意需要使用触摸屏。选择任意页面即可保持关闭",
+  "Phone remote": "手机遥控",
+  "Please wait...": "请稍候...",
+  "Switched on": "已开启",
+  "Switched off": "已关闭",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. 将手机连接到车辆的 Wi-Fi 热点",
+  "2. Scan this code with its camera": "2. 用手机相机扫描此二维码",
+  "3. Paste a YouTube link or type a search, then send": "3. 粘贴 YouTube 链接或输入搜索内容，然后发送",
+  "Address {address} · turns off by itself in {minutes} min": "地址 {address} · {minutes} 分钟后自动关闭",
+  "Anyone with this code can send videos while it is on": "开启期间，任何拥有此二维码的人都可以发送视频",
+  "Turn off": "关闭",
+  "Waiting for the car's Wi-Fi hotspot": "正在等待车辆的 Wi-Fi 热点",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "开启车辆的 Wi-Fi 热点后，二维码会显示在这里",
+  "A passenger's phone sends videos and searches to RideTube": "乘客的手机可以向 RideTube 发送视频和搜索",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "手机连接车辆的 Wi-Fi 热点并扫描此处显示的二维码；页面来自车辆本身。",
+  "Could not turn it on: {error}": "无法开启：{error}",
+  "Turn on": "开启",
+  "To switch it, press Phone remote in the menu again": "如需开启或关闭，请在菜单中再次按“手机遥控”"
 }

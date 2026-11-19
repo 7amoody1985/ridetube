@@ -88,7 +88,7 @@ const SEARCH_MS = 8000;                                  // a search with no ans
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'];
 const SLOTS = ['BTN_S1', 'BTN_S2', 'BTN_S3', 'BTN_S4', 'BTN_S5', 'BTN_S6'];
 const TABS = ['home', 'subs', 'wl', 'pl'];
-const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Playlists', list: 'Playlist', results: 'Results', hist: 'History', health: 'Health check' };
+const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Playlists', list: 'Playlist', results: 'Results', hist: 'History', health: 'Health check', remote: 'Phone remote' };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
@@ -166,10 +166,12 @@ mgu.run({
             show(m);
             if (backKey[m] && ctx.focus) ctx.focus(backKey[m]);
         }
+        let remote = null;   // the phone remote page (cap remote; below, with the other pages)
         ctl.on('up', () => { model.setConnected(true); changed(); });
-        ctl.on('down', () => { model.setConnected(false); changed(); });
+        ctl.on('down', () => { model.setConnected(false); if (remote) remote.down(); changed(); });
         ctl.on('msg', (m) => {
             model.onMsg(m);
+            if (remote) remote.onMsg(m);
             if (m.ev === 'error') log.warn('jap-ridetube-d: ' + m.msg);
             if (m.ev === 'state') log.info('jap-ridetube-d: ' + m.state + (m.id ? ' ' + m.id : ''));
             if (m.ev === 'auth') { log.info('jap-ridetube-d: account ' + m.state); if (m.state === 'signed_in') openFeed(); }
@@ -198,7 +200,8 @@ mgu.run({
         let suggestions = SUGGEST.map(translate);
         const slots = () => recent.concat(suggestions.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length);
         const showSlots = () => slots().forEach((s, i) => ui.text(SLOTS[i], s, 0, 'Text', { literal: true }));
-        function search(q) {
+        // quiet: a phone remote's search, shown in the app without bringing it to the front
+        function search(q, quiet) {
             q = String(q || '').trim();
             if (!q) return;
             recent = [q].concat(recent.filter((s) => s.toLowerCase() !== q.toLowerCase())).slice(0, SLOTS.length);
@@ -206,7 +209,7 @@ mgu.run({
             showSlots();
             model.search(q);               // (not sent: the results screen says why)
             show('results');
-            ui.open('VIEW');
+            if (!quiet) ui.open('VIEW');
         }
         ui.onClick('BTN_SEARCH', () => spell(ctx.app, translate('Search videos'))
             .then((t) => search(t))
@@ -219,6 +222,14 @@ mgu.run({
         // 0.4.0 services (caps; labels() hides the entries otherwise): History; the health check, run on each press
         ui.onClick('BTN_HIST', () => { if (model.can('hist')) { show('hist'); ui.open('VIEW'); } });
         ui.onClick('BTN_HEALTH', () => { if (model.can('health')) { model.runHealth(); show('health'); ui.open('VIEW'); } });
+        // 0.5.0 (cap remote): the phone remote page; pressed again there where the HMI runs the screen (no button drawn): on / off
+        ui.onClick('BTN_REMOTE', () => {
+            if (!model.can('remote') || !remote) return;
+            const hmiScreen = !(ctx.display && ctx.display.own && ctx.display.own());
+            if (hmiScreen && mode === 'remote') remote.toggle(); else remote.refresh();
+            show('remote');
+            ui.open('VIEW');
+        });
         // Send logs to the developer: the logs page asks first; pressed again there (the HMI's own screen has no Send button), sends
         let logsFrom = 'home';
         function openLogs() {
@@ -354,8 +365,8 @@ mgu.run({
         }
         let lastPlay = null, lastList = null, lastAcct = null, lastCaps = null;
         function labels() {
-            const caps = [model.can('hist'), model.can('health')];
-            if (String(caps) !== lastCaps && ui.visible) { lastCaps = String(caps); ui.visible('BTN_HIST', caps[0]); ui.visible('BTN_HEALTH', caps[1]); }
+            const caps = [model.can('hist'), model.can('health'), model.can('remote')];
+            if (String(caps) !== lastCaps && ui.visible) { lastCaps = String(caps); ui.visible('BTN_HIST', caps[0]); ui.visible('BTN_HEALTH', caps[1]); ui.visible('BTN_REMOTE', caps[2]); }
             const p = model.state === 'playing' ? 'Pause' : 'Play';
             if (p !== lastPlay) { lastPlay = p; ui.text('BTN_PLAY', translate(p)); }
             const l = mode === 'player' ? NAMES[browse] : model.active() ? 'Now playing' : 'Player';
@@ -945,6 +956,10 @@ mgu.run({
         let OFF = translate('The RideTube service (jap-ridetube-d) is not running');
         let OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, count, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
+        remote = require('./remote')({ model, send: (o) => ctl.send(o), changed, say, fit, t: whole, message: whole, C, QR, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
+        PAGES.remote = remote.draw;
+        // a phone action, as a tap: a search shows its results, a video plays (the picture only as the parked rule allows)
+        remote.onDo = (a) => { if (a.do === 'search') search(a.q, true); else play(a.id); changed(); };
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
             if (model.searching) return say(cv, message('Searching "{query}"...', { query: model.q }));

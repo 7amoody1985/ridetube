@@ -192,5 +192,22 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "O vídeo em movimento é só para passageiros, num carro codificado para vídeo em movimento. O condutor nunca o deve ver. Cumpra a lei do local onde circula. Use esta opção por sua conta e risco: os autores do RideTube não são responsáveis por qualquer uso indevido, acidente, multa ou dano.",
   "Video while driving": "Vídeo em movimento",
   "I agree": "Concordo",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "Para aceitar, toque no visor. Escolha qualquer página para deixar desligado"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "Para aceitar, toque no visor. Escolha qualquer página para deixar desligado",
+  "Phone remote": "Telefone como comando",
+  "Please wait...": "Aguarde...",
+  "Switched on": "Ligado",
+  "Switched off": "Desligado",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Ligue o telefone ao hotspot Wi-Fi do carro",
+  "2. Scan this code with its camera": "2. Leia este código com a câmara do telefone",
+  "3. Paste a YouTube link or type a search, then send": "3. Cole um link do YouTube ou escreva uma pesquisa e envie",
+  "Address {address} · turns off by itself in {minutes} min": "Endereço {address} · desliga-se sozinho em {minutes} min",
+  "Anyone with this code can send videos while it is on": "Quem tiver este código pode enviar vídeos enquanto estiver ligado",
+  "Turn off": "Desligar",
+  "Waiting for the car's Wi-Fi hotspot": "À espera do hotspot Wi-Fi do carro",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Ligue o hotspot Wi-Fi do carro e o código aparece aqui",
+  "A passenger's phone sends videos and searches to RideTube": "O telefone de um passageiro envia vídeos e pesquisas para o RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "O telefone liga-se ao hotspot Wi-Fi do carro e lê um código mostrado aqui; a página vem do próprio carro.",
+  "Could not turn it on: {error}": "Não foi possível ligar: {error}",
+  "Turn on": "Ligar",
+  "To switch it, press Phone remote in the menu again": "Para ligar ou desligar, toque de novo em Telefone como comando no menu"
 }

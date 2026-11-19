@@ -192,5 +192,22 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "Il video in marcia è solo per i passeggeri, in un'auto codificata per il video in movimento. Il conducente non deve mai guardarlo. Rispetta la legge del luogo in cui guidi. Usi questa impostazione a tuo rischio: gli autori di RideTube non sono responsabili di alcun uso improprio, incidente, multa o danno.",
   "Video while driving": "Video in marcia",
   "I agree": "Accetto",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "Per accettare serve il touchscreen. Scegli una pagina per lasciarlo spento"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "Per accettare serve il touchscreen. Scegli una pagina per lasciarlo spento",
+  "Phone remote": "Telecomando dal telefono",
+  "Please wait...": "Un attimo...",
+  "Switched on": "Attivo",
+  "Switched off": "Disattivo",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Collega il telefono all'hotspot Wi-Fi dell'auto",
+  "2. Scan this code with its camera": "2. Scansiona questo codice con la fotocamera",
+  "3. Paste a YouTube link or type a search, then send": "3. Incolla un link di YouTube o scrivi una ricerca, poi invia",
+  "Address {address} · turns off by itself in {minutes} min": "Indirizzo {address} · si spegne da solo tra {minutes} min",
+  "Anyone with this code can send videos while it is on": "Chiunque abbia questo codice può inviare video finché è attivo",
+  "Turn off": "Disattiva",
+  "Waiting for the car's Wi-Fi hotspot": "In attesa dell'hotspot Wi-Fi dell'auto",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Attiva l'hotspot Wi-Fi dell'auto, poi il codice compare qui",
+  "A passenger's phone sends videos and searches to RideTube": "Il telefono di un passeggero invia video e ricerche a RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Il telefono si collega all'hotspot Wi-Fi dell'auto e scansiona un codice mostrato qui; la pagina viene dall'auto stessa.",
+  "Could not turn it on: {error}": "Impossibile attivarlo: {error}",
+  "Turn on": "Attiva",
+  "To switch it, press Phone remote in the menu again": "Per attivarlo o disattivarlo, premi di nuovo Telecomando dal telefono nel menu"
 }

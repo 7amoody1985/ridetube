@@ -192,5 +192,22 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "Видео во время движения только для пассажиров, в машине, закодированной на видео в движении. Водитель никогда не должен его смотреть. Соблюдайте закон там, где вы едете. Вы используете эту настройку на свой страх и риск: авторы RideTube не несут ответственности за неправильное использование, аварии, штрафы или ущерб.",
   "Video while driving": "Видео во время движения",
   "I agree": "Я согласен",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "Для согласия нужен сенсорный экран. Выберите любую страницу, чтобы оставить выключенным"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "Для согласия нужен сенсорный экран. Выберите любую страницу, чтобы оставить выключенным",
+  "Phone remote": "Пульт на телефоне",
+  "Please wait...": "Подождите...",
+  "Switched on": "Включён",
+  "Switched off": "Выключен",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Подключите телефон к точке доступа Wi-Fi автомобиля",
+  "2. Scan this code with its camera": "2. Отсканируйте этот код камерой телефона",
+  "3. Paste a YouTube link or type a search, then send": "3. Вставьте ссылку YouTube или введите запрос и отправьте",
+  "Address {address} · turns off by itself in {minutes} min": "Адрес {address} · выключится сам через {minutes} мин",
+  "Anyone with this code can send videos while it is on": "Любой, у кого есть этот код, может отправлять видео, пока пульт включён",
+  "Turn off": "Выключить",
+  "Waiting for the car's Wi-Fi hotspot": "Ожидание точки доступа Wi-Fi автомобиля",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Включите точку доступа Wi-Fi автомобиля, и код появится здесь",
+  "A passenger's phone sends videos and searches to RideTube": "Телефон пассажира отправляет видео и запросы в RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Телефон подключается к точке доступа Wi-Fi автомобиля и сканирует показанный здесь код; страница открывается с самого автомобиля.",
+  "Could not turn it on: {error}": "Не удалось включить: {error}",
+  "Turn on": "Включить",
+  "To switch it, press Phone remote in the menu again": "Чтобы включить или выключить, ещё раз нажмите «Пульт на телефоне» в меню"
 }

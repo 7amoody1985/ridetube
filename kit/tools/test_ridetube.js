@@ -990,7 +990,8 @@ async function appFrames() {
     }
     if (own) await wp5Frames({ hu, d, disp, keys, drawn, texts, wp5, rock: (v) => rockerH({ operationPushButtonAudioAutomaticTuningSteeringWheel: v }), speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     else console.log('skip WP5 frames (the stub does not run the screen)');
-    if (own) await wp9Frames({ hu, d, disp, drawn, texts, rects });
+    if (own) await wp9Frames({ hu, d, disp, drawn, texts, rects, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
+    if (own) { disp.gpu.touch = false; disp._place(); await hu.loopFn(); await wp9Hmi({ d, hu, disp }); disp.gpu.touch = true; disp._place(); await hu.loopFn(); }
     if (own) await wp7Frames({ hu, d, disp, drawn, texts, file, hmiLang, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
@@ -1337,10 +1338,10 @@ async function wp5Frames(x) {
 // ======== WP9 phone remote: the menu entry (cap remote), the page off / waiting / on with its QR code, phone actions
 const HEX = '0123456789abcdef0123456789abcdef';
 async function wp9Frames(x) {
-    const { hu, d, disp, drawn, texts, rects } = x;
+    const { hu, d, disp, drawn, texts, rects, speed } = x;
     const tgt = (k) => disp.pageTargets.find((t) => t.key === k);
     const vis = [], v = hu.ui.visible, opens = [], op = hu.ui.open;
-    hu.ui.visible = (n, on) => { if (n === 'BTN_REMOTE') vis.push(on); return v.apply(hu.ui, arguments); };
+    hu.ui.visible = function (n, on) { if (n === 'BTN_REMOTE') vis.push(on); return v.apply(hu.ui, arguments); };
     hu.ui.open = function (n) { opens.push(n); return op.apply(hu.ui, arguments); };
     // a service without the cap: the entry hidden, its handler sends nothing
     d.send({ ev: 'hello', service: '0.4.0', caps: ['health', 'related', 'hist'] });
@@ -1387,11 +1388,22 @@ async function wp9Frames(x) {
     d.send({ ev: 'remote_do', do: 'search', q: ' News ' });   // (already the latest recent search: the later frames keep theirs)
     await until(() => d.cmds('search').length === nSearch + 1, 2000, 'the phone\'s search asked');
     assert.strictEqual(d.cmds('search').slice(-1)[0].q, 'News', 'trimmed');
+    await drawn();
+    assert.ok(!tgt('remote:toggle') && !rects.some((r) => r.c === '#ffffff' && r.w > 200 && r.w === r.h), 'the results show, not the code');
     d.send({ ev: 'remote_do', do: 'play', id: 'bad' });
     d.send({ ev: 'remote_do', do: 'sign_out' });
     d.send({ ev: 'remote_do', do: 'search', q: 'x'.repeat(201) });
     await sleep(150);
     assert.deepStrictEqual([d.cmds('play').length, d.cmds('search').length, d.cmds('sign_out').length, opens.length], [nPlay + 1, nSearch + 1, nOut, nOpen], 'bad actions dropped, the app not brought forward');
+    // driving: a phone video goes through the same video gate as a tap (podcast mode, no picture)
+    speed(50 * 64);
+    d.send({ ev: 'remote_do', do: 'play', id: 'PHONE000003' });
+    await until(() => d.cmds('play').some((p) => p.id === 'PHONE000003'), 2000, 'the phone\'s video asked while driving');
+    d.send({ ev: 'state', state: 'playing', id: 'PHONE000003' }); d.send({ ev: 'time', elapsed: 1000, total: 600000 });
+    await sleep(100); await drawn();
+    assert.ok(texts.indexOf('Podcast mode · driving') >= 0, 'driving: podcast mode: ' + texts.join('|'));
+    assert.notDeepStrictEqual(d.cmds('video').slice(-1)[0], { cmd: 'video', on: true }, 'driving: no picture asked');
+    speed(0);
     // Turn off; then a phone action is ignored; an error says why it could not be turned on
     d.send({ ev: 'state', state: 'idle' });
     hu.handlers.BTN_REMOTE();
@@ -1405,6 +1417,28 @@ async function wp9Frames(x) {
     assert.ok(texts.indexOf('Could not turn it on: the control socket is open to every app') >= 0, texts.join('|'));
     hu.ui.visible = v; hu.ui.open = op;
     console.log('ok   WP9 phone remote page: hidden without the cap, off / waiting / on with the QR code, phone play and search as a tap, off');
+}
+
+// where the HMI runs the screen: the menu entry is the only switch (the page shown, pressed again: on / off)
+async function wp9Hmi({ d, hu, disp }) {
+    assert.ok(!disp.own(), 'the HMI runs the screen');
+    hu.handlers.BTN_LIST();   // another page first: the first press only opens the remote page
+    await sleep(50);
+    d.send({ ev: 'hello', service: '0.5.0', caps: ['health', 'related', 'hist', 'remote'] });
+    await sleep(100);
+    hu.handlers.BTN_REMOTE();
+    await lastIs(d, { cmd: 'remote' }, 'the page asks the state');
+    d.send({ ev: 'remote', on: false, url: null, expires: 0 });
+    await sleep(100);
+    hu.handlers.BTN_REMOTE();
+    await lastIs(d, { cmd: 'remote', on: true }, 'pressed again: on');
+    d.send({ ev: 'remote', on: true, url: 'http://172.16.222.97:8471/#' + HEX, expires: 1800 });
+    await sleep(100);
+    hu.handlers.BTN_REMOTE();
+    await lastIs(d, { cmd: 'remote', on: false }, 'and again: off');
+    d.send({ ev: 'remote', on: false, url: null, expires: 0 });
+    await sleep(50);
+    console.log('ok   WP9 phone remote where the HMI runs the screen: the menu entry asks the state, then on, then off');
 }
 
 async function wp7Frames(x) {

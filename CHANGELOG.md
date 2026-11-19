@@ -1,5 +1,58 @@
 # Changelog
 
+## What's new since the first release
+
+The first public release was app 0.3.6 with service 0.3.7, on 4 November 2026. This is what came after it, in
+short. Each version's own section below has the details.
+
+### Watching
+
+- History and Playlists pages: the videos you watched, Liked videos, and the playlists you made or saved. A video
+  played from a grid or a playlist goes on through the rest of it. (0.3.10, 0.4.0)
+- Watch next: when a list runs out, the first related video plays after a 5 s countdown. (0.4.0)
+- A video you come back to starts where you left it, with Start over for 5 s. (0.4.0)
+- Lists hold up to 100 videos. Shorts show only with the new Show Shorts setting, and live streams carry a LIVE
+  tag. (0.4.0)
+- Close ends a video at once and gives the speakers back to the car. (0.3.9)
+
+### Controls
+
+- Full screen: the car's title bar and left column are gone, so RideTube gets all 1920 × 720 pixels. (0.4.0)
+- The steering wheel's next and previous buttons skip videos, and held they seek. Next also skips a SponsorBlock
+  segment or goes to the next chapter. (0.3.13, 0.4.0)
+- Drag the progress bar to seek, or double tap the left or right third of the video for 10 s back or forward.
+  (0.3.13)
+- The car's media screen and the cluster show the video's title, channel and picture. (service 0.3.12)
+
+### Languages
+
+- The app can show in Russian or Simplified Chinese (中文), from the same package. The Language setting's Auto
+  follows the car. (0.4.0)
+- YouTube's language and country follow the car's iDrive setting. (0.4.1)
+- Titles in Cyrillic, Romanian (ș ț) and Vietnamese keep their letters. (0.3.11, 0.3.14)
+
+### Fewer failures
+
+- Playback recovers by itself after a sound dropout, a failed audio start or a download that dies mid-video, and
+  quick taps while a video starts no longer lose it. (service 0.4.0)
+- Videos play on a head unit whose clock is wrong, with a one-time security warning. (0.4.0)
+- Sound on 2021 head unit software (I_21w12, J18_21w42): the service now builds the audio descriptions those cars
+  lack. Not confirmed on those cars yet. (service 0.4.0)
+- Fixed: videos that would not play (`ITEM_UNPLAYABLE`), the Search menu closing by itself, live videos failing
+  only after two retries, and Previous not going back to 0:00. (0.3.8 to 0.3.13)
+- The download stops when the head unit has less than 256 MiB free. (0.3.7)
+
+### Help and safety
+
+- Send logs: one button sends a cleaned-up log and shows a code to add to your GitHub issue. Health check runs
+  12 checks on the car and shows which one fails. (0.3.12, 0.4.0)
+- Video while driving only turns on when you switch it on while parked. (0.3.7)
+- Only RideTube itself can talk to its service now; before, any app on the head unit could. (service 0.4.0)
+
+Thanks to @marilykinson-glitch, whose fork brought the History and Liked feeds, related videos, the Shorts
+handling, the dropout recovery and the command-sequence tests, and to 小白151 (JackieZ123430) for the Chinese
+translation.
+
 ## App 0.4.1
 
 - YouTube's language and country now follow the car's iDrive language setting (de_DE: German, Germany;

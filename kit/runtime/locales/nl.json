@@ -197,5 +197,22 @@
   "Opens the keyboard": "Opent het toetsenbord",
   "Clear recent searches": "Recente zoektermen wissen",
   "Menu": "Menu",
-  "Account, settings, logs": "Account, instellingen, logs"
+  "Account, settings, logs": "Account, instellingen, logs",
+  "Phone remote": "Telefoon als afstandsbediening",
+  "Please wait...": "Even geduld...",
+  "Switched on": "Aan",
+  "Switched off": "Uit",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Verbind de telefoon met de Wi-Fi-hotspot van de auto",
+  "2. Scan this code with its camera": "2. Scan deze code met de camera van de telefoon",
+  "3. Paste a YouTube link or type a search, then send": "3. Plak een YouTube-link of typ een zoekopdracht en verstuur",
+  "Address {address} · turns off by itself in {minutes} min": "Adres {address} · gaat vanzelf uit over {minutes} min",
+  "Anyone with this code can send videos while it is on": "Iedereen met deze code kan video's sturen zolang het aan staat",
+  "Turn off": "Uitzetten",
+  "Waiting for the car's Wi-Fi hotspot": "Wachten op de Wi-Fi-hotspot van de auto",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Zet de Wi-Fi-hotspot van de auto aan, dan verschijnt de code hier",
+  "A passenger's phone sends videos and searches to RideTube": "De telefoon van een passagier stuurt video's en zoekopdrachten naar RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "De telefoon maakt verbinding met de Wi-Fi-hotspot van de auto en scant een code die hier staat; de pagina komt van de auto zelf.",
+  "Could not turn it on: {error}": "Aanzetten mislukt: {error}",
+  "Turn on": "Aanzetten",
+  "To switch it, press Phone remote in the menu again": "Druk nogmaals op Telefoon als afstandsbediening in het menu om het aan of uit te zetten"
 }

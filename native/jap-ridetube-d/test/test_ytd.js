@@ -5,8 +5,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-const { Daemon, Audio, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = require('../ytd.js');
+const { Daemon, Audio, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, pickUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = require('../ytd.js');
 
+// (Node 8, as on the car: no mkdirSync {recursive}, no rmSync)
+const mkdirp = (d) => { if (!fs.existsSync(d)) { mkdirp(path.dirname(d)); fs.mkdirSync(d); } };
+const rmrf = (p) => {
+    let st;
+    try { st = fs.lstatSync(p); } catch (e) { return; }
+    if (st.isDirectory()) { fs.readdirSync(p).forEach((n) => rmrf(path.join(p, n))); fs.rmdirSync(p); } else fs.unlinkSync(p);
+};
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ytd-'));
 const cache = path.join(tmp, 'cache');
 const srcGen = path.join(tmp, 'src-gen');
@@ -486,7 +493,7 @@ async function main() {
         c.send({ cmd: 'stop' });
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
         d.opts.resume = false;
-        fs.rmSync ? fs.rmSync(dir, { recursive: true }) : null;
+        rmrf(dir);
     });
 
     await t('SponsorBlock: the play\'s skip list; other categories (outro) only in extras, for the app\'s Skip button', async () => {
@@ -509,7 +516,7 @@ async function main() {
         assert.strictEqual(sk.category, 'outro');
         c.send({ cmd: 'stop' });
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
-        fs.rmSync(dir, { recursive: true, force: true });
+        rmrf(dir);
     });
 
     await t('fetcher error before playable -> error state + "fetch: <msg>", nothing played', async () => {
@@ -532,7 +539,7 @@ async function main() {
         assert.ok(!c.evs.some((x) => x.ev === 'state' && x.state === 'error'), 'no error on the way');
         d.opts.fetchRetryMs = [];
         c.send({ cmd: 'stop' }); await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
-        fs.rmSync(path.join(cache, 'FFFFFFFFFR4'), { recursive: true, force: true });
+        rmrf(path.join(cache, 'FFFFFFFFFR4'));
     });
 
     await t('a refused video (unavailable) is not retried', async () => {
@@ -962,7 +969,7 @@ async function main() {
 
     // ---- the fetch uid and the fetch helper
     const fsRoot = path.join(tmp, 'uidfs');
-    const mkdirs = (dd) => { if (!fs.existsSync(dd)) { mkdirs(path.dirname(dd)); fs.mkdirSync(dd); } }; // (Node 8: no recursive)
+    const mkdirs = mkdirp;
     const put = (f, text) => { mkdirs(path.dirname(f)); fs.writeFileSync(f, text); };
     const rejects = (p, re) => p.then(() => { throw new Error('resolved, expected ' + re); }, (e) => assert.ok(re.test(e.message), e.message)); // (Node 8: no assert.rejects)
     const uo = { stateDir: path.join(fsRoot, 'var/opt/jap-ridetube-d/state'), etcDir: path.join(fsRoot, 'etc'), oapRoot: path.join(fsRoot, 'oap'),
@@ -1466,7 +1473,7 @@ async function main() {
         assert.ok(/st=60&et=60&final=1$/.test(yt.calls.filter((x) => /watchtime/.test(x.url)).pop().url));
         await c.waitFor((x) => x.ev === 'state' && x.state === 'ended');
         d.account = saved;
-        fs.rmSync(path.join(cache, id), { recursive: true, force: true });
+        rmrf(path.join(cache, id));
     });
 
     await t('feed tiles carry the account\'s watched share and resume point', async () => {
@@ -1496,7 +1503,7 @@ async function main() {
 
     await t('hello: service version and caps; lang / region kept for the connection; a bad one dropped, never refused', async () => {
         const FROZEN = ['health', 'related', 'hist', 'ytdlp', 'remote', 'proxy', 'stream'];
-        assert.deepStrictEqual(CAPS, ['related', 'hist', 'health'], 'what of the 0.4.0 protocol answers for real (WP1: related, hist; WP4: health)');
+        assert.deepStrictEqual(CAPS, ['related', 'hist', 'health', 'remote'], 'what of the protocol answers for real (WP1: related, hist; WP4: health; WP9: remote)');
         assert.ok(CAPS.every((x) => FROZEN.indexOf(x) >= 0), 'caps only from the frozen names');
         c.clear();
         c.send({ cmd: 'hello', app: '0.4.0', lang: 'ru', region: 'RU' });
@@ -1579,7 +1586,7 @@ async function main() {
     });
 
     await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before', async () => {
-        for (const m of [{ cmd: 'ytdlp', auto: true }, { cmd: 'remote', on: true }, { cmd: 'proxy', mode: 'off' }]) {
+        for (const m of [{ cmd: 'ytdlp', auto: true }, { cmd: 'proxy', mode: 'off' }]) {
             c.clear();
             c.send(m);
             assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', cmd: m.cmd, msg: 'not implemented ' + m.cmd });
@@ -1784,11 +1791,11 @@ async function main() {
     const recordChown = (fail) => { chowns.length = 0; fs.chownSync = (p, u, g) => { chowns.push([p, u, g]); if (fail === true || fail === u) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); }; };
     const wroot = path.join(tmp, 'wp3'), wcache = path.join(wroot, 'cache'), wlogs = [];
     const reg = path.join(wroot, 'oap', 'oap_12201', 'data', 'apps', 'jap_ridetube.json');
-    fs.mkdirSync(path.dirname(reg), { recursive: true }); fs.mkdirSync(wcache, { recursive: true });
+    mkdirp(path.dirname(reg)); mkdirp(wcache);
     const wsock = path.join(tmp, 'w3.sock');
     const modeOf = (p) => fs.statSync(p).mode & 0o777;
     const wmain = [{ root: path.join(wroot, 'mainapp'), hmi: 'HmiMain3D' }];   // app uids 20000-29999
-    fs.mkdirSync(path.join(wroot, 'mainapp', 'config'), { recursive: true });
+    mkdirp(path.join(wroot, 'mainapp', 'config'));
     fs.writeFileSync(path.join(wroot, 'mainapp', 'config', 'base.json'), JSON.stringify({ usableUidsAndGids: { min: 20000, max: 29999 } }));
     const ds = new Daemon({ someip: { buildProxy: () => new Promise(() => {}) }, srcGen: srcGen, cacheDir: wcache, logDir: wroot, sock: wsock,
         oapRoot: path.join(wroot, 'oap'), mgrUid: process.getuid(), mainapps: wmain, tickMs: 100, noSetuid: !root, spare: false, ytRequest: fakeYt, keep: 20,
@@ -1987,7 +1994,7 @@ async function main() {
 
     await t('WP3 prefetch: root never makes, chowns or prunes info/ (a symlink there reaches nothing); chownFetch refuses deeper paths', async () => {
         const c2 = path.join(wroot, 'cache2'), ytc = path.join(c2, 'ytdlp'), away = path.join(wroot, 'away');
-        fs.mkdirSync(ytc, { recursive: true }); fs.mkdirSync(away);
+        mkdirp(ytc); fs.mkdirSync(away);
         const old = path.join(away, 'old.json');
         fs.writeFileSync(old, '{}'); fs.utimesSync(old, new Date(0), new Date(0));
         fs.symlinkSync(away, path.join(ytc, 'info'));
@@ -2051,7 +2058,7 @@ async function main() {
 
     await t('WP3 pruneCache (the plain function): .sb is not a video, never listed or removed', async () => {
         const lc = path.join(wroot, 'lc');
-        fs.mkdirSync(path.join(lc, '.sb'), { recursive: true });
+        mkdirp(path.join(lc, '.sb'));
         fs.writeFileSync(path.join(lc, '.sb', 'ZZZZZZZZZZ1.json'), '[]');
         fs.mkdirSync(path.join(lc, 'ZZZZZZZZZZ1'));
         assert.deepStrictEqual(listCache(lc).map((x) => x.id), ['ZZZZZZZZZZ1']);
@@ -2073,7 +2080,7 @@ async function main() {
 
     await t('WP3 root reads in a video folder: a FIFO meta.json does not hang, symlinks and wrong sizes are missing', async () => {
         const fifo = path.join(wroot, 'fifo'), fv = path.join(fifo, 'FIFOFIFOFI1');
-        fs.mkdirSync(fv, { recursive: true });
+        mkdirp(fv);
         cp.execSync('mkfifo ' + path.join(fv, 'meta.json'));
         const r = cp.spawnSync(process.execPath, ['-e', 'console.log(JSON.stringify(require(process.argv[1]).listCache(process.argv[2])))',
             path.join(__dirname, '..', 'ytd.js'), fifo], { timeout: 3000, encoding: 'utf8' });
@@ -2084,7 +2091,7 @@ async function main() {
         fs.writeFileSync(path.join(away, 'meta.json'), JSON.stringify({ title: 'Planted' }));
         fs.writeFileSync(path.join(away, 'thumb.rgba'), Buffer.alloc(57600, 3));
         const lc = path.join(wroot, 'reads'), big = path.join(lc, 'BIGBIGBIGB1'), sym = path.join(lc, 'SYMSYMSYMS1');
-        fs.mkdirSync(big, { recursive: true }); fs.mkdirSync(sym);
+        mkdirp(big); fs.mkdirSync(sym);
         fs.writeFileSync(path.join(big, 'meta.json'), JSON.stringify({ title: 'Big', pad: 'x'.repeat(70 << 10) }));
         fs.symlinkSync(path.join(away, 'meta.json'), path.join(sym, 'meta.json'));
         assert.deepStrictEqual(listCache(lc).map((x) => x.title).sort(), ['BIGBIGBIGB1', 'SYMSYMSYMS1'], 'over 64 KiB / a symlink: no meta');
@@ -2296,7 +2303,7 @@ async function main() {
         const info = path.join(cache, 'ytdlp', 'info'), away = path.join(tmp, 'wp2away'), id = 'WP2INFO0001';
         const kept = fs.existsSync(info) ? info + '.wp2' : null;
         if (kept) fs.renameSync(info, kept);
-        fs.mkdirSync(away, { recursive: true });
+        mkdirp(away);
         fs.writeFileSync(path.join(away, id + '.json'), JSON.stringify({ id: id }));
         fs.symlinkSync(away, info);
         d.opts.fetchRetryMs = [200];
@@ -2379,7 +2386,7 @@ async function main() {
 
     await t('WP2 play: a FIFO meta.json (the fetch uid\'s folder) does not hang it; chapters read without following a symlink', async () => {
         const fc = path.join(tmp, 'wp2fifo'), fv = path.join(fc, 'FIFOPLAY001');
-        fs.mkdirSync(fv, { recursive: true });
+        mkdirp(fv);
         cp.execSync('mkfifo ' + path.join(fv, 'meta.json'));
         const run = [
             'const { Daemon } = require(process.argv[1]);',
@@ -2401,7 +2408,7 @@ async function main() {
 
     await t('WP2 a play from the start whose first tick is in a skipped segment: its first `time` is that tick, not the segment\'s end', async () => {
         if (!fs.existsSync(path.join(cache, 'WP2SKIP0001'))) mkVideo('WP2SKIP0001');
-        fs.mkdirSync(path.join(cache, '.sb'), { recursive: true });
+        mkdirp(path.join(cache, '.sb'));
         fs.writeFileSync(path.join(cache, '.sb', 'WP2SKIP0001.json'), JSON.stringify([{ s: 0, e: 30000, cat: 'sponsor' }]));   // the SponsorBlock cache
         c.clear(); calls.length = 0;
         c.send({ cmd: 'play', id: 'WP2SKIP0001', rect: '1280x720', skip: ['sponsor'] });
@@ -2588,7 +2595,7 @@ async function main() {
     {
         const H = require('../health.js');
         const sdir = path.join(tmp, 'someip'), mainapp = path.join(sdir, 'oap-mainapp'), sg = path.join(mainapp, 'src-gen');
-        fs.mkdirSync(sg, { recursive: true });
+        mkdirp(sg);
         fs.writeFileSync(path.join(mainapp, 'package.json'), JSON.stringify({ name: 'oap-mainapp', version: '8.3.2-pr-847.1' }));
         fs.writeFileSync(path.join(sdir, 'os-release'), 'NAME="BMW MGU"\nVERSION="I_21w12.2-1-4"\nID="mgu"\n');
         const CC = 'org.genivi.am.commandinterface.CommandControl', MP = 'de.bmw.infotainment.entertainment.mediaplayer.MediaPlayer';
@@ -2690,7 +2697,7 @@ async function main() {
             let up = false;
             const off = { buildProxy: async () => ({ init: async () => {}, subscribe: () => {}, isAvailable: async () => up, getValue: async () => [] }) };
             const logs = [], xdir = path.join(sdir, 'd1');
-            fs.mkdirSync(path.join(xdir, 'cache'), { recursive: true });
+            mkdirp(path.join(xdir, 'cache'));
             const x = new Daemon({ someip: off, srcGen: sg, catalog: path.join(sdir, 'none.json'), etcDir: sdir, availWaitMs: 30, someipRetryMs: 10,
                 cacheDir: path.join(xdir, 'cache'), logDir: xdir, stateDir: path.join(xdir, 'state'), accountFile: path.join(xdir, 'account.json'),
                 sock: path.join(tmp, 'someip.sock'), noSetuid: true, spare: false, ytRequest: fakeYt, healthMs: 1500, log: (m) => logs.push(m) });
@@ -2710,7 +2717,7 @@ async function main() {
         });
         await t('someip: the report carries the diagnostics block whole through redactLog; the health audio row says the sources', async () => {
             const logs = [], xdir = path.join(sdir, 'd2');
-            fs.mkdirSync(path.join(xdir, 'cache'), { recursive: true });
+            mkdirp(path.join(xdir, 'cache'));
             const x = new Daemon({ someip: rec, srcGen: sg, catalog: catalog('noinst', { BrowserMedia: 60, 'ExternalDeviceUsbFrontAInstanceRearL': 11 }), appMgmt: bundle,
                 oapgen: path.join(__dirname, '..', '..', '..', 'kit', 'tools', 'oapgen', 'gen.js'), etcDir: sdir,
                 cacheDir: path.join(xdir, 'cache'), logDir: xdir, stateDir: path.join(xdir, 'state'), accountFile: path.join(xdir, 'account.json'),
@@ -2727,6 +2734,348 @@ async function main() {
             assert.deepStrictEqual([k.audio.ok, k.audio.text], [true, 'BMW audio service reachable; CommandControl from catalog, MediaPlayer from built-in; MainApp v8.3.2-pr-847.1']);
             await x.close();
         });
+    }
+
+    // ======== WP9 phone remote (remote.js): the token, the lockout, the body cap, the three commands, the firewall rule
+    {
+        const { parseLink, cleanQuery, TAG } = require('../remote.js');
+        const http = require('http');
+        const rroot = path.join(tmp, 'wp9'), rcache = path.join(rroot, 'cache');
+        mkdirs(rcache);
+        const nftState = path.join(rroot, 'nft'), rsock = path.join(rroot, 'remote.sock');
+        const nftCalls = () => (fs.existsSync(nftState + '.log') ? fs.readFileSync(nftState + '.log', 'utf8').split('\n').filter(Boolean) : []);
+        const rules = () => { try { return JSON.parse(fs.readFileSync(nftState + '.json', 'utf8')).rules.map((r) => r.text); } catch (e) { return []; } };
+        const port = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+        const RULE = 'iifname "wlan_bridge" tcp dport ' + port + ' accept comment "' + TAG + '"';
+        // the hotspot interface: 127.0.0.1 here, so the phone's requests can reach it
+        let ifs = { wlan_bridge: [{ family: 'IPv4', address: '127.0.0.1', internal: false }] };
+        const rlogs = [];
+        const realChown9 = fs.chownSync, chowns9 = [];
+        fs.chownSync = (p, u, g) => { chowns9.push([p, u, g]); };   // (not root: record what root would do)
+        const dr = new Daemon({ someip: { buildProxy: () => new Promise(() => {}) }, srcGen: srcGen, cacheDir: rcache, logDir: rroot,
+            sock: path.join(rroot, 'ctl.sock'), stateDir: path.join(rroot, 'state'), accountFile: path.join(rroot, 'account.json'),
+            noSetuid: true, spare: false, ytRequest: fakeYt, keep: 20, remoteSock: rsock, remotePort: port, remotePollMs: 50, remoteActMs: 0, remoteRetryMs: 100,
+            nft: [process.execPath, path.join(__dirname, 'fake_nft.js'), nftState], interfaces: () => ifs, log: (m) => rlogs.push(m) });
+        let shared = false;
+        dr.sockShared = () => shared;   // (ctl.sock's lock has its own tests, WP3)
+        const req = (method, p, o) => new Promise((resolve, reject) => {
+            o = o || {};
+            const headers = Object.assign({}, o.token ? { Authorization: 'Bearer ' + o.token } : {}, o.headers || {});
+            let body = o.body;
+            if (body !== undefined && typeof body !== 'string') { body = JSON.stringify(body); headers['Content-Type'] = headers['Content-Type'] || 'application/json'; }
+            if (body !== undefined) headers['Content-Length'] = Buffer.byteLength(body);
+            const r = http.request({ host: '127.0.0.1', port: port, method: method, path: p, headers: headers, agent: false }, (res) => {
+                let text = '';
+                res.setEncoding('utf8');
+                res.on('data', (x) => { text += x; });
+                res.on('end', () => { let j = null; try { j = JSON.parse(text); } catch (e) { /* html */ } resolve({ status: res.statusCode, headers: res.headers, text: text, json: j }); });
+            });
+            r.on('error', reject);
+            if (body !== undefined) r.write(body);
+            r.end();
+        });
+        const refused = () => req('GET', '/').then(() => false, (e) => e.code === 'ECONNREFUSED');
+        let app = null, token = null;
+        const turnOn = async (lang) => {
+            app.clear();
+            app.send({ cmd: 'remote', on: true, lang: lang });
+            const e = await app.waitFor((x) => x.ev === 'remote' && x.on && x.url, 4000);
+            await waitUntil(() => rules().length === 1, 3000);
+            return /#([0-9a-f]{32})$/.exec(e.url)[1];
+        };
+        const turnOff = async (how) => {
+            app.clear();
+            if (how) await how(); else app.send({ cmd: 'remote', on: false });
+            await waitUntil(() => rules().length === 0 && !fs.existsSync(rsock), 3000);
+        };
+
+        await t('WP9 links and searches: a YouTube video link -> its id; another link -> null; words -> a search, capped', async () => {
+            const ID = 'dQw4w9WgXcQ';
+            ['https://www.youtube.com/watch?v=' + ID, 'https://youtu.be/' + ID + '?si=abc', 'youtube.com/watch?v=' + ID + '&t=42', 'https://m.youtube.com/shorts/' + ID,
+                'https://music.youtube.com/watch?v=' + ID + '&list=RD', 'https://www.youtube.com/live/' + ID, 'Look at this: https://youtu.be/' + ID, 'https://www.youtube-nocookie.com/embed/' + ID]
+                .forEach((s) => assert.strictEqual(parseLink(s), ID, s));
+            ['https://example.com/watch?v=' + ID, 'https://youtube.com.evil.example/watch?v=' + ID, 'https://www.youtube.com/watch?v=short', 'https://www.youtube.com/@channel',
+                'https://youtu.be/' + ID + 'x', 'http://evil.example/?u=https://youtu.be/' + ID].forEach((s) => assert.strictEqual(parseLink(s), null, s));
+            ['cats', 'javascript:alert(1)', 'Note: car videos', ID].forEach((s) => assert.strictEqual(parseLink(s), undefined, s));
+            assert.strictEqual(cleanQuery('  two\n\tlines  '), 'two lines');
+            // what would reach the HMI's recent-search labels: C1 controls, zero-width and direction marks, BOM
+            assert.strictEqual(cleanQuery('a\u0085b\u009fc\u200bd\u200fe\u202af\u202eg\u2066h\u2069i\ufeffj\u007fk'), 'a b c d e f g h i j k');
+            assert.strictEqual(cleanQuery('\u202e\u200b'), null, 'only marks: nothing');
+            assert.strictEqual(cleanQuery('Café 東京 музыка'), 'Café 東京 музыка', 'letters of every script kept');
+            assert.deepStrictEqual([cleanQuery(''), cleanQuery('   '), cleanQuery('x'.repeat(201)), cleanQuery(42), cleanQuery('x'.repeat(200)).length], [null, null, null, null, 200]);
+        });
+
+        await t('WP9 off by default: nothing listens, no remote.sock; a rule an earlier run left is removed at start, others kept', async () => {
+            fs.writeFileSync(nftState + '.json', JSON.stringify({ next: 10, rules: [{ h: 5, text: RULE }, { h: 6, text: 'iifname "usb0" accept' }] }));
+            dr.start();
+            await waitUntil(() => rules().length === 1, 3000);
+            assert.deepStrictEqual(rules(), ['iifname "usb0" accept'], 'ours gone, the other rule kept');
+            assert.deepStrictEqual(nftCalls(), ['-a list chain ip filter input', 'delete rule ip filter input handle 5']);
+            app = await client(dr.opts.sock);
+            assert.ok(await refused(), 'nothing on the port');
+            assert.ok(!fs.existsSync(rsock), 'no remote.sock');
+            app.send({ cmd: 'remote' });
+            assert.deepStrictEqual(await app.waitFor((x) => x.ev === 'remote'), { ev: 'remote', on: false, url: null, expires: 0 }, 'no on: only the state');
+            fs.writeFileSync(nftState + '.json', JSON.stringify({ next: 10, rules: [] }));
+        });
+
+        await t('WP9 on: refused while ctl.sock is open to every app (any app could open the port)', async () => {
+            shared = true;
+            app.clear();
+            app.send({ cmd: 'remote', on: true });
+            assert.deepStrictEqual(await app.waitFor((x) => x.ev === 'remote'), { ev: 'remote', on: false, url: null, expires: 0, error: 'the control socket is open to every app' });
+            await sleep(100);
+            assert.ok(await refused() && !fs.existsSync(rsock) && rules().length === 0, 'nothing opened');
+            shared = false;
+        });
+
+        await t('WP9 on: a 128-bit token in the URL fragment, one tagged rule, remote.sock 0600 handed to the web uid, 1 hour', async () => {
+            chowns9.length = 0;
+            const n0 = nftCalls().length;
+            token = await turnOn();
+            const e = app.evs.filter((x) => x.ev === 'remote' && x.url).slice(-1)[0];
+            assert.ok(new RegExp('^http://127\\.0\\.0\\.1:' + port + '/#[0-9a-f]{32}$').test(e.url) && e.url.length <= 62, e.url + ' (a QR code holds 62 bytes)');
+            assert.ok(e.expires > 3590 && e.expires <= 3600, 'expires ' + e.expires);
+            assert.deepStrictEqual(rules(), [RULE]);
+            const calls = nftCalls().slice(n0);
+            assert.deepStrictEqual(calls.filter((x) => x !== '-a list chain ip filter input'), ['insert rule ip filter input ' + RULE], 'listed, then one insert: ' + calls.join(' / '));
+            assert.strictEqual(fs.statSync(rsock).mode & 0o777, 0o600);
+            assert.deepStrictEqual(chowns9, [[rsock, process.getuid() || 1, 0]]);
+            const page = await req('GET', '/');
+            assert.strictEqual(page.status, 200);
+            assert.ok(/RideTube remote/.test(page.text) && !/(src|href)="?https?:/.test(page.text), 'the page, no external assets');
+            assert.ok(/script-src 'sha256-[A-Za-z0-9+/=]+'/.test(page.headers['content-security-policy']) && page.headers['cache-control'] === 'no-store', 'CSP with the script hash, no-store');
+            assert.ok(page.text.indexOf(token) < 0, 'the page itself carries no token');
+        });
+
+        await t('WP9 token: missing -> 401, wrong -> 401; the right one -> the status (what is playing)', async () => {
+            assert.strictEqual((await req('GET', '/api/status')).status, 401);
+            assert.strictEqual((await req('GET', '/api/status', { token: 'f'.repeat(32) })).status, 401);
+            assert.strictEqual((await req('GET', '/api/status', { headers: { Authorization: 'Bearer ' + token + 'x' } })).status, 401);
+            assert.strictEqual((await req('POST', '/api/send', { body: { text: 'cats' } })).status, 401, 'nothing sent without the token');
+            dr.state = 'playing'; dr.cur = { id: 'DemoVideo01', title: 'A <b>title</b>' }; dr.elapsed = 5000; dr.total = 60000;
+            const s = await req('GET', '/api/status', { token: token });
+            assert.deepStrictEqual([s.status, s.json], [200, { state: 'playing', id: 'DemoVideo01', title: 'A <b>title</b>', elapsed: 5000, total: 60000 }]);
+            dr.state = 'idle'; dr.cur = null; dr.elapsed = dr.total = 0;
+        });
+
+        await t('WP9 send: a link -> remote_do play, words -> remote_do search; other links, bad bodies, not JSON, past 16 KiB: refused', async () => {
+            app.clear();
+            const a = await req('POST', '/api/send', { token: token, body: { text: 'https://youtu.be/dQw4w9WgXcQ?si=x' } });
+            assert.deepStrictEqual([a.status, a.json], [200, { ok: true, did: 'play' }]);
+            assert.deepStrictEqual(await app.waitFor((x) => x.ev === 'remote_do'), { ev: 'remote_do', do: 'play', id: 'dQw4w9WgXcQ' });
+            app.clear();
+            const b = await req('POST', '/api/send', { token: token, body: { text: '  lofi\nbeats  ' } });
+            assert.deepStrictEqual([b.status, b.json], [200, { ok: true, did: 'search' }]);
+            assert.deepStrictEqual(await app.waitFor((x) => x.ev === 'remote_do'), { ev: 'remote_do', do: 'search', q: 'lofi beats' });
+            app.clear();
+            const bad = [
+                [{ token: token, body: { text: 'https://example.com/x' } }, 400], [{ token: token, body: { text: 'x'.repeat(201) } }, 400],
+                [{ token: token, body: { q: 'cats' } }, 400], [{ token: token, body: '{bad json', headers: { 'Content-Type': 'application/json' } }, 400],
+                [{ token: token, body: 'text=cats', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 415],
+                [{ token: token, body: JSON.stringify({ text: 'cats', pad: 'x'.repeat(17 * 1024) }), headers: { 'Content-Type': 'application/json' } }, 413]];
+            for (const [o, code] of bad) assert.strictEqual((await req('POST', '/api/send', o)).status, code, JSON.stringify(o).slice(0, 80));
+            assert.strictEqual((await req('GET', '/api/send', { token: token })).status, 405);
+            assert.strictEqual((await req('GET', '/api/state', { token: token })).status, 404, 'no other path');
+            await sleep(100);
+            assert.deepStrictEqual(app.evs.filter((x) => x.ev === 'remote_do'), [], 'nothing reached the app');
+        });
+
+        await t('WP9 remote.sock: only search, play and status pass; root checks the id and the query again', async () => {
+            const n0 = app.evs.length;
+            const ph = await client(rsock);   // (as the child: it is remote.sock's one client)
+            const ask = async (o) => { ph.clear(); ph.send(o); return ph.waitFor((x) => x.rid === o.rid); };
+            for (const [i, cmd] of ['auth', 'sign_out', 'feed', 'positions', 'send_logs', 'stop', 'pause', 'remote', 'hello', 'thumb', 'playlists'].entries()) {
+                assert.deepStrictEqual(await ask({ rid: i, cmd: cmd, which: 'home', on: false, id: 'DemoVideo01' }), { rid: i, error: 'Not allowed' }, cmd);
+            }
+            assert.deepStrictEqual(await ask({ rid: 20, cmd: 'play', id: 'nope' }), { rid: 20, error: 'That link is not a YouTube video' });
+            assert.deepStrictEqual(await ask({ rid: 21, cmd: 'play', id: { a: 1 } }), { rid: 21, error: 'That link is not a YouTube video' });
+            assert.deepStrictEqual(await ask({ rid: 22, cmd: 'search', q: 'x'.repeat(201) }), { rid: 22, error: 'Type a search (at most 200 characters)' });
+            assert.deepStrictEqual(await ask({ rid: 23, cmd: 'search', q: ['cats'] }), { rid: 23, error: 'Type a search (at most 200 characters)' });
+            ph.clear(); ph.write('not json\n');
+            assert.deepStrictEqual(await ph.waitFor((x) => x.error), { rid: null, error: 'Not allowed' });
+            assert.deepStrictEqual((await ask({ rid: 24, cmd: 'status' })).status.state, 'idle');
+            await sleep(100);
+            assert.deepStrictEqual(app.evs.slice(n0).filter((x) => x.ev !== 'remote'), [], 'the app got nothing: no auth, feed, positions or stop');
+            assert.ok(dr.account && !fs.existsSync(dr.opts.accountFile), 'no sign-in started');
+            // many short lines in one write: fine (the 4 KiB cap is per line)
+            ph.clear(); ph.write(Array.from({ length: 200 }, (x, i) => JSON.stringify({ rid: 100 + i, cmd: 'status' })).join('\n') + '\n');
+            await waitUntil(() => ph.evs.filter((x) => x.status).length === 200, 3000);
+            ph.clear(); ph.write('x'.repeat(5000));
+            await waitUntil(() => ph.destroyed, 2000);
+            assert.ok(rlogs.indexOf('remote: remote.sock line too long') >= 0);
+            await sleep(1300);   // the child connects again
+            assert.strictEqual((await req('GET', '/api/status', { token: token })).status, 200, 'the child is back');
+        });
+
+        await t('WP9 lockout: 10 wrong tokens from an address -> 429 for wrong ones and none; the right token always passes', async () => {
+            // (2 wrong ones in the token test above: 8 more make 10)
+            for (let i = 0; i < 8; i++) assert.strictEqual((await req('GET', '/api/status', { token: i.toString(16).repeat(32) })).status, 401, 'try ' + (i + 3));
+            assert.strictEqual((await req('GET', '/api/status', { token: 'e'.repeat(32) })).status, 429);
+            assert.strictEqual((await req('GET', '/api/status')).status, 429);
+            assert.strictEqual((await req('GET', '/api/status', { token: token })).status, 200, 'the passenger is never locked out');
+            assert.strictEqual((await req('POST', '/api/send', { token: token, body: { text: 'cats' } })).status, 200);
+        });
+
+        await t('WP9 phone actions: at most one a second (each search costs a fetch); status is not one', async () => {
+            dr.rc.o.remoteActMs = 1000;
+            await sleep(1000);
+            app.clear();
+            const a = await req('POST', '/api/send', { token: token, body: { text: 'cats' } });
+            const b = await req('POST', '/api/send', { token: token, body: { text: 'dogs' } });
+            assert.deepStrictEqual([a.status, b.status, b.json], [200, 422, { error: 'Too fast: wait a moment' }]);
+            assert.strictEqual((await req('GET', '/api/status', { token: token })).status, 200);
+            await sleep(100);
+            assert.deepStrictEqual(app.evs.filter((x) => x.ev === 'remote_do').map((x) => x.q), ['cats'], 'the second never reached the app');
+            await sleep(1000);
+            assert.strictEqual((await req('POST', '/api/send', { token: token, body: { text: 'dogs' } })).status, 200, 'a second later: fine');
+            dr.rc.o.remoteActMs = 0;
+        });
+
+        await t('WP9 the page in the app\'s language: every word in every language, html lang, the CSP hash of the script as served', async () => {
+            const { LANGS } = require('../remote.js');
+            const html = fs.readFileSync(path.join(__dirname, '..', 'remote.html'), 'utf8'), src = fs.readFileSync(path.join(__dirname, '..', 'remote.js'), 'utf8');
+            const un = (x) => x.replace(/\\'/g, "'");
+            const keys = {};
+            [[html, /data-t="([^"]+)"/g], [html, /T\('((?:[^'\\]|\\.)*)'\)/g], [src, /error: '((?:[^'\\]|\\.)*)'/g], [src, /new Error\('([A-Z](?:[^'\\]|\\.)*)'\)/g], [html, /new Error\('([A-Z](?:[^'\\]|\\.)*)'\)/g], [html, /\|\| '((?:[^'\\]|\\.)*)'\)/g]]
+                .forEach(([text, re]) => { let m; while ((m = re.exec(text))) keys[un(m[1])] = true; });
+            const want = Object.keys(keys).sort();
+            assert.ok(want.length > 25 && want.indexOf('Too fast: wait a moment') >= 0 && want.indexOf('Send to the car') >= 0, want.join('|'));
+            const strings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'remote-strings.json'), 'utf8'));
+            assert.deepStrictEqual(Object.keys(strings).sort(), LANGS.filter((l) => l !== 'en').sort(), 'every RideTube language but English (the keys)');
+            LANGS.filter((l) => l !== 'en').forEach((l) => {
+                assert.deepStrictEqual(Object.keys(strings[l]).sort(), want, l + ': every phone word, no stale one');
+                Object.keys(strings[l]).forEach((k) => assert.ok(strings[l][k].trim() && strings[l][k] !== k, l + ': ' + k));
+                assert.ok(strings[l]['Type a search (at most 200 characters)'].indexOf('200') >= 0, l + ': the number kept');
+            });
+            const hashOf = (page) => require('crypto').createHash('sha256').update(/<script>([\s\S]*?)<\/script>/.exec(page)[1]).digest('base64');
+            for (const [lang, served, word] of [['fr', 'fr', 'Envoyer à la voiture'], ['zh-CN', 'zh-CN', '发送到汽车'], ['xx"><script>', 'en', null], [undefined, 'en', null]]) {
+                await turnOff();
+                token = await turnOn(lang);
+                const page = await req('GET', '/');
+                assert.ok(page.text.indexOf('<html lang="' + served + '">') >= 0, lang + ': html lang ' + served);
+                const words = JSON.parse(/<script type="application\/json" id="words">([\s\S]*?)<\/script>/.exec(page.text)[1]);
+                assert.strictEqual(word ? words['Send to the car'] : JSON.stringify(words), word || '{}', String(lang));
+                assert.strictEqual((page.text.match(/<script>/g) || []).length, 1, 'one script that runs');
+                assert.ok(page.headers['content-security-policy'].indexOf("script-src 'sha256-" + hashOf(page.text) + "'") >= 0, lang + ': the CSP hash matches the script');
+            }
+            const { buildPage } = require('../remote.js');
+            const evil = buildPage(html, { fr: { 'Send to the car': '</script><script>alert(1)</script>', 'Too long': "$' $& $$" } }, 'fr').page;
+            assert.strictEqual((evil.match(/<\/script>/g) || []).length, 2, 'a word cannot close its block');
+            assert.strictEqual(JSON.parse(/<script type="application\/json" id="words">([\s\S]*?)<\/script>/.exec(evil)[1])['Too long'], "$' $& $$", 'a $ in a word stays as written');
+        });
+
+        await t('WP9 off: the rule removed, nothing listens, remote.sock gone; on again: a new token, the old one refused', async () => {
+            await turnOff();
+            assert.deepStrictEqual(app.evs.filter((x) => x.ev === 'remote').slice(-1)[0], { ev: 'remote', on: false, url: null, expires: 0 });
+            assert.ok(await refused(), 'nothing on the port');
+            const old = token;
+            token = await turnOn();
+            assert.notStrictEqual(token, old);
+            assert.strictEqual((await req('GET', '/api/status', { token: old })).status, 401, 'replayed after off: refused');
+            assert.strictEqual((await req('GET', '/api/status', { token: token })).status, 200, 'the lockout went with the old run');
+        });
+
+        await t('WP9 the hotspot: no address -> on, url null; one comes -> the url', async () => {
+            await turnOff();
+            ifs = {};
+            app.clear();
+            app.send({ cmd: 'remote', on: true });
+            const e = await app.waitFor((x) => x.ev === 'remote' && x.on);
+            assert.strictEqual(e.url, null);
+            await sleep(300);
+            assert.ok(!app.evs.some((x) => x.ev === 'remote' && x.url), 'no url without the hotspot');
+            assert.deepStrictEqual(rules(), [], 'no address: the port stays shut');
+            ifs = { wlan_bridge: [{ family: 4, address: '127.0.0.1', internal: false }] };   // (Node 18.0: a number)
+            await app.waitFor((x) => x.ev === 'remote' && x.url, 3000);
+            await waitUntil(() => rules().length === 1, 3000);
+            ifs = {};
+            await app.waitFor((x) => x.ev === 'remote' && x.on && !x.url, 3000);
+            await waitUntil(() => rules().length === 0, 3000);
+            ifs = { wlan_bridge: [{ family: 'IPv4', address: '127.0.0.1', internal: false }] };
+            await waitUntil(() => rules().length === 1, 3000);
+        });
+
+        await t('WP9 the port held by another program: no rule, no url; freed: ours, then the rule', async () => {
+            await turnOff();
+            const blocker = net.createServer();
+            await new Promise((r) => blocker.listen(port, '127.0.0.1', r));
+            app.clear();
+            app.send({ cmd: 'remote', on: true });
+            await app.waitFor((x) => x.ev === 'remote' && x.on);
+            await sleep(600);
+            assert.deepStrictEqual([rules(), app.evs.some((x) => x.ev === 'remote' && x.url)], [[], false], 'not ours: shut');
+            assert.ok(rlogs.some((l) => /cannot listen on 127\.0\.0\.1:\d+: EADDRINUSE/.test(l)), 'logged');
+            await new Promise((r) => blocker.close(r));
+            await app.waitFor((x) => x.ev === 'remote' && x.url, 8000);
+            await waitUntil(() => rules().length === 1, 3000);
+        });
+
+        await t('WP9 a rule removal that fails (nft busy) is tried again until the rule is gone', async () => {
+            assert.deepStrictEqual(rules(), [RULE]);
+            fs.writeFileSync(nftState + '.busy', '2');
+            app.clear();
+            app.send({ cmd: 'remote', on: false });
+            await app.waitFor((x) => x.ev === 'remote' && !x.on);
+            await sleep(30);
+            assert.deepStrictEqual(rules(), [RULE], 'still there after the first try');
+            await waitUntil(() => rules().length === 0, 3000);
+            assert.ok(rlogs.some((l) => /^remote: rule not removed, tried again: nft -a list .*busy/.test(l)), 'logged');
+            const r2 = new (require('../remote.js').Remote)({ nft: [process.execPath, path.join(__dirname, 'fake_nft.js'), nftState] }, { log: () => {} });
+            fs.writeFileSync(nftState + '.busy', '1');
+            await r2.handles().then(() => assert.fail('resolved'), (err) => assert.ok(/busy/.test(err.message), 'busy is not "no firewall"'));
+            fs.unlinkSync(nftState + '.busy');
+        });
+
+        await t('WP9 off by itself: the time runs out; the app going away; the server dying; at exit (close) the rule goes', async () => {
+            await turnOff();
+            dr.rc.o.remoteMs = 300;
+            await turnOn();
+            await turnOff(() => sleep(10));
+            assert.ok(rlogs.indexOf('remote: off (time is up)') >= 0);
+            dr.rc.o.remoteMs = 60 * 60000;
+            await turnOn();
+            await turnOff(async () => { dr.rc.run.child.kill('SIGKILL'); });
+            assert.deepStrictEqual(app.evs.filter((x) => x.ev === 'remote').slice(-1)[0], { ev: 'remote', on: false, url: null, expires: 0, error: 'the server stopped' });
+            await turnOn();
+            await turnOff(async () => { app.destroy(); });
+            assert.ok(rlogs.indexOf('remote: off (the app went away)') >= 0);
+            app = await client(dr.opts.sock);
+            await turnOn();
+            await dr.close();
+            assert.deepStrictEqual([rules(), fs.existsSync(rsock), await refused()], [[], false, true], 'exit: no rule, nothing listens');
+        });
+
+        await t('WP9 no unit firewall (the chain cannot be listed): no rule, logged, the remote still on', async () => {
+            fs.writeFileSync(nftState + '.fail', 'x');
+            const r2 = new (require('../remote.js').Remote)({ nft: [process.execPath, path.join(__dirname, 'fake_nft.js'), nftState] }, { log: (m) => rlogs.push(m) });
+            assert.strictEqual(await r2.handles(), null);
+            await r2.ensureRule('wlan_bridge', 8471);
+            assert.deepStrictEqual(rules(), []);
+            assert.ok(rlogs.some((l) => /^remote: nft -a list chain ip filter input: Error: No such file/.test(l)), rlogs.slice(-3).join('\n'));
+            fs.unlinkSync(nftState + '.fail');
+        });
+
+        await t('WP9 web uid: its own, picked from the top down, never the fetch uid, never given the internet', async () => {
+            const wo = Object.assign({}, uo, { stateDir: path.join(rroot, 'uid-state') });
+            assert.strictEqual(pickFetchUid(wo), 30000);
+            assert.strictEqual(pickUid(wo, 'web'), 60000);
+            const rd = (f) => fs.readFileSync(path.join(wo.stateDir, f), 'utf8');
+            assert.deepStrictEqual(JSON.parse(rd('uids.json')), { fetch: 30000, web: 60000 });
+            assert.strictEqual(rd('internet-uids'), '30000\n', 'the uplink lets out the fetch uid only');
+            assert.strictEqual(pickFetchUid(wo), 30000, 'kept');
+            assert.deepStrictEqual(JSON.parse(rd('uids.json')), { fetch: 30000, web: 60000 }, 'the fetch pick keeps the web uid');
+            fs.appendFileSync(path.join(fsRoot, 'etc/passwd'), 'late:x:60000:60000::/:/bin/false\n');
+            assert.strictEqual(pickUid(wo, 'web'), 59999, 'taken since: the next one down');
+            fs.writeFileSync(path.join(wo.stateDir, 'uids.json'), JSON.stringify({ fetch: 59999, web: 59999 }));
+            assert.strictEqual(pickUid(wo, 'web'), 59998, 'never the fetch uid');
+            assert.strictEqual(fs.readFileSync(path.join(fsRoot, 'var/opt/mgu-uplink/uids.d/jap-ridetube-d'), 'utf8').trim() !== '59998', true);
+            fs.writeFileSync(path.join(wo.stateDir, 'uids.json'), JSON.stringify({ fetch: 61000, web: 59998 }));
+            assert.strictEqual(pickFetchUid(wo), 61000, 'a fetch uid kept from before 0.5.0 above the web range: kept (no re-pick)');
+            fs.writeFileSync(path.join(wo.stateDir, 'uids.json'), JSON.stringify({ fetch: 30000, web: 61000 }));
+            assert.strictEqual(pickUid(wo, 'web'), 59999, 'a web uid above the range: picked again (the top free one)');
+        });
+        fs.chownSync = realChown9;
     }
 
     c.destroy();

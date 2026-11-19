@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>RideTube remote</title>
+<!--words-->
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#151515;--mut:#666;--line:#d9d9de;--card:#f4f4f5;--acc:#cc0000;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#0f0f0f;--fg:#f1f1f1;--mut:#a0a0a0;--line:#333;--card:#1c1c1f;--acc:#ff3b3b;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:34rem;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.4rem;margin:0 0 16px}
+.card{background:var(--card);border-radius:14px;padding:14px 16px;margin:0 0 18px}
+.lbl{color:var(--mut);font-size:.9rem;margin:0 0 2px}
+#title{font-weight:600;overflow-wrap:anywhere;margin:0}
+#time{color:var(--mut);font-size:.9rem;margin:4px 0 0}
+label{display:block;font-weight:600;margin:0 0 8px}
+textarea{width:100%;min-height:5.5em;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;resize:vertical}
+button{margin-top:12px;width:100%;min-height:48px;font:inherit;font-weight:600;color:#fff;background:var(--acc);border:0;border-radius:24px}
+button:disabled{opacity:.5}
+#msg{min-height:1.5em;margin:12px 0 0}
+#msg.bad,#locked{color:var(--bad)}
+.hint{color:var(--mut);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<h1 data-t="RideTube remote">RideTube remote</h1>
+<div id="app">
+  <div class="card" aria-live="polite">
+    <p class="lbl" id="state" data-t="Connecting to the car...">Connecting to the car...</p>
+    <p id="title"></p>
+    <p id="time"></p>
+  </div>
+  <form id="form">
+    <label for="text" data-t="Paste a YouTube link, or type a search">Paste a YouTube link, or type a search</label>
+    <textarea id="text" maxlength="2048" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://youtu.be/..."></textarea>
+    <button id="send" type="submit" data-t="Send to the car">Send to the car</button>
+    <p id="msg" role="status"></p>
+  </form>
+  <p class="hint" data-t="A link plays on the car. Words search on the car. The car decides what it can show while driving.">A link plays on the car. Words search on the car. The car decides what it can show while driving.</p>
+</div>
+<p id="locked" hidden data-t="Scan the code on the car's screen again (RideTube, Phone remote). The phone must be on the car's Wi-Fi hotspot.">Scan the code on the car's screen again (RideTube, Phone remote). The phone must be on the car's Wi-Fi hotspot.</p>
+</main>
+<script>
+(function () {
+'use strict';
+var KEY = 'ridetube-remote';
+var $ = function (id) { return document.getElementById(id); };
+// the words in the page's language (the car puts them in #words); a key without one stays English
+var W = {};
+try { W = JSON.parse($('words').textContent) || {}; } catch (e) { W = {}; }
+var T = function (k) { return Object.prototype.hasOwnProperty.call(W, k) && typeof W[k] === 'string' ? W[k] : k; };
+Array.prototype.forEach.call(document.querySelectorAll('[data-t]'), function (el) { el.textContent = T(el.getAttribute('data-t')); });
+document.title = T('RideTube remote');
+var m = /^#([0-9a-f]{32})$/.exec(location.hash);
+var token = m ? m[1] : null;
+try { if (m) { sessionStorage.setItem(KEY, token); } else { token = sessionStorage.getItem(KEY); } } catch (e) { /* private mode: this page only */ }
+if (m) { history.replaceState(null, '', location.pathname); }
+window.addEventListener('hashchange', function () { if (/^#[0-9a-f]{32}$/.test(location.hash)) { location.reload(); } });
+var STATES = { idle: T('Nothing playing'), preparing: T('Getting it ready'), playing: T('Playing'), paused: T('Paused'), ended: T('Finished'), error: T('Could not play') };
+var timer = null;
+function locked() {
+  try { sessionStorage.removeItem(KEY); } catch (e) { /* none */ }
+  token = null;
+  clearInterval(timer);
+  $('app').hidden = true;
+  $('locked').hidden = false;
+}
+function api(method, path, body) {
+  var headers = { Authorization: 'Bearer ' + token };
+  if (body) { headers['Content-Type'] = 'application/json'; }
+  return fetch(path, { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
+    .then(function (r) {
+      if (r.status === 401) { locked(); throw new Error(''); }
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { throw new Error(j.error || 'Something went wrong'); }
+        return j;
+      });
+    }, function () { throw new Error('The car did not answer'); });   // (no network: the phone left the hotspot)
+}
+function clock(ms) {
+  var s = Math.max(0, Math.floor((ms || 0) / 1000)), h = Math.floor(s / 3600), mm = Math.floor(s / 60) % 60, ss = s % 60;
+  var p = function (n) { return (n < 10 ? '0' : '') + n; };
+  return h ? h + ':' + p(mm) + ':' + p(ss) : mm + ':' + p(ss);
+}
+function status() {
+  if (!token || document.hidden) { return; }
+  api('GET', '/api/status').then(function (s) {
+    $('state').textContent = STATES[s.state] || STATES.idle;
+    $('title').textContent = s.title && s.state !== 'idle' ? String(s.title) : '';
+    $('time').textContent = s.total && (s.state === 'playing' || s.state === 'paused') ? clock(s.elapsed) + ' / ' + clock(s.total) : '';
+  }, function (e) {
+    if (e.message) { $('state').textContent = T('The car does not answer: the phone remote may be off'); }
+  });
+}
+function say(text, bad) { $('msg').textContent = text; $('msg').className = bad ? 'bad' : ''; }
+$('form').onsubmit = function (ev) {
+  ev.preventDefault();
+  var v = $('text').value.trim();
+  if (!v) { return; }
+  $('send').disabled = true;
+  say('');
+  api('POST', '/api/send', { text: v }).then(function (j) {
+    say(j.did === 'play' ? T('Sent: the car plays it') : T('Sent: the car shows the results'));
+    $('text').value = '';
+    setTimeout(status, 1500);
+  }, function (e) { if (e.message) { say(T(e.message), true); } }).then(function () { $('send').disabled = false; });
+};
+if (!token) { locked(); return; }
+status();
+timer = setInterval(status, 3000);
+document.addEventListener('visibilitychange', status);
+})();
+</script>
+</body>
+</html>

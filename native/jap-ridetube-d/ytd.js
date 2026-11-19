@@ -29,7 +29,7 @@ const VERSION = '0.4.0';   // component.json's (test_ytd.js checks): sent with a
 const BUILT = '2026-11-19';
 // what `hello` says this build answers for real. The frozen names: health, related, hist (feed hist|liked), ytdlp,
 // remote, proxy, stream. A package adds its name here (through the integrator) once its command works
-const CAPS = ['related', 'hist', 'health'];
+const CAPS = ['related', 'hist', 'health', 'remote'];
 const LANG_RE = /^[a-z]{2}$/, REGION_RE = /^[A-Z]{2}$/;   // hello's lang ("ru") and region ("RU")
 // the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
 const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
@@ -274,25 +274,36 @@ function writeIfChanged(file, text, mode) {
     fs.writeFileSync(file + '.tmp', text, { mode: mode });
     fs.renameSync(file + '.tmp', file);
 }
-// the kept fetch uid while nothing else holds it, else a new pick; written for the uplink. null: none (logged)
-function pickFetchUid(o) {
-    const kept = Number((readJson(path.join(o.stateDir, 'uids.json')) || {}).fetch);
+// the kept uid of a role ('fetch', or 'web': the phone remote's server, remote.js) while nothing else holds it, else a
+// new pick; kept in state/uids.json ({fetch, web}). Only the fetch uid is written for the uplink (internet-uids, uids.d):
+// the web uid has no internet. Each role's uid counts as taken for the other. The fetch uid: the lowest free above
+// MainApp's app uid ranges, as mgu-updater picks its own; the web uid: the highest free below MAX_UID, so a later pick
+// by another component going up (which cannot see a uid in no uplink drop-in) does not land on it. null: none (logged)
+function pickUid(o, key) {
+    const map = readJson(path.join(o.stateDir, 'uids.json')) || {};
+    const kept = Number(map[key]), name = key === 'fetch' ? 'internet uid' : key + ' uid';
+    const others = Object.keys(map).filter((k) => k !== key).map((k) => Number(map[k])).filter(isId);
     const cfg = mainappRanges(o);
     const inRange = (u) => inRanges(cfg, u);
+    const taken = (procs) => { const t = takenIds(o, cfg, procs); others.forEach((u) => { t[u] = true; }); return t; };
     let uid = null;
-    if (isId(kept) && !takenIds(o, cfg, false)[kept] && !inRange(kept)) uid = kept;
+    if (isId(kept) && (key === 'fetch' || kept <= MAX_UID) && !taken(false)[kept] && !inRange(kept)) uid = kept;   // (a fetch uid kept from before 0.5.0 may sit above)
     else if (cfg) {
-        const all = takenIds(o, cfg, true);
-        let u = Math.max.apply(null, cfg.ranges.map((r) => r.max)) + 1;
-        while (u <= MAX_UID && (all[u] || inRange(u))) u++;
-        if (u <= MAX_UID) { uid = u; o.log('internet uid: ' + u + (isId(kept) ? ' (' + kept + ' is taken)' : '')); }
+        const all = taken(true), up = key === 'fetch', step = up ? 1 : -1, low = Math.max.apply(null, cfg.ranges.map((r) => r.max)) + 1;
+        let u = up ? low : MAX_UID;
+        while (u <= MAX_UID && u >= low && (all[u] || inRange(u))) u += step;
+        if (u <= MAX_UID && u >= low) { uid = u; o.log(name + ': ' + u + (isId(kept) ? ' (' + kept + ' is taken)' : '')); }
     }
     if (uid === null) {
-        o.log('internet uid: none: ' + (cfg ? 'no free uid below ' + MAX_UID : "MainApp's config/base.json (its app uid ranges) cannot be read"));
+        o.log(name + ': none: ' + (cfg ? 'no free uid below ' + MAX_UID : "MainApp's config/base.json (its app uid ranges) cannot be read"));
         return null;
     }
     if (!fs.existsSync(o.stateDir)) { mkdirp(path.dirname(o.stateDir)); fs.mkdirSync(o.stateDir, 0o700); }
-    writeIfChanged(path.join(o.stateDir, 'uids.json'), JSON.stringify({ fetch: uid }) + '\n', 0o644);
+    const next = {};
+    Object.keys(map).forEach((k) => { if (/^[a-z]{1,16}$/.test(k) && isId(Number(map[k]))) next[k] = Number(map[k]); });
+    next[key] = uid;
+    writeIfChanged(path.join(o.stateDir, 'uids.json'), JSON.stringify(next) + '\n', 0o644);
+    if (key !== 'fetch') return uid;
     writeIfChanged(path.join(o.stateDir, 'internet-uids'), uid + '\n', 0o644);
     const uplink = path.join(o.toolRoot, 'mgu-uplink');
     if (fs.existsSync(path.join(uplink, 'current')) || fs.existsSync(path.join(uplink, 'uids.d'))) {
@@ -300,6 +311,7 @@ function pickFetchUid(o) {
     }
     return uid;
 }
+function pickFetchUid(o) { return pickUid(o, 'fetch'); }
 // one request in a child as uid (fetchCmd: ytd.js --fetch). The request, secrets and all, goes on its stdin
 // (argv and env show in ps); {status, body} or {error} comes back on its stdout. Killed past the timeout.
 function fetchRequest(o, uid, req) {
@@ -1257,6 +1269,12 @@ function Daemon(o) {
     this.childFetch = !this.opts.ytRequest;
     if (this.childFetch) this.opts.ytRequest = (m, u, h, b, t) => this.fetch({ method: m, url: u, headers: h, body: b, timeoutMs: t });
     this.fetchUid = null;
+    this.webUid = null;    // the phone remote's server (remote.js), picked when it is first turned on
+    this.rc = new (require('./remote.js').Remote)(this.opts, {
+        log: this.log, emit: (o) => this.emit(o), hasApp: () => !!this.client, shared: () => this.sockShared(), idRe: ID_RE,
+        uid: () => this.remoteUid(),
+        status: () => ({ state: this.state, id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, elapsed: this.elapsed, total: this.total })
+    });
     this.account = new Account(this.opts, (o) => this.emit(o), () => tvClient(this.hl, this.gl));
 }
 // the fetch uid (picked on first need; none: an error naming why, never a crash)
@@ -1499,6 +1517,7 @@ Daemon.prototype.start = async function () {
     this.checkCacheDir();
     try { mkdirp(this.opts.logDir); } catch (e) { this.log('log dir: ' + e.message); }
     this.listen();
+    this.rc.cleanup();   // a phone remote rule an earlier run left (a crash): removed; nothing listens until it is turned on
     // the uplink learns our fetch uid at start (its 5 s rescan), before anyone signs in
     if (this.childFetch && this.fetchUid === null) { try { this.fetchUid = pickFetchUid(this.opts); } catch (e) { this.log('internet uid: ' + e.message); } }
     this.timers.push(setInterval(() => this.guard(() => this.watchdog()), 1000));
@@ -1563,7 +1582,7 @@ Daemon.prototype.appUid = function () {
 };
 Daemon.prototype.okAppUid = function (u) {
     const cfg = this.appRanges();
-    return isId(u) && u <= MAX_UID && u !== this.fetchUid && (!cfg || inRanges(cfg, u));
+    return isId(u) && u <= MAX_UID && u !== this.fetchUid && u !== this.webUid && (!cfg || inRanges(cfg, u));
 };
 // the last good app uid, kept in state/app-uid.json (root's): a failed registry read keeps it, a restart too
 Daemon.prototype.knownAppUid = function () {
@@ -1680,6 +1699,7 @@ Daemon.prototype.onClient = function (c) {
         if (this.client !== c) return;
         this.client = null;
         this.log('client gone: stop');
+        this.rc.off('the app went away');
         this.stop('idle').catch((e) => this.log('stop: ' + e));
     });
 };
@@ -1720,7 +1740,7 @@ Daemon.prototype.onLine = function (line) {
     case 'health': return this.health();
     case 'related': return this.related(m.id);
     case 'ytdlp': return this.ytdlp(m.auto);
-    case 'remote': return this.remote(m.on);   // 0.5.0
+    case 'remote': return this.remote(m.on, m.lang);   // 0.5.0
     case 'proxy': return this.proxy(m.mode);   // 0.5.0
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
     }
@@ -1767,7 +1787,15 @@ Daemon.prototype.related = async function (id) {
     return this.emit({ ev: 'related', id: id, items: items });
 };
 Daemon.prototype.ytdlp = function (auto) { return this.notImplemented('ytdlp'); };            // WP6
-Daemon.prototype.remote = function (on) { return this.notImplemented('remote'); };            // WP9, 0.5.0
+// `remote` {on} -> remote{on, url, expires} (remote.js; on not a bool: only the state). WP9, 0.5.0
+Daemon.prototype.remote = function (on, lang) { return this.rc.set(on, lang); };
+// the web uid (remote.js's server): its own, never the fetch uid nor an app's; throws when there is none
+Daemon.prototype.remoteUid = function () {
+    if (this.opts.noSetuid) return process.getuid() || 1;   // (tests, not root: the child runs as ourselves)
+    if (this.webUid === null) this.webUid = pickUid(this.opts, 'web');
+    if (this.webUid === null || this.webUid === this.fetchUid) throw new Error('no web uid on the car (see the log)');
+    return this.webUid;
+};
 Daemon.prototype.proxy = function (mode) { return this.notImplemented('proxy'); };            // WP11, 0.5.0
 Daemon.prototype.setState = function (s) {
     this.state = s;
@@ -2538,12 +2566,14 @@ Daemon.prototype.close = async function () {
     [this.spare, this.extracting].forEach((x) => { if (x) { try { x.child.kill('SIGKILL'); } catch (e) { /* gone */ } } });
     this.spare = this.extracting = null;
     this.account.close();
+    const rc = this.rc.close();   // the phone remote off and its rule removed, alongside the audio release (4 s exit)
     await this.stop(null);
+    await rc;
     if (this.client) this.client.destroy();
     if (this.server) this.server.close();
 };
 
-module.exports = { BUILT: BUILT, clockBehind: clockBehind, qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { BUILT: BUILT, clockBehind: clockBehind, qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, pickUid: pickUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the head unit's date (YYYY-MM-DD) when its clock is provably wrong (before BUILT), else null. A clock ahead of real
 // time cannot be proven wrong: it gets nothing

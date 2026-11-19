@@ -197,5 +197,22 @@
   "Opens the keyboard": "Открывает клавиатуру",
   "Clear recent searches": "Очистить недавние запросы",
   "Menu": "Меню",
-  "Account, settings, logs": "Аккаунт, настройки, журналы"
+  "Account, settings, logs": "Аккаунт, настройки, журналы",
+  "Phone remote": "Пульт на телефоне",
+  "Please wait...": "Подождите...",
+  "Switched on": "Включён",
+  "Switched off": "Выключен",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Подключите телефон к точке доступа Wi-Fi автомобиля",
+  "2. Scan this code with its camera": "2. Отсканируйте этот код камерой телефона",
+  "3. Paste a YouTube link or type a search, then send": "3. Вставьте ссылку YouTube или введите запрос и отправьте",
+  "Address {address} · turns off by itself in {minutes} min": "Адрес {address} · выключится сам через {minutes} мин",
+  "Anyone with this code can send videos while it is on": "Любой, у кого есть этот код, может отправлять видео, пока пульт включён",
+  "Turn off": "Выключить",
+  "Waiting for the car's Wi-Fi hotspot": "Ожидание точки доступа Wi-Fi автомобиля",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Включите точку доступа Wi-Fi автомобиля, и код появится здесь",
+  "A passenger's phone sends videos and searches to RideTube": "Телефон пассажира отправляет видео и запросы в RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Телефон подключается к точке доступа Wi-Fi автомобиля и сканирует показанный здесь код; страница открывается с самого автомобиля.",
+  "Could not turn it on: {error}": "Не удалось включить: {error}",
+  "Turn on": "Включить",
+  "To switch it, press Phone remote in the menu again": "Чтобы включить или выключить, ещё раз нажмите «Пульт на телефоне» в меню"
 }

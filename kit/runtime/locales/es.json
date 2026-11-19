@@ -197,5 +197,22 @@
   "Opens the keyboard": "Abre el teclado",
   "Clear recent searches": "Borrar búsquedas recientes",
   "Menu": "Menú",
-  "Account, settings, logs": "Cuenta, ajustes, logs"
+  "Account, settings, logs": "Cuenta, ajustes, logs",
+  "Phone remote": "Mando con el móvil",
+  "Please wait...": "Un momento...",
+  "Switched on": "Activado",
+  "Switched off": "Desactivado",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Conecta el móvil al punto de acceso Wi-Fi del coche",
+  "2. Scan this code with its camera": "2. Escanea este código con su cámara",
+  "3. Paste a YouTube link or type a search, then send": "3. Pega un enlace de YouTube o escribe una búsqueda y envía",
+  "Address {address} · turns off by itself in {minutes} min": "Dirección {address} · se apaga solo en {minutes} min",
+  "Anyone with this code can send videos while it is on": "Cualquiera con este código puede enviar vídeos mientras esté activado",
+  "Turn off": "Desactivar",
+  "Waiting for the car's Wi-Fi hotspot": "Esperando el punto de acceso Wi-Fi del coche",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Activa el punto de acceso Wi-Fi del coche y el código aparecerá aquí",
+  "A passenger's phone sends videos and searches to RideTube": "El móvil de un pasajero envía vídeos y búsquedas a RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "El móvil se conecta al punto de acceso Wi-Fi del coche y escanea un código que se muestra aquí; la página viene del propio coche.",
+  "Could not turn it on: {error}": "No se pudo activar: {error}",
+  "Turn on": "Activar",
+  "To switch it, press Phone remote in the menu again": "Para activarlo o desactivarlo, pulsa Mando con el móvil en el menú otra vez"
 }

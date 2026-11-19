@@ -148,6 +148,11 @@
         ],
         [
           "button",
+          "BTN_REMOTE",
+          "Phone remote"
+        ],
+        [
+          "button",
           "BTN_LOGS",
           "Send logs to the developer"
         ],

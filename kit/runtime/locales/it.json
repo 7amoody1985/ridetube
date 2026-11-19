@@ -197,5 +197,22 @@
   "Opens the keyboard": "Apre la tastiera",
   "Clear recent searches": "Cancella ricerche recenti",
   "Menu": "Menu",
-  "Account, settings, logs": "Account, impostazioni, log"
+  "Account, settings, logs": "Account, impostazioni, log",
+  "Phone remote": "Telecomando dal telefono",
+  "Please wait...": "Un attimo...",
+  "Switched on": "Attivo",
+  "Switched off": "Disattivo",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Collega il telefono all'hotspot Wi-Fi dell'auto",
+  "2. Scan this code with its camera": "2. Scansiona questo codice con la fotocamera",
+  "3. Paste a YouTube link or type a search, then send": "3. Incolla un link di YouTube o scrivi una ricerca, poi invia",
+  "Address {address} · turns off by itself in {minutes} min": "Indirizzo {address} · si spegne da solo tra {minutes} min",
+  "Anyone with this code can send videos while it is on": "Chiunque abbia questo codice può inviare video finché è attivo",
+  "Turn off": "Disattiva",
+  "Waiting for the car's Wi-Fi hotspot": "In attesa dell'hotspot Wi-Fi dell'auto",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Attiva l'hotspot Wi-Fi dell'auto, poi il codice compare qui",
+  "A passenger's phone sends videos and searches to RideTube": "Il telefono di un passeggero invia video e ricerche a RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Il telefono si collega all'hotspot Wi-Fi dell'auto e scansiona un codice mostrato qui; la pagina viene dall'auto stessa.",
+  "Could not turn it on: {error}": "Impossibile attivarlo: {error}",
+  "Turn on": "Attiva",
+  "To switch it, press Phone remote in the menu again": "Per attivarlo o disattivarlo, premi di nuovo Telecomando dal telefono nel menu"
 }

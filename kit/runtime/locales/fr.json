@@ -197,5 +197,22 @@
   "Opens the keyboard": "Ouvre le clavier",
   "Clear recent searches": "Effacer les recherches",
   "Menu": "Menu",
-  "Account, settings, logs": "Compte, paramètres, logs"
+  "Account, settings, logs": "Compte, paramètres, logs",
+  "Phone remote": "Télécommande par téléphone",
+  "Please wait...": "Un instant...",
+  "Switched on": "Activée",
+  "Switched off": "Désactivée",
+  "1. Connect the phone to the car's Wi-Fi hotspot": "1. Connectez le téléphone au point d'accès Wi-Fi de la voiture",
+  "2. Scan this code with its camera": "2. Scannez ce code avec son appareil photo",
+  "3. Paste a YouTube link or type a search, then send": "3. Collez un lien YouTube ou tapez une recherche, puis envoyez",
+  "Address {address} · turns off by itself in {minutes} min": "Adresse {address} · se désactive seule dans {minutes} min",
+  "Anyone with this code can send videos while it is on": "Toute personne qui a ce code peut envoyer des vidéos tant qu'elle est activée",
+  "Turn off": "Désactiver",
+  "Waiting for the car's Wi-Fi hotspot": "En attente du point d'accès Wi-Fi de la voiture",
+  "Turn on the car's Wi-Fi hotspot, then the code shows here": "Activez le point d'accès Wi-Fi de la voiture, le code s'affichera ici",
+  "A passenger's phone sends videos and searches to RideTube": "Le téléphone d'un passager envoie des vidéos et des recherches à RideTube",
+  "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Le téléphone rejoint le point d'accès Wi-Fi de la voiture et scanne un code affiché ici ; la page vient de la voiture elle-même.",
+  "Could not turn it on: {error}": "Activation impossible : {error}",
+  "Turn on": "Activer",
+  "To switch it, press Phone remote in the menu again": "Pour l'activer ou la désactiver, appuyez à nouveau sur Télécommande par téléphone dans le menu"
 }

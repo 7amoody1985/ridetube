@@ -1,5 +1,13 @@
 # Changelog
 
+## App 0.4.1
+
+- YouTube's language and country now follow the car's iDrive language setting (de_DE: German, Germany;
+  en_GB: English, United Kingdom). The country always comes from the car. The language does on Auto; a language
+  picked in Language is used as it is. The app's own text stays in English unless the car is set to Russian or
+  Chinese. 0.4.0 sent Russia or China as the country for Russian or Chinese, wherever the car was.
+- Needs nothing new on the service: 0.4.0 already takes a language and a country.
+
 ## App 0.4.0
 
 - Full screen: RideTube now covers the whole screen. The car's title bar and left column are gone, so the rail,

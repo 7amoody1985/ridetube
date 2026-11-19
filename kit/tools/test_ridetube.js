@@ -322,7 +322,7 @@ async function appFrames() {
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
     await until(() => d.cmds('hello').length, 3000, 'hello on connect');
-    assert.deepStrictEqual(d.cmds('hello')[0], { cmd: 'hello', app: require('../../apps/jap_ridetube/app.json').version, lang: 'en' }, 'hello: the app version and the build language, no region for en');
+    assert.deepStrictEqual(d.cmds('hello')[0], { cmd: 'hello', app: require('../../apps/jap_ridetube/app.json').version, lang: 'en', region: 'GB' }, 'hello: the app version, the car\'s en_GB as YouTube language and country');
     const POOL = (id) => id >= 8 && id < 64;
     const frame = () => scan(fs.readFileSync(file));
     // first screen: Home, signed out: the sign-in card, no tiles; never a library (nothing is kept on the car)
@@ -1336,7 +1336,7 @@ async function wp7Frames(x) {
     hu.ui.text = (n, t) => { hmi[n] = t; return ot.apply(hu.ui, arguments); };
     set.set('language', 'ru');
     await until(() => d.cmds('hello').length > nHello, 2000, 'hello again');
-    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'ru', region: 'RU' }, 'hello: ru, RU');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'ru', region: 'GB' }, 'hello: ru, the country still the car\'s (en_GB)');
     // Home was on its way (asked in English): its answer comes, then Home is asked again in Russian
     await sleep(50);
     assert.ok(!d.got.slice(n0).some((m) => m.cmd === 'feed'), 'not asked twice while on its way');
@@ -1377,7 +1377,7 @@ async function wp7Frames(x) {
     d.send({ ev: 'auth', state: 'signed_in' });
     set.set('language', 'en');
     await until(() => d.cmds('hello').slice(-1)[0].lang === 'en', 2000, 'hello en');
-    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'en' }, 'hello: en, no region');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'en', region: 'GB' }, 'hello: en, the car\'s GB');
     hu.handlers.BTN_HOME(); await sleep(300); await drawn();
     assert.ok(texts.indexOf('Home') >= 0 && texts.indexOf('Watch later') >= 0 && texts.indexOf('Subs') >= 0 && !texts.some((t) => /[\u0400-\u04ff]/.test(t) && !/Новости|Первый|просмотров/.test(t)), 'English again: ' + texts.join('|'));
     // Auto: follows the car's language, at the switch and when the car changes it (one listener, from the start)
@@ -1387,13 +1387,20 @@ async function wp7Frames(x) {
     assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'ru', region: 'RU' }, 'Auto on a Russian car: ru, RU');
     hmiLang.now = 'en_GB'; hmiLang.fns[0]('en_GB');
     await until(() => d.cmds('hello').slice(-1)[0].lang === 'en', 2000, 'Auto: hello en');
-    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'en' }, 'Auto after the car went English: en');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'en', region: 'GB' }, 'Auto after the car went English: en, GB');
+    hmiLang.now = 'de_DE'; hmiLang.fns[0]('de_DE');
+    await until(() => d.cmds('hello').slice(-1)[0].lang === 'de', 2000, 'Auto: hello de');
+    assert.deepStrictEqual(d.cmds('hello').slice(-1)[0], { cmd: 'hello', app: ver, lang: 'de', region: 'DE' }, 'Auto on a German car: YouTube in German for Germany');
+    hu.handlers.BTN_HOME(); await sleep(300); await drawn();
+    assert.ok(texts.indexOf('Home') >= 0, 'no German catalog: the app itself stays English: ' + texts.join('|'));
+    hmiLang.now = 'en_GB'; hmiLang.fns[0]('en_GB');
+    await until(() => d.cmds('hello').slice(-1)[0].lang === 'en', 2000, 'Auto: hello en again');
     set.set('language', 'en'); hmiLang.now = 'ru_RU'; hmiLang.fns[0]('ru_RU'); await sleep(100);
-    assert.strictEqual(d.cmds('hello').slice(-1)[0].lang, 'en', 'English chosen: the car\'s language is ignored');
+    assert.deepStrictEqual([d.cmds('hello').slice(-1)[0].lang, d.cmds('hello').slice(-1)[0].region], ['en', 'RU'], 'English chosen: the car\'s language is ignored, its country is not');
     assert.strictEqual(hmiLang.fns.length, 1, 'still one listener');
     hmiLang.now = 'en_GB';
     assert.ok(fs.statSync(file).size > size0, 'frames went on');
-    console.log('ok   WP7 Language: Русский redraws every page in Russian, hello ru/RU then the feed again; English again as before; Auto follows the car');
+    console.log('ok   WP7 Language: Русский redraws every page in Russian, hello ru then the feed again; English again as before; Auto follows the car; the country always from the car');
 }
 // the English words of RideTube's strings (tests/test_runtime.js's list): none may show while Russian is chosen
 function rideTubeWords() {

@@ -67,7 +67,8 @@ video decoder) and `jap-node22`, the Node.js 22 that the service runs on, with i
 ## Settings
 
 - **Language**: Auto (follows the car: Russian or Chinese when the car is set to it, else English), English,
-  Русский or 中文.
+  Русский or 中文. YouTube's language and country follow the car's iDrive language setting (on Auto; the
+  country always), so feeds and search match what the car is set to.
 - **Video while driving**: off by default. Leave it off unless the car is coded for video in motion and only
   passengers can see the screen. You use it at your own risk. It takes effect only once switched on while the
   car is parked: pressed while driving, the picture stays off until the next stop.

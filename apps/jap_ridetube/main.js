@@ -92,8 +92,14 @@ const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', pl: 'Pla
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 const APP_VERSION = String(mgu.SPEC.version).split('-')[0];   // (a localized build's "0.3.12-zh.cn.4": the release's)
-// hello's lang and region for a display language: "zh-CN" -> zh, CN; "ru" -> ru, RU; "en" -> en, no region
-const helloLang = (lang) => { const p = String(lang).split('-'), r = p[1] || ({ ru: 'RU' })[p[0]]; return r ? { lang: p[0], region: r } : { lang: p[0] }; };
+// hello's lang and region (YouTube's hl and gl) follow the car's iDrive language setting ("de_DE" -> de, DE;
+// "en_GB" -> en, GB): the country always, the language on Auto; a language picked by hand is that language.
+// No car setting (an emulator, an SDK without it): the display language alone, no region.
+const carLocale = (hmi) => { const m = /^([a-z]{2})[_-]([A-Z]{2})/.exec(String(hmi || '')); return m ? { lang: m[1], region: m[2] === 'UK' ? 'GB' : m[2] } : null; };
+const helloLang = (lang, hmi, auto) => {
+    const car = carLocale(hmi), l = String(lang).split('-')[0];
+    return car ? { lang: auto ? car.lang : l, region: car.region } : { lang: l };
+};
 const CLOCK_MSG = 'The head unit\'s clock is wrong (it says {date}). RideTube is skipping the certificate date check so videos still play. While the clock is wrong, the security of the app and of your car can be compromised. Set the car\'s date and time to fix it.';
 const LOGS_MS = 45000;                                   // a log report with no answer by then failed (the service gives up at 31 s)
 const LOGS_ERR = { closed: 'Log reporting is closed for now', busy: 'Too many reports right now - try again later',
@@ -113,6 +119,9 @@ mgu.run({
             return tag && have.indexOf(tag) >= 0 ? tag : BAKED;
         };
         setLanguage(pickLanguage());
+        const hello = () => Object.assign({ app: APP_VERSION }, helloLang(getLanguage(), ctx.hmiLanguage && ctx.hmiLanguage(),
+            (settings.get('language') || 'auto') === 'auto'));
+        let helloSent = JSON.stringify(hello());
         const parked = Parked.watch(ctx, log, { strict: true });
         // the drive lock: Video while driving counts only once switched on while parked, so a press while moving
         // cannot bring the picture up; switching it off works at once
@@ -125,7 +134,7 @@ mgu.run({
 
         /* ---------- the daemon ---------- */
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);
-        const model = new Model((o) => ctl.send(o), Object.assign({ app: APP_VERSION }, helloLang(getLanguage())));
+        const model = new Model((o) => ctl.send(o), JSON.parse(helloSent));
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
         const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); };
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
@@ -1389,9 +1398,12 @@ mgu.run({
         // region (feeds, search and related come in it), the page shown asks again, every text drawn or sent again
         function relang() {
             const lang = pickLanguage();
-            if (lang === getLanguage() || !setLanguage(lang)) return;
-            log.info('language ' + lang);
-            model.relang(Object.assign({ app: APP_VERSION }, helloLang(lang)));
+            if (!setLanguage(lang)) return;
+            const hi = hello();
+            if (JSON.stringify(hi) === helloSent) return;   // same text and same YouTube language and country
+            helloSent = JSON.stringify(hi);
+            log.info('language ' + lang + ', YouTube ' + hi.lang + (hi.region ? '-' + hi.region : ''));
+            model.relang(hi);
             OFF = translate('The RideTube service (jap-ridetube-d) is not running');
             OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
             OFFLINE = translate('The video service is not reachable - check the car\'s internet connection');
@@ -1402,7 +1414,7 @@ mgu.run({
             dirty = true;
         }
         if (settings.onChange) settings.onChange((key) => { if (key === 'language') relang(); });
-        if (ctx.hmiLanguage) ctx.hmiLanguage(() => { if ((settings.get('language') || 'auto') === 'auto') relang(); });
+        if (ctx.hmiLanguage) ctx.hmiLanguage(() => relang());   // the country follows the car in every mode
         log.info('ridetube app started');
     },
 });

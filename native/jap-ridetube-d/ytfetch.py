@@ -6,6 +6,7 @@
   ytfetch.py serve --cache-dir <d> [...]
   ytfetch.py check [<id>] --cache-dir <d> [--uid N] [--node P] [--lease P] [--pyz P] [--json]
   ytfetch.py request --cache-dir <d> [--lease P]      (one request as JSON on stdin, see request_cmd)
+  ytfetch.py update --cache-dir <d> [--lease P] [--pyz P] [--releases URL]
   --no-cert-time (any command): TLS skips only the certificates' validity dates (the head unit's clock is wrong)
 
 fetch writes <dir>/meta.json, audio.m4a, video.h264 (+ .part while running) and index.bin, and prints
@@ -736,10 +737,23 @@ class _Log:
         self.last = msg
 
 
+def pick_pyz(pyz):
+    """The yt-dlp to load: --pyz (an update, below), unless the service's own ytdlp.pyz is as new or that one is
+    unreadable (a newer RideTube service brought a newer yt-dlp than the last update)."""
+    own = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ytdlp.pyz')
+    if not pyz or os.path.abspath(pyz) == own:
+        return own
+    mine, theirs = pyz_version(own), pyz_version(pyz)
+    if not theirs:
+        return own
+    return own if mine and ytdlp_version_key(mine) >= ytdlp_version_key(theirs) else pyz
+
+
 def load_ytdlp(pyz, cache_dir):
     if 'yt_dlp' in sys.modules:  # serve preloaded it
         return sys.modules['yt_dlp']
-    sys.path.insert(0, pyz or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ytdlp.pyz'))
+    picked = pick_pyz(pyz)
+    sys.path.insert(0, picked)
     if os.path.isfile(CA) and 'certifi' not in sys.modules:
         # yt-dlp uses certifi when it can import it: this one names the car's CA bundle (none is in ytdlp.pyz)
         import types
@@ -749,7 +763,17 @@ def load_ytdlp(pyz, cache_dir):
         sys.modules['certifi'] = certifi
     else:
         os.environ['TMPDIR'] = cache_dir
-    import yt_dlp
+    try:
+        import yt_dlp
+    except Exception:  # noqa: BLE001 - an update that does not import: the service's own ytdlp.pyz
+        own = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ytdlp.pyz')
+        if picked == own:
+            raise
+        sys.path.remove(picked)
+        for n in [n for n in sys.modules if n.split('.')[0] in ('yt_dlp', 'yt_dlp_ejs')]:
+            del sys.modules[n]
+        sys.path.insert(0, own)
+        import yt_dlp
     try:
         import yt_dlp.networking.common  # noqa: F401 - cert_time_hook's
     except ImportError:
@@ -1211,6 +1235,195 @@ def request_cmd():
         out = {'error': clock_wrong(e) or str(e)[:300] or type(e).__name__}
     sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode('utf-8'))
     sys.stdout.flush()
+# ---------------------------------------------------------------- yt-dlp updates
+# YouTube changes break yt-dlp now and then, and a fixed yt-dlp is out within days; the one in ytdlp.pyz waits for the
+# next RideTube service. update fetches the newest yt-dlp release itself, as the fetch uid: the official zipapp,
+# checked against the release's SHA2-256SUMS, repacked as tools/build_pyz.sh does (yt_dlp, yt_dlp_ejs and
+# __main__.py, precompiled for this Python), loaded once in a child, then named in <cache-dir>/pyz/current.json. The
+# daemon passes that as --pyz; ytdlp.pyz stays the fallback. Nothing is fetched when the newest is not newer than both.
+
+RELEASES = 'https://github.com/yt-dlp/yt-dlp/releases'
+YTDLP_VERSION_RE = re.compile(r'^\d{4}\.\d{2}\.\d{2}(\.\d+)?$')
+ZIPAPP_MAX = 32 << 20      # the zipapp is ~3 MiB
+SUMS_MAX = 64 << 10
+
+
+def ytdlp_version_key(v):
+    return tuple(int(x) for x in v.split('.'))
+
+
+def pyz_version(pyz):
+    """yt-dlp's __version__ in a pyz or the zipapp, read without importing it; None when unreadable."""
+    import zipfile
+    try:
+        if os.path.isdir(pyz):  # an unpacked yt-dlp on sys.path (the tests' stand-in)
+            with open(os.path.join(pyz, 'yt_dlp', 'version.py'), 'rb') as f:
+                src = f.read()
+        else:
+            with zipfile.ZipFile(pyz) as z:
+                src = z.read('yt_dlp/version.py')
+        m = re.search(r"__version__\s*=\s*'([^']+)'", src.decode('utf-8', 'replace'))
+    except Exception:  # noqa: BLE001 - BadZipFile, zlib.error: a damaged pyz is no version, never a crash
+        return None
+    return m.group(1) if m and YTDLP_VERSION_RE.match(m.group(1)) else None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+def latest_ytdlp(releases, ctx, timeout):
+    """The newest release's tag, from where <releases>/latest redirects (github.com, no API rate limit)."""
+    import urllib.error
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+    loc = None
+    try:
+        with opener.open(urllib.request.Request(releases + '/latest', method='HEAD'), timeout=timeout) as r:
+            loc = r.headers.get('Location')
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            loc = e.headers.get('Location')
+    tag = (loc or '').rstrip('/').rsplit('/', 1)[-1]
+    return tag if YTDLP_VERSION_RE.match(tag) else None
+
+
+def download(url, dst, limit, ctx, timeout):
+    """url (redirects followed) -> dst; its sha256. Past limit bytes: ValueError."""
+    import hashlib
+    h, n = hashlib.sha256(), 0
+    with urllib.request.urlopen(url, timeout=timeout, context=ctx) as r, open(dst, 'wb') as f:
+        while True:
+            b = r.read(1 << 16)
+            if not b:
+                break
+            n += len(b)
+            if n > limit:
+                raise ValueError(f'{url}: over {limit} bytes')
+            h.update(b)
+            f.write(b)
+    return h.hexdigest()
+
+
+def repack_zipapp(src, out):
+    """The official zipapp -> out, as tools/build_pyz.sh makes ytdlp.pyz: only yt_dlp, yt_dlp_ejs and __main__.py
+    (no native code), every module precompiled (unchecked-hash .pyc beside each .py: the zip can't hold new ones)."""
+    import compileall
+    import py_compile
+    import zipfile
+    tree = out + '.tree'
+    shutil.rmtree(tree, ignore_errors=True)
+    with zipfile.ZipFile(src) as z:       # the zipapp: a shebang line, then the zip
+        names = [n for n in z.namelist() if (n == '__main__.py' or n.split('/')[0] in ('yt_dlp', 'yt_dlp_ejs')) and not n.endswith('/')]
+        if not any(n.startswith('yt_dlp/') for n in names) or not any(n.startswith('yt_dlp_ejs/') for n in names):
+            raise ValueError('unexpected zipapp layout')
+        bad = [n for n in names if n.endswith(('.so', '.dylib', '.pyd'))]
+        if bad:
+            raise ValueError(f'native code in the zipapp: {bad!r}')
+        for n in names:
+            z.extract(n, tree)
+    if not compileall.compile_dir(tree, quiet=2, legacy=True, stripdir=tree,
+                                  invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH):
+        raise ValueError('a module does not compile')
+    when = time.gmtime(315532800)[:6]     # zip's floor, 1980: one time for every entry, as build_pyz.sh
+    with zipfile.ZipFile(out + '.tmp', 'w', zipfile.ZIP_DEFLATED) as z:
+        for d, dirs, files in os.walk(tree):
+            dirs.sort()
+            for f in sorted(files):
+                p = os.path.join(d, f)
+                zi = zipfile.ZipInfo(os.path.relpath(p, tree), when)
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                zi.external_attr = 0o644 << 16
+                with open(p, 'rb') as fh:
+                    z.writestr(zi, fh.read())
+    with open(out + '.tmp', 'rb') as fh:
+        os.fsync(fh.fileno())
+    os.replace(out + '.tmp', out)
+    shutil.rmtree(tree, ignore_errors=True)
+
+
+def loads(pyz):
+    """yt-dlp's version as a fresh Python imports it from pyz (as check.sh does), else None."""
+    code = 'import sys;sys.path.insert(0,sys.argv[1]);import yt_dlp,yt_dlp_ejs;print(yt_dlp.version.__version__)'
+    try:
+        r = subprocess.run([sys.executable, '-I', '-c', code, pyz], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=300, env={})
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.decode('utf-8', 'replace').strip() if r.returncode == 0 else None
+
+
+def update(a):
+    """update --cache-dir <d> [--pyz <bundled>] [--releases URL]: one {"ev":"ytdlp", state, version, bundled} on
+    stdout, state "current" (nothing newer) or "updated" (current.json names it now); {"ev":"error"} otherwise."""
+    try:
+        os.nice(10)                       # repacking compiles ~1000 modules: after the player and the HMI
+    except OSError:
+        pass
+    install_dns(a.lease)
+    root = os.path.join(a.cache_dir, 'pyz')
+    os.makedirs(root, exist_ok=True)
+    bundled = pyz_version(a.pyz or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ytdlp.pyz'))
+    cur = None
+    try:
+        with open(os.path.join(root, 'current.json')) as f:
+            c = json.load(f)
+        if YTDLP_VERSION_RE.match(c['version']) and pyz_version(c['pyz']) == c['version']:
+            cur = c
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if cur and bundled and ytdlp_version_key(bundled) >= ytdlp_version_key(cur['version']):
+        os.remove(os.path.join(root, 'current.json'))   # a newer service brought this one or newer: its own again
+        shutil.rmtree(os.path.dirname(cur['pyz']), ignore_errors=True)
+        cur = None
+    have = max([v for v in (bundled, cur and cur['version']) if v], key=ytdlp_version_key, default=None)
+    ctx = tls_ctx()
+    releases = (a.releases or RELEASES).rstrip('/')
+    try:
+        latest = latest_ytdlp(releases, ctx, 20)
+    except OSError as e:
+        fail(f'yt-dlp releases: {e}')
+    if not latest:
+        fail('yt-dlp releases: no latest release')
+    if have and ytdlp_version_key(latest) <= ytdlp_version_key(have):
+        emit(ev='ytdlp', state='current', version=have, bundled=bundled)
+        return 0
+    if shutil.disk_usage(root).free < MIN_FREE + (64 << 20):
+        fail('yt-dlp: not enough space on the head unit')
+    work = os.path.join(root, latest)
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    app = os.path.join(work, 'yt-dlp')
+    try:
+        download(f'{releases}/download/{latest}/SHA2-256SUMS', app + '.sums', SUMS_MAX, ctx, 30)
+        with open(app + '.sums', encoding='utf-8', errors='replace') as f:
+            want = [ln.split()[0].lower() for ln in f if len(ln.split()) == 2 and ln.split()[1].lstrip('*') == 'yt-dlp']
+        if len(want) != 1:
+            raise ValueError('no yt-dlp line in SHA2-256SUMS')
+        if download(f'{releases}/download/{latest}/yt-dlp', app, ZIPAPP_MAX, ctx, 300) != want[0]:
+            raise ValueError('sha256 mismatch: not the file the release lists')
+        if pyz_version(app) != latest:
+            raise ValueError(f'the zipapp is not {latest}')
+        pyz = os.path.join(work, 'ytdlp.pyz')
+        repack_zipapp(app, pyz)
+        got = loads(pyz)
+        if got != latest:
+            raise ValueError(f'does not load (got {got!r})')
+    except (OSError, ValueError) as e:
+        shutil.rmtree(work, ignore_errors=True)
+        fail(f'yt-dlp {latest}: {e}')
+    for n in (app, app + '.sums'):
+        os.remove(n)
+    tmp = os.path.join(root, 'current.json.tmp')
+    with open(tmp, 'w') as f:
+        json.dump({'version': latest, 'pyz': pyz, 'sha256': want[0]}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, os.path.join(root, 'current.json'))
+    for n in os.listdir(root):            # the older updates
+        if n != latest and YTDLP_VERSION_RE.match(n):
+            shutil.rmtree(os.path.join(root, n), ignore_errors=True)
+    emit(ev='ytdlp', state='updated', version=latest, bundled=bundled)
     return 0
 
 
@@ -1230,7 +1443,7 @@ def validate(index_path, h264_path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('cmd', choices=('fetch', 'extract', 'serve', 'check', 'request'))
+    ap.add_argument('cmd', choices=('fetch', 'extract', 'serve', 'check', 'request', 'update'))
     ap.add_argument('id', nargs='?')
     ap.add_argument('dir', nargs='?')
     ap.add_argument('--cache-dir', required=True)
@@ -1242,6 +1455,7 @@ def main(argv=None):
     ap.add_argument('--info')
     ap.add_argument('--json', action='store_true', help='check: the health probes only, as JSON lines')
     ap.add_argument('--no-cert-time', action='store_true', help="TLS: skip only the certificate's validity dates")
+    ap.add_argument('--releases')
     a = ap.parse_args(argv)
     global cert_time
     cert_time = not a.no_cert_time
@@ -1250,6 +1464,8 @@ def main(argv=None):
         return request_cmd()
     if a.cmd == 'check':
         return check(a)
+    if a.cmd == 'update':
+        return update(a)
     if a.cmd == 'serve':
         install_dns(a.lease)
         load_ytdlp(a.pyz, a.cache_dir).YoutubeDL(ydl_params(a, None))  # the first YoutubeDL() costs ~0.35 s more on the car

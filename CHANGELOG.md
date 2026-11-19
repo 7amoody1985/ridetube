@@ -1,5 +1,20 @@
 # Changelog
 
+## Service 0.4.2 and app 0.4.5
+
+- yt-dlp updates on the car, contributed by Alex Arghir (PR #15). When a YouTube change breaks yt-dlp, a fixed
+  yt-dlp release usually comes out within days, and until now the car waited for the next RideTube service. The
+  service now looks for the newest yt-dlp release itself: 2 minutes after it starts, then daily, and after a play
+  fails past its retries. It checks the download against the release's `SHA2-256SUMS`, repacks and precompiles it
+  as `build_pyz.sh` does, imports it once, and then fetches with it. The service's own `ytdlp.pyz` stays the
+  fallback. All of it runs as the fetch user, never as root.
+- App: the setting "Update yt-dlp by itself", on by default. Off, the service uses only its own yt-dlp. With an
+  older service the setting does nothing.
+- If an updated yt-dlp file is damaged (a power cut during an update, say) or does not import, the fetcher falls
+  back to the service's own yt-dlp, so plays keep working. A release that fails its checks is tried again the next
+  day, and a look that hangs is stopped after 15 minutes.
+- Service: `ytfetch.py update`, the `ytdlp` command and event.
+
 ## What's new since the first release
 
 The first public release was app 0.3.6 with service 0.3.7, on 4 November 2026. This is what came after it, in
@@ -41,6 +56,8 @@ short. Each version's own section below has the details.
 - Fixed: videos that would not play (`ITEM_UNPLAYABLE`), the Search menu closing by itself, live videos failing
   only after two retries, and Previous not going back to 0:00. (0.3.8 to 0.3.13)
 - The download stops when the head unit has less than 256 MiB free. (0.3.7)
+- yt-dlp updates itself on the car (a setting, on by default), so a fix for a YouTube change no longer waits for a
+  RideTube release. Contributed by Alex Arghir. (service 0.4.2)
 
 ### Help and safety
 

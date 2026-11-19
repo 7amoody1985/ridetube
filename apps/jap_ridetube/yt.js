@@ -134,6 +134,8 @@ class Model {
         this.health = null;          // the health check (cap health): {items:[{key, ok, text}], loading, error, t}
         this.resumeWait = false;     // a fresh play: its first tick says whether the service resumed it
         this.resumed = null;         // {id, ms, until}: "Resumed at 12:34 · Start over" shows until then
+        this.ytdlpAuto = true;       // the yt-dlp updates setting, told to the daemon on every connect
+        this.ytdlp = null;           // the daemon's {auto, version, bundled, checking}; {unsupported: true} from an older one
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
@@ -262,14 +264,19 @@ class Model {
         } else if (m.ev === 'hello') {
             this.caps = Array.isArray(m.caps) ? m.caps.filter((x) => typeof x === 'string') : [];
             this.ev_clock(m);
+            if (this.can('ytdlp')) this.send({ cmd: 'ytdlp', auto: this.ytdlpAuto });   // the setting, once the service says it has it
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
             this._resumeTick(Date.now());
+        } else if (m.ev === 'ytdlp') {
+            this.ytdlp = { auto: m.auto !== false, version: m.version || null, bundled: m.bundled || null, checking: !!m.checking };
         } else if (m.ev === 'error') {
             // a service older than 0.4.0: no caps, nothing wrong; a frozen command it has not built: nothing to show
             if (m.msg === 'unknown cmd hello') { this.caps = []; this._changed(); return; }
             if (m.cmd && /^not implemented /.test(m.msg)) return;
+            // a daemon older than yt-dlp updates: its own yt-dlp, nothing wrong
+            if (m.msg === 'unknown cmd ytdlp') { this.ytdlp = { unsupported: true }; this._changed(); return; }
             // a daemon older than the account commands: no sign-in, nothing wrong with playback
             if (/^unknown cmd (auth|auth_status|sign_out|feed)$/.test(m.msg)) { this.auth = { state: 'unsupported', code: null, url: null, msg: null }; this._changed(); return; }
             // a daemon older than playlists: the Playlists page says so, nothing wrong with playback
@@ -398,6 +405,8 @@ class Model {
     quality(q) { return this.active() ? this.send({ cmd: 'quality', quality: q }) : false; }
     /** fill (crop to the screen) or fit (the whole picture) for the playing video */
     fill(on) { return this.active() ? this.send({ cmd: 'fill', on: !!on }) : false; }
+    /** the yt-dlp updates setting: kept for the next connect, told now when connected */
+    setYtdlpAuto(on) { this.ytdlpAuto = !!on; return this.connected && this.can('ytdlp') ? this.send({ cmd: 'ytdlp', auto: this.ytdlpAuto }) : false; }
     /** (re)load the subscribed channels (the daemon keeps them 10 min); shown meanwhile */
     loadChannels() {
         const c = this.chans = this.chans || { items: [] };

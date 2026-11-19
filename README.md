@@ -100,8 +100,10 @@ One car only so far. Reports from other cars are welcome in the issues.
 
 ## Known limits
 
-- yt-dlp breaks now and then when YouTube changes. A fixed RideTube release then needs a new yt-dlp (see
-  `native/jap-ridetube-d/README.md`, "Updating yt-dlp").
+- yt-dlp breaks now and then when YouTube changes. With "Update yt-dlp by itself" on (the default), the service
+  fetches the newest yt-dlp release on the car, checked against the release's sha256 sums, daily and after a play
+  fails; off, a fixed RideTube release brings a new yt-dlp (see `native/jap-ridetube-d/README.md`, "Updating
+  yt-dlp").
 - H.264 only (up to 720p, 30 fps preferred), decoded on the head unit's GPU. A video with no H.264 stream
   does not play.
 - Signing in uses the TV device sign-in that YouTube's TV apps use. The client id is read from YouTube's TV

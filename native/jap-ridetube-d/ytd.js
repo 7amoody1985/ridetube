@@ -23,13 +23,13 @@ const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
 const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
-const VERSION = '0.4.1';   // component.json's (test_ytd.js checks): sent with a log report
+const VERSION = '0.4.2';   // component.json's (test_ytd.js checks): sent with a log report
 // the day this build was released (UTC), bumped with VERSION at each release (tools/release.py refuses one in the
 // future). A head unit clock before it is provably wrong: only then does TLS skip the certificate dates (certTime)
 const BUILT = '2026-11-19';
 // what `hello` says this build answers for real. The frozen names: health, related, hist (feed hist|liked), ytdlp,
 // remote, proxy, stream. A package adds its name here (through the integrator) once its command works
-const CAPS = ['related', 'hist', 'health', 'remote'];
+const CAPS = ['related', 'hist', 'health', 'remote', 'ytdlp'];
 const LANG_RE = /^[a-z]{2}$/, REGION_RE = /^[A-Z]{2}$/;   // hello's lang ("ru") and region ("RU")
 // the log relay (send_logs posts <REPORT_URL>/v1/report): the only place reports go. MGU_YT_REPORT_URL or opts.reportUrl override it
 const REPORT_URL = 'https://ridetube-logs.ridetube-relay.workers.dev';
@@ -74,6 +74,10 @@ function defaults() {
         warmMs: 600000,      // ... for this long after the app's last command
         infoMaxMs: 1500000,
         leaseFile: '/run/mgu-uplink/lease.json',
+        ytdlpFirstMs: 120000,      // yt-dlp updates (ytfetch.py update): looked for this long after start,
+        ytdlpEveryMs: 86400000,    // ... then once a day,
+        ytdlpRetryMs: 3600000,     // ... an hour after a failed look, and after a failed play once this long has passed
+        ytdlpMaxMs: 900000,        // ... and a look still running after this long is killed
         resume: true,        // a play starts where the video was left (positions.json)
         sponsorBlock: 'https://sponsor.ajay.app/api/skipSegments/',
         skip: ['sponsor', 'selfpromo', 'interaction', 'intro'], // SponsorBlock categories skipped (the play's own `skip` wins)
@@ -1444,12 +1448,91 @@ Daemon.prototype.keepWarm = function () {
     }
     if (this.spare || (this.preparing && this.state === 'preparing')) return;
     let child;
-    try { child = this.spawnFetchUid(this.opts.fetcher, ['serve', '--cache-dir', this.ytc()], true); } catch (e) { this.log('spare: ' + e.message); return; }
+    try { child = this.spawnFetchUid(this.opts.fetcher, ['serve', '--cache-dir', this.ytc()].concat(this.pyzArgs()), true); } catch (e) { this.log('spare: ' + e.message); return; }
     const s = this.spare = { child: child, warm: false };
     child.stdin.on('error', () => { /* it died: close says */ });
     readline.createInterface({ input: child.stdout }).on('line', (l) => { if (/"ev": ?"warm"/.test(l)) s.warm = true; });
     child.on('error', (e) => this.log('spare: ' + e.message));
     child.on('close', () => { if (this.spare === s) this.spare = null; });
+};
+
+// ---- yt-dlp updates: ytfetch.py update (as the fetch uid) puts the newest yt-dlp release, checked and loaded once, in
+// <ytc>/pyz and names it in current.json; fetch, extract and serve load it (--pyz) instead of the service's ytdlp.pyz
+// while updates are on (the app's setting, kept in state/ytdlp.json; on by default). Looked for ytdlpFirstMs after the
+// start, then daily, an hour after a failed look, and after a failed play (the usual sign of a YouTube change) once
+// ytdlpRetryMs has passed; only with the uplink's lease (online) and not while a play is preparing.
+Daemon.prototype.ytdlpDir = function () { return path.join(this.opts.cacheDir, 'ytdlp', 'pyz'); };
+Daemon.prototype.ytdlpAuto = function () {
+    if (this.ytdlpOn === undefined) { const s = readJson(path.join(this.opts.stateDir, 'ytdlp.json')); this.ytdlpOn = !(s && s.auto === false); }
+    return this.ytdlpOn;
+};
+// ['--pyz', the update] while on and there (only a file inside ytdlpDir), else [] (ytdlp.pyz)
+// current.json is the fetch uid's: read as readFetchFile reads (no symlink, a small regular file); the pyz is only
+// ever passed to a fetch-uid child (as --pyz), never read or run by root
+Daemon.prototype.ytdlpCurrent = function () {
+    const b = readFetchFile(path.join(this.ytdlpDir(), 'current.json'), (n) => n <= 4096);
+    try { const c = b && JSON.parse(b.toString('utf8')); return c && typeof c === 'object' ? c : null; } catch (e) { return null; }
+};
+Daemon.prototype.pyzArgs = function () {
+    if (!this.ytdlpAuto()) return [];
+    const dir = this.ytdlpDir(), cur = this.ytdlpCurrent();
+    const p = cur && typeof cur.pyz === 'string' ? path.resolve(cur.pyz) : '';
+    return p.indexOf(dir + path.sep) === 0 && fs.existsSync(p) ? ['--pyz', p] : [];
+};
+Daemon.prototype.sendYtdlp = function () {
+    const args = this.pyzArgs(), cur = args.length ? this.ytdlpCurrent() : null;
+    const v = cur && typeof cur.version === 'string' && /^\d{4}\.\d\d\.\d\d(\.\d+)?$/.test(cur.version) ? cur.version : null;
+    return this.emit({ ev: 'ytdlp', auto: this.ytdlpAuto(), version: v || this.ytdlpBundled || null,
+        bundled: this.ytdlpBundled || null, checking: !!this.ytdlpRun });
+};
+Daemon.prototype.dropSpare = function () {
+    if (this.spare) { try { this.spare.child.kill('SIGKILL'); } catch (e) { /* gone */ } this.spare = null; }
+};
+Daemon.prototype.setYtdlpAuto = function (on) {
+    if (on !== this.ytdlpAuto()) {
+        this.ytdlpOn = on;
+        try { if (!fs.existsSync(this.opts.stateDir)) { mkdirp(path.dirname(this.opts.stateDir)); fs.mkdirSync(this.opts.stateDir, 0o700); } writeIfChanged(path.join(this.opts.stateDir, 'ytdlp.json'), JSON.stringify({ auto: on }) + '\n', 0o644); } catch (e) { this.log('yt-dlp updates: ' + e.message); }
+        this.log('yt-dlp updates ' + (on ? 'on' : 'off'));
+        this.dropSpare();   // it loaded the other yt-dlp
+        if (on) this.ytdlpNext = Math.min(this.ytdlpNext || 0, Date.now() + this.opts.ytdlpFirstMs);
+    }
+    return this.sendYtdlp();
+};
+// a play failed after its retries (not a refused video): look now, unless a look ran within ytdlpRetryMs
+Daemon.prototype.ytdlpSoon = function () {
+    if (Date.now() - (this.ytdlpAt || 0) >= this.opts.ytdlpRetryMs) this.ytdlpNext = 0;
+};
+Daemon.prototype.ytdlpTick = function () {
+    if (this.ytdlpRun || Date.now() < this.ytdlpNext || !this.ytdlpAuto()) return;
+    if (this.state === 'preparing' || !fs.existsSync(this.opts.leaseFile)) return;   // a play is fetching, or offline
+    this.updateYtdlp();
+};
+Daemon.prototype.updateYtdlp = function () {
+    this.ytdlpAt = Date.now();
+    this.ytdlpNext = this.ytdlpAt + this.opts.ytdlpRetryMs;   // a failed look: again in an hour (one that answered: a day)
+    let child;
+    try { child = this.spawnFetchUid(this.opts.fetcher, ['update', '--cache-dir', this.ytc()]); } catch (e) { return this.log('yt-dlp update: ' + e.message); }
+    const run = this.ytdlpRun = { child: child };
+    const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) { /* gone */ } }, this.opts.ytdlpMaxMs);
+    let last = null;
+    readline.createInterface({ input: child.stdout }).on('line', (l) => { try { last = JSON.parse(l); } catch (e) { /* not an event */ } });
+    readline.createInterface({ input: child.stderr }).on('line', (l) => this.log('yt-dlp update: ' + l));
+    child.on('error', (e) => this.log('yt-dlp update: ' + e.message));
+    child.on('close', (code) => {
+        clearTimeout(kill);
+        if (this.ytdlpRun !== run) return undefined;
+        this.ytdlpRun = null;
+        // a release that fails its checks (sha256, does not load or compile) fails the same way in an hour: a day
+        if (last && last.ev === 'error' && /^yt-dlp \d/.test(last.msg || '')) this.ytdlpNext = Date.now() + this.opts.ytdlpEveryMs;
+        if (!last || last.ev !== 'ytdlp') return this.log('yt-dlp update: ' + ((last && last.msg) || 'exit ' + code));
+        this.ytdlpNext = Date.now() + this.opts.ytdlpEveryMs;
+        const ver = (v) => (typeof v === 'string' && /^\d{4}\.\d\d\.\d\d(\.\d+)?$/.test(v) ? v : null);   // the fetch uid's words
+        this.ytdlpBundled = ver(last.bundled);
+        this.log('yt-dlp update: ' + (last.state === 'updated' ? 'updated' : 'current') + ' ' + ver(last.version) + ' (the service has ' + this.ytdlpBundled + ')');
+        if (last.state === 'updated') this.dropSpare();   // the next one loads the new yt-dlp
+        return this.sendYtdlp();
+    });
+    return this.sendYtdlp();
 };
 Daemon.prototype.infoFile = function (id) { return path.join(this.opts.cacheDir, 'ytdlp', 'info', id + '.json'); };
 Daemon.prototype.freshInfo = function (id) {
@@ -1460,7 +1543,7 @@ Daemon.prototype.prefetch = function (id) {
     if (this.extracting) { if (this.extracting.id !== id) this.nextPrefetch = id; return undefined; }
     if (isPlayable(path.join(this.opts.cacheDir, id)) || this.preparing === id || this.freshInfo(id)) return undefined;
     // info/ and its stale files: the fetcher makes and prunes them (extract), root never writes below ytdlp/
-    const child = this.spawnJob(['extract', '--cache-dir', this.ytc(), '--', id, this.infoFile(id)]);
+    const child = this.spawnJob(['extract', '--cache-dir', this.ytc()].concat(this.pyzArgs(), ['--', id, this.infoFile(id)]));
     this.keepWarm(); // the play after this lookup finds a spare, not a cold start (the 5 s poll was too late)
     const x = this.extracting = { id: id, child: child, done: null };
     x.done = new Promise((r) => child.on('close', r)).then(() => {
@@ -1523,6 +1606,8 @@ Daemon.prototype.start = async function () {
     this.timers.push(setInterval(() => this.guard(() => this.watchdog()), 1000));
     this.timers.push(setInterval(() => this.guard(() => this.keepWarm()), this.opts.tickMs));
     this.timers.push(setInterval(() => this.guard(() => this.lockSocket()), this.opts.tickMs));   // a reinstall can change the app's uid
+    this.ytdlpNext = Date.now() + this.opts.ytdlpFirstMs;
+    this.timers.push(setInterval(() => this.guard(() => this.ytdlpTick()), this.opts.tickMs));
     this.keepWarm();
     this.prune();
     // The SOME/IP services may come up after us at boot: retry until the leftover check ran (logged when the reason changes)
@@ -1717,6 +1802,7 @@ Daemon.prototype.onLine = function (line) {
     case 'prefetch': return this.prefetch(m.id);
     case 'positions': return this.sendPositions();
     case 'status': this.sendState(); if (this.total) this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total }); return undefined;
+    case 'ytdlp': return typeof m.auto === 'boolean' ? this.setYtdlpAuto(m.auto) : this.sendYtdlp();
     case 'search': return this.search(m.q);
     case 'thumb': return this.thumb(m.id);
     case 'play': return this.play(m.id, m.rect, !!m.fill, m.at, m.quality, m.skip);
@@ -1739,7 +1825,6 @@ Daemon.prototype.onLine = function (line) {
     case 'hello': return this.hello(m);
     case 'health': return this.health();
     case 'related': return this.related(m.id);
-    case 'ytdlp': return this.ytdlp(m.auto);
     case 'remote': return this.remote(m.on, m.lang);   // 0.4.1
     case 'proxy': return this.proxy(m.mode);   // later
     default: return this.emit({ ev: 'error', msg: 'unknown cmd ' + m.cmd });
@@ -1786,7 +1871,6 @@ Daemon.prototype.related = async function (id) {
     c[key] = { t: Date.now(), g: g, items: items };
     return this.emit({ ev: 'related', id: id, items: items });
 };
-Daemon.prototype.ytdlp = function (auto) { return this.notImplemented('ytdlp'); };            // WP6
 // `remote` {on} -> remote{on, url, expires} (remote.js; on not a bool: only the state). WP9, 0.4.1
 Daemon.prototype.remote = function (on, lang) { return this.rc.set(on, lang); };
 // the web uid (remote.js's server): its own, never the fetch uid nor an app's; throws when there is none
@@ -2002,7 +2086,10 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, resto
             } catch (e) {
                 if (gen !== this.gen) return undefined;
                 // the video itself refused (gone, private, members, age): no retry; else the network, maybe back soon
-                if (k >= waits.length || PERMANENT_RE.test(e.message)) return this.failPlayback('fetch: ' + e.message);
+                if (k >= waits.length || PERMANENT_RE.test(e.message)) {
+                    if (!PERMANENT_RE.test(e.message)) this.ytdlpSoon();   // after the retries: maybe a YouTube change
+                    return this.failPlayback('fetch: ' + e.message);
+                }
                 // the retry extracts again (its stream URLs may be what failed: another uplink), without --info. Root never
                 // unlinks info/<id>.json: info/ is the fetch uid's, a symlink there would point the unlink anywhere
                 this.log('fetch ' + id + ': ' + e.message + ' - again in ' + waits[k] + ' ms');
@@ -2137,7 +2224,7 @@ Daemon.prototype.fetchVideo = function (id, dir, how) {
             this.chownFetch(dir);
         }
         const info = !how && this.freshInfo(id) ? ['--info', this.infoFile(id)] : [];
-        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, ['--', id, dir]));
+        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, this.pyzArgs(), ['--', id, dir]));
         this.fetcher = child;
         this.preparing = id;
         this.fetchedMs = 0;
@@ -2563,8 +2650,8 @@ Daemon.prototype.watchdog = function () {
 
 Daemon.prototype.close = async function () {
     this.timers.forEach(clearInterval);
-    [this.spare, this.extracting].forEach((x) => { if (x) { try { x.child.kill('SIGKILL'); } catch (e) { /* gone */ } } });
-    this.spare = this.extracting = null;
+    [this.spare, this.extracting, this.ytdlpRun].forEach((x) => { if (x) { try { x.child.kill('SIGKILL'); } catch (e) { /* gone */ } } });
+    this.spare = this.extracting = this.ytdlpRun = null;
     this.account.close();
     const rc = this.rc.close();   // the phone remote off and its rule removed, alongside the audio release (4 s exit)
     await this.stop(null);

@@ -216,5 +216,6 @@
   "Turn on": "Activer",
   "To switch it, press Phone remote in the menu again": "Pour l'activer ou la désactiver, appuyez à nouveau sur Télécommande par téléphone dans le menu",
   "For the full width, install Full-width touch from the MGU Store": "Pour la pleine largeur, installez Full-width touch depuis le MGU Store",
-  "Taps reach the screen's left edge": "Les touches atteignent le bord gauche de l'écran"
+  "Taps reach the screen's left edge": "Les touches atteignent le bord gauche de l'écran",
+  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "Mettre à jour yt-dlp tout seul : la dernière version, cherchée chaque jour (désactivé : celle du service RideTube)"
 }

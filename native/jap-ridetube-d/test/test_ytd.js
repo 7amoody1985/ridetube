@@ -542,6 +542,73 @@ async function main() {
         rmrf(path.join(cache, 'FFFFFFFFFR4'));
     });
 
+    await t('yt-dlp updates: looked for only online; the update loaded by later fetches (--pyz); off: the service\'s own; a failed play looks again', async () => {
+        const lease = path.join(tmp, 'lease.json'), ytc = path.join(cache, 'ytdlp'), upLog = () => JSON.parse(fs.readFileSync(ctl + '.update.log', 'utf8'));
+        fs.writeFileSync(ctl + '.update', 'new:2026.11.12'); fs.writeFileSync(ctl, ''); c.clear();
+        Object.assign(d.opts, { leaseFile: lease, ytdlpRetryMs: 700, ytdlpEveryMs: 60000 });
+        d.ytdlpNext = 0;
+        await sleep(500);
+        assert.ok(!fs.existsSync(ctl + '.update.log'), 'offline (no lease): no look');
+        fs.writeFileSync(lease, '{}');
+        const up = await c.waitFor((x) => x.ev === 'ytdlp' && x.version === '2026.11.12' && !x.checking);
+        assert.deepStrictEqual(up, { ev: 'ytdlp', auto: true, version: '2026.11.12', bundled: '2026.10.26', checking: false });
+        assert.deepStrictEqual(upLog().argv.slice(1), ['update', '--cache-dir', ytc]);
+        assert.deepStrictEqual(upLog().env.filter((k) => k !== '__CF_USER_TEXT_ENCODING'), [], 'a clean environment, as every fetch-uid child');   // (macOS adds that one to any process)
+        assert.ok(d.ytdlpNext > Date.now() + 50000, 'the next look a day later');
+        // a play's fetch loads the update
+        const pyz = path.join(ytc, 'pyz', '2026.11.12', 'ytdlp.pyz');
+        c.send({ cmd: 'play', id: 'UPDATEDPYZ1', rect: '1280x720' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.id === 'UPDATEDPYZ1', 4000);
+        const argv = JSON.parse(fs.readFileSync(ctl + '.log', 'utf8')).argv;
+        assert.deepStrictEqual(argv.slice(argv.indexOf('--pyz'), argv.indexOf('--pyz') + 2), ['--pyz', pyz]);
+        c.send({ cmd: 'stop' }); await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        // off (the app's setting): kept in state/ytdlp.json, the service's own yt-dlp, no looks
+        c.clear();
+        c.send({ cmd: 'ytdlp', auto: false });
+        await c.waitFor((x) => x.ev === 'ytdlp' && x.auto === false);
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(stateDir, 'ytdlp.json'), 'utf8')), { auto: false });
+        assert.deepStrictEqual(d.pyzArgs(), []);
+        fs.unlinkSync(ctl + '.update.log'); d.ytdlpNext = 0;
+        await sleep(500);
+        assert.ok(!fs.existsSync(ctl + '.update.log'), 'off: no look');
+        // on again: the update again, a look soon
+        c.send({ cmd: 'ytdlp', auto: true });
+        await c.waitFor((x) => x.ev === 'ytdlp' && x.auto === true);
+        c.clear(); c.send({ cmd: 'ytdlp' });                      // auto left out: only the state
+        assert.strictEqual((await c.waitFor((x) => x.ev === 'ytdlp')).auto, true);
+        assert.deepStrictEqual(d.pyzArgs(), ['--pyz', pyz]);
+        // a current.json naming a file outside its folder is not loaded
+        const cj = path.join(ytc, 'pyz', 'current.json'), keep = fs.readFileSync(cj);
+        fs.writeFileSync(cj, JSON.stringify({ version: '2026.11.13', pyz: path.join(tmp, 'elsewhere.pyz') })); fs.writeFileSync(path.join(tmp, 'elsewhere.pyz'), 'x');
+        assert.deepStrictEqual(d.pyzArgs(), []);
+        fs.writeFileSync(cj, keep);
+        // a play failing after its retries (not a refused video) looks again, once ytdlpRetryMs has passed since the last look
+        fs.writeFileSync(ctl + '.update', 'same');
+        d.ytdlpNext = Date.now() + 60000; d.ytdlpAt = Date.now() - 1000; if (fs.existsSync(ctl + '.update.log')) fs.unlinkSync(ctl + '.update.log');
+        fs.writeFileSync(ctl, 'fail'); c.clear();
+        c.send({ cmd: 'play', id: 'UPDATEFAIL1', rect: '1280x720' });
+        await c.waitFor((x) => x.ev === 'error' && x.msg === 'fetch: boom', 4000);
+        await waitUntil(() => fs.existsSync(ctl + '.update.log'), 3000);
+        await c.waitFor((x) => x.ev === 'ytdlp' && x.version === '2026.11.12' && !x.checking);
+        // a refused video does not
+        fs.unlinkSync(ctl + '.update.log'); d.ytdlpAt = 0; d.ytdlpNext = Date.now() + 60000;
+        fs.writeFileSync(ctl, 'gone');
+        c.send({ cmd: 'play', id: 'UPDATEGONE1', rect: '1280x720' });
+        await c.waitFor((x) => x.ev === 'error' && x.msg === 'fetch: Video unavailable', 4000);
+        await sleep(500);
+        assert.ok(!fs.existsSync(ctl + '.update.log'), 'a refused video: no look');
+        // a failed look: again after ytdlpRetryMs, not a day
+        fs.writeFileSync(ctl + '.update', 'fail'); d.ytdlpNext = 0;
+        await waitUntil(() => fs.existsSync(ctl + '.update.log'), 3000);
+        await waitUntil(() => !d.ytdlpRun, 3000);
+        assert.ok(d.ytdlpNext <= Date.now() + 700, 'again in ytdlpRetryMs');
+        assert.ok(logs.some((l) => l === 'yt-dlp update: yt-dlp releases: offline'), logs.slice(-3).join(' | '));
+        Object.assign(d.opts, { leaseFile: '/nonexistent/lease.json' }); d.ytdlpNext = Infinity;
+        fs.rmSync(path.join(ytc, 'pyz'), { recursive: true, force: true }); fs.unlinkSync(path.join(stateDir, 'ytdlp.json')); d.ytdlpOn = undefined;
+        ['UPDATEDPYZ1', 'UPDATEFAIL1', 'UPDATEGONE1'].forEach((id) => fs.rmSync(path.join(cache, id), { recursive: true, force: true }));
+        fs.writeFileSync(ctl, '');
+    });
+
     await t('a refused video (unavailable) is not retried', async () => {
         fs.writeFileSync(ctl, 'gone'); c.clear();
         d.opts.fetchRetryMs = [300];
@@ -1503,7 +1570,7 @@ async function main() {
 
     await t('hello: service version and caps; lang / region kept for the connection; a bad one dropped, never refused', async () => {
         const FROZEN = ['health', 'related', 'hist', 'ytdlp', 'remote', 'proxy', 'stream'];
-        assert.deepStrictEqual(CAPS, ['related', 'hist', 'health', 'remote'], 'what of the protocol answers for real (WP1: related, hist; WP4: health; WP9: remote)');
+        assert.deepStrictEqual(CAPS, ['related', 'hist', 'health', 'remote', 'ytdlp'], 'what of the protocol answers for real (WP1: related, hist; WP4: health; WP9: remote; WP6: ytdlp)');
         assert.ok(CAPS.every((x) => FROZEN.indexOf(x) >= 0), 'caps only from the frozen names');
         c.clear();
         c.send({ cmd: 'hello', app: '0.4.0', lang: 'ru', region: 'RU' });
@@ -1586,7 +1653,7 @@ async function main() {
     });
 
     await t('the frozen commands not built yet answer "not implemented <cmd>"; an unknown one as before', async () => {
-        for (const m of [{ cmd: 'ytdlp', auto: true }, { cmd: 'proxy', mode: 'off' }]) {
+        for (const m of [{ cmd: 'proxy', mode: 'off' }]) {
             c.clear();
             c.send(m);
             assert.deepStrictEqual(await c.waitFor((x) => x.ev === 'error'), { ev: 'error', cmd: m.cmd, msg: 'not implemented ' + m.cmd });

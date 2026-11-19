@@ -140,6 +140,9 @@ mgu.run({
         /* ---------- the daemon ---------- */
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);
         const model = new Model((o) => ctl.send(o), JSON.parse(helloSent));
+        // yt-dlp updates (the daemon fetches the newest yt-dlp release itself): the setting, told on connect and on a change
+        model.ytdlpAuto = settings.get('ytdlp_auto') !== false;
+        settings.onChange((key, value) => { if (key === 'ytdlp_auto') model.setYtdlpAuto(value !== false); });
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
         const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); };
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;

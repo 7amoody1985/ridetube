@@ -216,5 +216,6 @@
   "Turn on": "Включить",
   "To switch it, press Phone remote in the menu again": "Чтобы включить или выключить, ещё раз нажмите «Пульт на телефоне» в меню",
   "For the full width, install Full-width touch from the MGU Store": "Для полной ширины установите Full-width touch из MGU Store",
-  "Taps reach the screen's left edge": "Касания доходят до левого края экрана"
+  "Taps reach the screen's left edge": "Касания доходят до левого края экрана",
+  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "Обновлять yt-dlp самостоятельно: новейший выпуск, проверка раз в день (выкл.: тот, что в службе RideTube)"
 }

@@ -6,6 +6,8 @@
 // after it; "hold" = audio_head, audio_ready only once <ctl> says "full" or "done"; "dead" = an error before audio is ready, and
 // one running dies at it too ("error": only one running); else audio_ready, no head.
 // serve: says warm, then runs the argv list read from stdin (logged with served: true). extract: makes <dir>'s folder (as ytfetch.py does), writes <dir> = info.json.
+// update: logs its argv to <ctl>.update.log; <ctl>.update says what it finds: "new:<version>" (writes pyz/<version>/ytdlp.pyz
+// and pyz/current.json in its --cache-dir, as ytfetch.py does), "same" (nothing newer) or "fail".
 const fs = require('fs');
 const path = require('path');
 const ctl = process.argv[2];
@@ -18,6 +20,7 @@ if (process.argv[3] === 'serve') {
 } else run(process.argv.slice(3), false);
 
 function run(args, served) {
+if (args[0] === 'update') return update(args);
 const id = args[args.length - 2], dir = args[args.length - 1];
 if (args[0] === 'extract') {
     fs.writeFileSync(ctl + '.extract', JSON.stringify({ argv: args, served: served }));
@@ -45,4 +48,21 @@ const t = setInterval(() => {
     if (m === 'error' || m === 'dead') { say({ ev: 'error', msg: 'HTTP 403' }); process.exit(1); }
     return undefined;
 }, 60);
+}
+
+function update(args) {
+    fs.writeFileSync(ctl + '.update.log', JSON.stringify({ argv: [ctl].concat(args), env: Object.keys(process.env), uid: process.getuid() }));
+    let what = '';
+    try { what = fs.readFileSync(ctl + '.update', 'utf8').trim(); } catch (e) { /* none */ }
+    const root = path.join(args[args.indexOf('--cache-dir') + 1], 'pyz');
+    if (what.indexOf('new:') === 0) {
+        const v = what.slice(4), pyz = path.join(root, v, 'ytdlp.pyz');
+        fs.mkdirSync(path.dirname(pyz), { recursive: true });
+        fs.writeFileSync(pyz, 'zip');
+        fs.writeFileSync(path.join(root, 'current.json'), JSON.stringify({ version: v, pyz: pyz, sha256: '00' }));
+        return say({ ev: 'ytdlp', state: 'updated', version: v, bundled: '2026.10.26' });
+    }
+    if (what === 'same') return say({ ev: 'ytdlp', state: 'current', version: '2026.10.26', bundled: '2026.10.26' });
+    say({ ev: 'error', msg: 'yt-dlp releases: offline' });
+    return process.exit(1);
 }

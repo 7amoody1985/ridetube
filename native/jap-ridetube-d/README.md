@@ -74,6 +74,30 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
 3. Bump `version` in `component.json`.
 4. Install the new artifact through the Store; its `check` (`check.sh`) rolls back a pyz that does not load.
 
+### On the car, between releases
+
+YouTube changes break yt-dlp now and then, and a fixed yt-dlp is usually out within days. While the app's setting
+"Update yt-dlp by itself" is on (the default; the daemon keeps it in `state/ytdlp.json`), the daemon runs
+`ytfetch.py update --cache-dir cache/ytdlp` as the fetch uid, 2 minutes after its start, then daily (an hour after a
+look that failed), and after a play fails past its retries (not a refused video) once an hour has passed since the
+last look; only with the uplink's lease and not while a play is preparing. `update`:
+
+1. reads the newest release's tag from where `https://github.com/yt-dlp/yt-dlp/releases/latest` redirects, and stops
+   when it is not newer than both `ytdlp.pyz` and the last update;
+2. downloads that release's `SHA2-256SUMS` and its `yt-dlp` zipapp (at most 32 MiB) and checks the zipapp's sha256
+   against the `yt-dlp` line, and that the zipapp says that version;
+3. repacks it as `tools/build_pyz.sh` does (`yt_dlp`, `yt_dlp_ejs` and `__main__.py` only, no native code, every
+   module precompiled), at nice 10;
+4. imports it in a fresh mgu-python (as `check.sh` does), then names it in `cache/ytdlp/pyz/current.json`
+   (`{version, pyz, sha256}`) and removes older updates.
+
+`fetch`, `extract` and the spare `serve` then get `--pyz cache/ytdlp/pyz/<version>/ytdlp.pyz` (only a file inside
+that folder); the setting off, or no update, `ytdlp.pyz` as before. The update only ever runs as the fetch uid, never
+as root, and `check.sh` still checks the shipped `ytdlp.pyz`. The `ytdlp` command (cap `ytdlp`, `{auto}`) sets it, and the
+`ytdlp` event (`{auto, version, bundled, checking}`) answers it and follows each look. To go back by hand (root):
+
+    rm -rf /var/opt/jap-ridetube-d/cache/ytdlp/pyz
+
 ## Self-check on the car (root)
 
     /var/opt/mgu-python/current/bin/python3 -I /var/opt/jap-ridetube-d/current/ytfetch.py check --cache-dir /var/opt/jap-ridetube-d/cache/ytdlp
@@ -93,7 +117,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 
 | cmd | |
 |---|---|
-| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps, clock?}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`, `remote`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
+| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps, clock?}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`, `ytdlp`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
 | `{"cmd":"status"}` | → `state` (and `time` when known) |
 | `{"cmd":"search","q":".."}` | → `results` (InnerTube), or `error` `empty search` / `search offline` |
 | `{"cmd":"thumb","id":".."}` | → `thumb` (cache `thumb.rgba` first, else `thumb.js` on the car; nothing if neither works, or if the length is neither 57600 nor 230400) |
@@ -117,7 +141,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 | `{"cmd":"send_logs","app":"0.4.0"}` | the recent log and the health check's lines, redacted, to the log relay (below, "Log reports") → `logs_sent` or `logs_error`; a second one while one is on its way is ignored |
 | `{"cmd":"health"}` | 0.4.0, cap `health`: → one `{"ev":"health","key","ok","text"}` per check as each one ends, then `{"ev":"health","done":true}`, all within about 8 s. The 12 keys: `service`, `node`, `node22`, `python`, `ytdlp`, `uid`, `lease`, `dns`, `tls`, `free`, `audio`, `socket` (`ytdlp`, `dns` and `tls` from `ytfetch.py check --json`, run as the fetch uid). Every key is answered; a check that could not run says `not checked: <why>`. `text` is one short line with no address (IP, MAC), video id or title |
 | `{"cmd":"related","id":".."}` | 0.4.0, cap `related`: → `{"ev":"related","id","items":[item]}` (the TVHTML5 watch-next tiles, the video itself left out, ≤ 100; kept 10 min per video and language) or `{"ev":"related","id","error"}` (`bad id`, `related offline`) |
-| `{"cmd":"ytdlp","auto":bool}` | 0.4.1, cap `ytdlp` (WP6): `auto` optional (sets the self-update on or off) → `{"ev":"ytdlp","auto","version","bundled","checking"}`. Not implemented yet: `error` `not implemented ytdlp` |
+| `{"cmd":"ytdlp","auto":bool}` | 0.4.1, cap `ytdlp` (WP6): `auto` optional (sets the self-update on or off, kept in `state/ytdlp.json`) → `{"ev":"ytdlp","auto","version","bundled","checking"}`, also after each look for a newer yt-dlp (above, "On the car, between releases"). `version`: the yt-dlp fetches use; `bundled`: `ytdlp.pyz`'s, known after the first look |
 | `{"cmd":"remote","on":bool,"lang"?}` | 0.4.1, cap `remote` (WP9): the phone remote on or off (below, "Phone remote"); `lang` the app's language for the phone page (`en fr nl de es it pt ru zh-CN`, anything else: `en`) → `{"ev":"remote","on","url","expires"}`: `url` `http://<hotspot address>:8471/#<token>` while on and the hotspot has an address, else null; `expires` the seconds left; `error` (with `on` false) when it could not be turned on. `on` not a bool: only that event. Off by default; off again after 1 hour with no phone action, when the app goes away, when its server stops and at exit |
 | `{"cmd":"proxy","mode":"off\|wireproxy\|tailscale"}` | later, not yet implemented, cap `proxy` (WP11): → `{"ev":"net","proxy","ok"}`; until then `error` `not implemented proxy` |
 

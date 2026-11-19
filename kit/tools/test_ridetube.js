@@ -60,6 +60,23 @@ async function clientAndModel() {
     assert.deepStrictEqual(d.got.slice(1, 3), [{ cmd: 'status' }, { cmd: 'auth_status' }], 'on connect: status, then the account (no library: nothing is kept on the car)');
     assert.strictEqual(d.got[0].cmd, 'hello', 'hello first: the service skips no certificate date before the app can warn');
 
+    // yt-dlp updates (cap ytdlp): told once hello lists the cap, and on a change; nothing without the cap; the daemon's
+    // answer kept; an older daemon is no error
+    await sleep(50);
+    assert.strictEqual(d.cmds('ytdlp').length, 0, 'no cap yet: not sent');
+    assert.ok(!m.setYtdlpAuto(true), 'no cap: kept for later, not sent');
+    d.send({ ev: 'hello', service: '0.4.1', caps: ['related', 'hist', 'health', 'ytdlp'] });
+    await lastIs(d, { cmd: 'ytdlp', auto: true }, 'yt-dlp updates on, told once hello says ytdlp');
+    assert.ok(m.setYtdlpAuto(false));
+    await lastIs(d, { cmd: 'ytdlp', auto: false }, 'the setting off, told at once');
+    d.send({ ev: 'ytdlp', auto: false, version: '2026.10.26', bundled: '2026.10.26', checking: false });
+    await until(() => m.ytdlp && m.ytdlp.version === '2026.10.26', 2000, 'the daemon\'s yt-dlp');
+    assert.deepStrictEqual(m.ytdlp, { auto: false, version: '2026.10.26', bundled: '2026.10.26', checking: false });
+    d.send({ ev: 'error', msg: 'unknown cmd ytdlp' });
+    await until(() => m.ytdlp && m.ytdlp.unsupported, 2000, 'an older daemon');
+    assert.strictEqual(m.error, null, 'not an error to show');
+    m.setYtdlpAuto(true);
+
     // first results: no thumb asked on its own (the screens ask for the tiles they draw: wantThumb), each asked once
     assert.ok(m.search('first'));
     d.send({ ev: 'results', q: 'first', items: [{ id: 'lib1', title: 'First' }, { bad: 1 }] });
@@ -1270,14 +1287,14 @@ async function wp5Frames(x) {
     console.log('ok   WP5 health check page: rows ok / failed, Run again');
     // the resume notice: a video the service resumes at 12:34; Start over goes back to 0
     const q = d.cmds('search').slice(-1)[0].q;
-    d.send({ ev: 'positions', items: [{ id: 'RESUME00001', ms: 754000, total: 1200000, done: false, title: 'Long one' }] });
-    d.send({ ev: 'results', q, items: [{ id: 'RESUME00001', title: 'Long one', channel: 'C', duration_s: 1200 }] });
+    d.send({ ev: 'positions', items: [{ id: 'RESUME00001', ms: 754000, total: 1200000, done: false, title: 'Lecture' }] });
+    d.send({ ev: 'results', q, items: [{ id: 'RESUME00001', title: 'Lecture', channel: 'C', duration_s: 1200 }] });
     await sleep(100);
     hu.handlers.BTN_RESULTS(); await drawn();
     tgt(/^r:\d+:RESUME00001$/).run();
     await until(() => plays().slice(-1)[0] === 'RESUME00001', 2000, 'played');
     parked();
-    d.send({ ev: 'state', state: 'playing', id: 'RESUME00001', title: 'Long one' }); d.send({ ev: 'time', elapsed: 754000, total: 1200000 });
+    d.send({ ev: 'state', state: 'playing', id: 'RESUME00001', title: 'Lecture' }); d.send({ ev: 'time', elapsed: 754000, total: 1200000 });
     await sleep(100); await drawn();
     assert.ok(texts.indexOf('Resumed at 12:34 · Start over') >= 0 && tgt('ov:resume'), 'the notice: ' + keys());
     tgt('ov:resume').run();

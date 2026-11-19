@@ -673,6 +673,161 @@ class InfoDir(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+def fake_zipapp(path, version, native=False):
+    """A stand-in for yt-dlp's zipapp: a shebang line, then a zip with yt_dlp (its version), yt_dlp_ejs, __main__."""
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('__main__.py', 'import yt_dlp\n')
+        z.writestr('yt_dlp/__init__.py', 'from . import version\n')
+        z.writestr('yt_dlp/version.py', f"__version__ = '{version}'\n")
+        z.writestr('yt_dlp_ejs/__init__.py', '')
+        if native:
+            z.writestr('yt_dlp/_speedup.so', b'\x7fELF')
+    with open(path, 'wb') as f:
+        f.write(b'#!/usr/bin/env python3\n' + buf.getvalue())
+
+
+class _Release(http.server.BaseHTTPRequestHandler):
+    """github.com/yt-dlp/yt-dlp/releases as update sees it: /latest redirects to /tag/<v>; /download/<v>/<file>."""
+    def do_HEAD(self):  # noqa: N802
+        self.server.seen.append(('HEAD', self.path))
+        if self.path.endswith('/latest'):
+            self.send_response(302)
+            self.send_header('Location', f'https://github.com/yt-dlp/yt-dlp/releases/tag/{self.server.latest}')
+        else:
+            self.send_response(404)
+        self.end_headers()
+
+    def do_GET(self):  # noqa: N802
+        self.server.seen.append(('GET', self.path))
+        body = self.server.files.get(self.path)
+        self.send_response(200 if body is not None else 404)
+        self.send_header('Content-Length', str(len(body or b'')))
+        self.end_headers()
+        self.wfile.write(body or b'')
+
+    def log_message(self, *a):
+        pass
+
+
+class Update(unittest.TestCase):
+    """update: the newest yt-dlp release, checked, repacked and loaded, named in pyz/current.json."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir=TMP)
+        self.cache = os.path.join(self.tmp, 'ytdlp')
+        self.bundled = os.path.join(self.tmp, 'ytdlp.pyz')
+        fake_zipapp(self.bundled, '2026.10.26')
+        self.srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _Release)
+        self.srv.seen, self.srv.files = [], {}
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.base = f'http://127.0.0.1:{self.srv.server_address[1]}/releases'
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        shutil.rmtree(self.tmp)
+
+    def release(self, version, sha=None, native=False):
+        import hashlib
+        p = os.path.join(self.tmp, 'yt-dlp-' + version)
+        fake_zipapp(p, version, native)
+        with open(p, 'rb') as f:
+            data = f.read()
+        sums = f'{sha or hashlib.sha256(data).hexdigest()}  yt-dlp\n{"0" * 64}  yt-dlp.exe\n'.encode()
+        self.srv.latest = version
+        self.srv.files = {f'/releases/download/{version}/yt-dlp': data, f'/releases/download/{version}/SHA2-256SUMS': sums}
+
+    def run_update(self):
+        r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ytfetch.py'), 'update', '--cache-dir', self.cache,
+                            '--pyz', self.bundled, '--releases', self.base, '--lease', os.path.join(self.tmp, 'no-lease')],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        return r.returncode, [json.loads(ln) for ln in r.stdout.decode().splitlines()]
+
+    def current(self):
+        with open(os.path.join(self.cache, 'pyz', 'current.json')) as f:
+            return json.load(f)
+
+    def test_newer_release_is_checked_repacked_and_named(self):
+        self.release('2026.11.12')
+        code, evs = self.run_update()
+        self.assertEqual((code, evs), (0, [{'ev': 'ytdlp', 'state': 'updated', 'version': '2026.11.12', 'bundled': '2026.10.26'}]))
+        c = self.current()
+        self.assertEqual(c['version'], '2026.11.12')
+        self.assertEqual(c['pyz'], os.path.join(self.cache, 'pyz', '2026.11.12', 'ytdlp.pyz'))
+        self.assertEqual(ytfetch.loads(c['pyz']), '2026.11.12', 'a fresh Python imports it')
+        import zipfile
+        with zipfile.ZipFile(c['pyz']) as z:
+            names = set(z.namelist())
+        self.assertIn('yt_dlp/version.pyc', names, 'precompiled, as build_pyz.sh')
+        self.assertEqual(sorted(os.listdir(os.path.join(self.cache, 'pyz', '2026.11.12'))), ['ytdlp.pyz'], 'the download is gone')
+        # the next check: nothing newer, nothing downloaded
+        self.srv.seen.clear()
+        self.assertEqual(self.run_update(), (0, [{'ev': 'ytdlp', 'state': 'current', 'version': '2026.11.12', 'bundled': '2026.10.26'}]))
+        self.assertEqual(self.srv.seen, [('HEAD', '/releases/latest')])
+        # a newer one: replaces it, the older update is removed
+        self.release('2026.11.20.1')
+        self.assertEqual(self.run_update()[1][0]['state'], 'updated')
+        self.assertEqual(self.current()['version'], '2026.11.20.1')
+        self.assertEqual(sorted(os.listdir(os.path.join(self.cache, 'pyz'))), ['2026.11.20.1', 'current.json'])
+
+    def test_not_newer_than_the_bundled_one_downloads_nothing(self):
+        self.release('2026.10.26')
+        self.assertEqual(self.run_update(), (0, [{'ev': 'ytdlp', 'state': 'current', 'version': '2026.10.26', 'bundled': '2026.10.26'}]))
+        self.assertEqual(self.srv.seen, [('HEAD', '/releases/latest')])
+        self.assertFalse(os.path.exists(os.path.join(self.cache, 'pyz', 'current.json')))
+
+    def test_a_file_the_sums_do_not_list_is_refused(self):
+        self.release('2026.11.12', sha='ab' * 32)
+        code, evs = self.run_update()
+        self.assertEqual(code, 1)
+        self.assertEqual(evs[-1]['ev'], 'error')
+        self.assertIn('sha256 mismatch', evs[-1]['msg'])
+        self.assertEqual(os.listdir(os.path.join(self.cache, 'pyz')), [], 'nothing kept, nothing named')
+
+    def test_native_code_is_refused(self):
+        self.release('2026.11.12', native=True)
+        code, evs = self.run_update()
+        self.assertEqual((code, evs[-1]['ev']), (1, 'error'))
+        self.assertIn('native code', evs[-1]['msg'])
+
+    def test_a_newer_service_drops_an_older_update(self):
+        self.release('2026.11.12')
+        self.assertEqual(self.run_update()[1][0]['state'], 'updated')
+        old = self.current()['pyz']
+        fake_zipapp(self.bundled, '2026.11.20')            # a RideTube service with a newer yt-dlp
+        self.release('2026.11.20')
+        self.srv.seen.clear()
+        self.assertEqual(self.run_update(), (0, [{'ev': 'ytdlp', 'state': 'current', 'version': '2026.11.20', 'bundled': '2026.11.20'}]))
+        self.assertEqual(os.listdir(os.path.join(self.cache, 'pyz')), [], 'the older update is gone')
+        self.assertFalse(os.path.exists(old))
+        self.assertEqual(self.srv.seen, [('HEAD', '/releases/latest')])
+
+    def test_pick_pyz_loads_the_newer(self):
+        own = os.path.join(ROOT, 'ytdlp.pyz')
+        up = os.path.join(self.tmp, 'up.pyz')
+        fake_zipapp(up, '2026.11.12')
+        if not os.path.exists(own):                       # (a computer: no ytdlp.pyz beside ytfetch.py)
+            self.assertEqual(ytfetch.pick_pyz(up), up)
+        self.assertEqual(ytfetch.pick_pyz(None), own)
+        self.assertEqual(ytfetch.pick_pyz(os.path.join(self.tmp, 'missing.pyz')), own, 'unreadable: its own')
+        for bad in (b'', b'PK\x03\x04 truncated', open(up, 'rb').read()[:-200]):   # a power cut, a short write
+            with open(os.path.join(self.tmp, 'bad.pyz'), 'wb') as f:
+                f.write(bad)
+            self.assertIsNone(ytfetch.pyz_version(os.path.join(self.tmp, 'bad.pyz')))
+            self.assertEqual(ytfetch.pick_pyz(os.path.join(self.tmp, 'bad.pyz')), own, 'damaged: its own, no crash')
+        mine = ytfetch.pyz_version(own)
+        if mine:
+            older = os.path.join(self.tmp, 'older.pyz')
+            fake_zipapp(older, '2000.01.01')
+            self.assertEqual(ytfetch.pick_pyz(older), own, 'an update older than its own: its own')
+
+    def test_no_release_tag(self):
+        self.srv.latest = 'nightly'
+        code, evs = self.run_update()
+        self.assertEqual((code, evs[-1]['ev']), (1, 'error'))
+
+
 def online():
     try:
         socket.create_connection(('www.youtube.com', 443), 3).close()

@@ -1053,13 +1053,19 @@ mgu.run({
             btn(MID + 180, 'Cancel', 'logs:cancel', back);
             return undefined;
         }
+        // lines of at most maxW: breaks at spaces, and between Chinese characters (Chinese has no spaces)
+        function paragraph(cv, text, size, maxW) {
+            const ls = [];
+            for (const tok of String(text).match(/[\u3000-\u9fff\uff00-\uffef]|[^\s\u3000-\u9fff\uff00-\uffef]+|\s+/g) || []) {
+                const t = ls.length ? ls[ls.length - 1] + tok : tok;
+                if (ls.length && cv.textWidth(t.replace(/\s+$/, ''), size, LIT) <= maxW) ls[ls.length - 1] = t;
+                else if (!/^\s+$/.test(tok)) ls.push(tok);
+            }
+            return ls.map((l) => l.trim());
+        }
         // the wrong-clock warning: drawn as the logs page; OK (or any other page) goes back to where it showed over
         function drawClock(cv) {
-            const lines = String(whole(CLOCK_MSG, { date: model.clock || '?' })).split(' ').reduce((ls, w) => {
-                const t = ls.length ? ls[ls.length - 1] + ' ' + w : w;
-                if (ls.length && cv.textWidth(t, 28, LIT) <= 1240) ls[ls.length - 1] = t; else ls.push(w);
-                return ls;
-            }, []);
+            const lines = paragraph(cv, whole(CLOCK_MSG, { date: model.clock || '?' }), 28, 1240);
             cv.text(whole('Security warning'), MID, 104, 34, C.amber, { literal: true, font: 'bold', align: 'center' });
             lines.slice(0, 6).forEach((l, i) => cv.text(l, MID, 160 + i * 40, 28, '#ffffff', { literal: true, align: 'center' }));
             if (!cv.own) return cv.text(whole('Pick any page to go on'), MID, 440, 24, C.dim, { literal: true, align: 'center' });
@@ -1071,11 +1077,7 @@ mgu.run({
         }
         // the Video while driving disclaimer: I agree turns the setting on for real, Cancel (or any other page) turns it off
         function drawRisk(cv) {
-            const lines = String(whole(RISK_MSG)).split(' ').reduce((ls, w) => {
-                const t = ls.length ? ls[ls.length - 1] + ' ' + w : w;
-                if (ls.length && cv.textWidth(t, 28, LIT) <= 1240) ls[ls.length - 1] = t; else ls.push(w);
-                return ls;
-            }, []);
+            const lines = paragraph(cv, whole(RISK_MSG), 28, 1240);
             cv.text(whole('Video while driving'), MID, 104, 34, C.amber, { literal: true, font: 'bold', align: 'center' });
             lines.slice(0, 6).forEach((l, i) => cv.text(l, MID, 160 + i * 40, 28, '#ffffff', { literal: true, align: 'center' }));
             if (!cv.own) return cv.text(whole('Agreeing needs the touchscreen. Pick any page to leave it off'), MID, 440, 24, C.dim, { literal: true, align: 'center' });

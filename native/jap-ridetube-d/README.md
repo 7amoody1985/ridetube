@@ -131,7 +131,7 @@ Daemon → app:
   the driver.
 - `{"ev":"clock","clock":"2026-10-13"|null}`: the clock went wrong, or right again (`null`), after `hello`. Checked at
   each fetch, lookup, request and health check.
-- `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`; 0.5.0 (not yet
+- `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`; later (not yet
   implemented, cap `stream`) adds `"stored":"ram|flash"`: where the playing video is held.
 - `{"ev":"time","elapsed","total"}` (ms, ≤ 4/s).
 - `{"ev":"results","q","items":[item]}` (`meta: ["12K views"]` when there is a view count).
@@ -154,7 +154,7 @@ Daemon → app:
   Popular...), as `feed`.
 - `{"ev":"playlists",..}`, `{"ev":"playlist",..}`, `{"ev":"logs_sent",..}`, `{"ev":"logs_error",..}`: below.
 - 0.4.0 / 0.4.1, cap-gated: `{"ev":"health",..}`, `{"ev":"related",..}`, `{"ev":"ytdlp",..}` (shapes in the table).
-- 0.5.0: `{"ev":"remote","on","url","expires"}` (above); `{"ev":"remote_do","do":"search|play","q"|"id"}`: a phone action
+- 0.4.1: `{"ev":"remote","on","url","expires"}` (above); `{"ev":"remote_do","do":"search|play","q"|"id"}`: a phone action
   the app carries out itself (the parked rule and the screen stay the app's): `q` a search (≤ 200 characters), `id` a
   video id (`ID_RE`), both checked again by root. Not yet implemented: `{"ev":"net","proxy","ok"}`.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lays out the MGU Store catalog of this repository in dist/release/: catalog.json, the app's OAP package
-(without node_modules/oap-sdk: the head unit makes it from an app already on the car), the service's tool kit,
+(without node_modules/oap-sdk: the head unit makes it from an app already on the car), the tool kits (the service, Full-width touch),
 jap-node22 (which jap-ridetube-d requires) and the app icon. Upload every file of dist/release/ as an asset of a GitHub
 release tagged `catalog`.
 
@@ -21,7 +21,8 @@ import argparse, gzip, hashlib, io, json, os, re, shutil, sys, tarfile, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = 'JustAnotherPU/ridetube'
 APP = 'jap_ridetube'
-TOOLS = ('jap-ridetube-d',)
+TOOLS = ('jap-ridetube-d', 'mgu-render-id7-touch')
+OPTIONAL = ('mgu-render-id7-touch',)   # offered beside RideTube, never required (RideTube adapts without it)
 # mgu-apps' published jap-node22 (its catalog release asset, 2026-11-04) and its catalog entry (release/catalog.js there)
 NODE22 = {'version': '22.23.4', 'size': 49203293, 'sha256': 'c62a8e2a3803b858b4d1020cb19746c8bd9ae8b753145f80c5adf7d781692743',
           'url': 'https://github.com/JustAnotherPU/mgu-apps/releases/download/catalog/jap-node22%4022.23.4.tgz'}
@@ -131,6 +132,8 @@ def main():
         e = {'id': t, 'kind': 'tool', 'title': c['title'], 'description': c['description'], 'version': c['version'],
              'artifact': artifact(os.path.join(out, '%s@%s.tgz' % (t, c['version'])), a.base),
              'requires': c.get('requires', {}), 'uninstallable': bool(c.get('uninstallable')), 'mguHmi': c.get('mguHmi', ['ID7'])}
+        if t in OPTIONAL:
+            e['optional'] = True
         comps.append(e)
     comps.append(dict(NODE22_ENTRY, version=NODE22['version'], artifact=artifact(os.path.join(out, n22), a.base)))
     with open(os.path.join(out, 'catalog.json'), 'w') as f:

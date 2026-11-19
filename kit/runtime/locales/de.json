@@ -214,5 +214,7 @@
   "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Das Handy verbindet sich mit dem WLAN-Hotspot des Autos und scannt einen Code von hier; die Seite kommt vom Auto selbst.",
   "Could not turn it on: {error}": "Einschalten nicht möglich: {error}",
   "Turn on": "Einschalten",
-  "To switch it, press Phone remote in the menu again": "Zum Ein- oder Ausschalten erneut Handy als Fernbedienung im Menü drücken"
+  "To switch it, press Phone remote in the menu again": "Zum Ein- oder Ausschalten erneut Handy als Fernbedienung im Menü drücken",
+  "For the full width, install Full-width touch from the MGU Store": "Für die volle Breite Full-width touch aus dem MGU Store installieren",
+  "Taps reach the screen's left edge": "Tippen erreicht den linken Bildschirmrand"
 }

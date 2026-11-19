@@ -214,5 +214,7 @@
   "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Телефон подключается к точке доступа Wi-Fi автомобиля и сканирует показанный здесь код; страница открывается с самого автомобиля.",
   "Could not turn it on: {error}": "Не удалось включить: {error}",
   "Turn on": "Включить",
-  "To switch it, press Phone remote in the menu again": "Чтобы включить или выключить, ещё раз нажмите «Пульт на телефоне» в меню"
+  "To switch it, press Phone remote in the menu again": "Чтобы включить или выключить, ещё раз нажмите «Пульт на телефоне» в меню",
+  "For the full width, install Full-width touch from the MGU Store": "Для полной ширины установите Full-width touch из MGU Store",
+  "Taps reach the screen's left edge": "Касания доходят до левого края экрана"
 }

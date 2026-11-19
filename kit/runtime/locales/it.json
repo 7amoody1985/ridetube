@@ -214,5 +214,7 @@
   "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "Il telefono si collega all'hotspot Wi-Fi dell'auto e scansiona un codice mostrato qui; la pagina viene dall'auto stessa.",
   "Could not turn it on: {error}": "Impossibile attivarlo: {error}",
   "Turn on": "Attiva",
-  "To switch it, press Phone remote in the menu again": "Per attivarlo o disattivarlo, premi di nuovo Telecomando dal telefono nel menu"
+  "To switch it, press Phone remote in the menu again": "Per attivarlo o disattivarlo, premi di nuovo Telecomando dal telefono nel menu",
+  "For the full width, install Full-width touch from the MGU Store": "Per la larghezza piena, installa Full-width touch dal MGU Store",
+  "Taps reach the screen's left edge": "I tocchi arrivano al bordo sinistro dello schermo"
 }

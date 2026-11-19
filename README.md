@@ -65,6 +65,10 @@ Then install RideTube. The Store installs its service (`jap-ridetube-d`, the pla
 video decoder) and `jap-node22`, the Node.js 22 that the service runs on, with it. Since 0.4.0 this source carries
 `jap-node22` itself (the same file as `JustAnotherPU/mgu-apps` publishes), so you no longer need to add mgu-apps.
 
+Optional, on iDrive 7: Full-width touch (`mgu-render-id7-touch`, from this source) lets RideTube use the strip
+at the screen's left edge where the car's back arrow usually is, for a wider rail and tiles. Without it RideTube
+keeps out of that strip. Health check's width row says which one you have.
+
 ## Settings
 
 - **Language**: Auto (follows the car's language when RideTube has it, else English), English, Français,
@@ -129,6 +133,7 @@ One car only so far. Reports from other cars are welcome in the issues.
 | `kit/` | the idrive7-apps app kit, trimmed to the modules RideTube uses |
 | `native/jap-ridetube-d` | the service on the car: player, fetcher, account, search, thumbnails |
 | `native/ytdec` | the H.264 decoder that draws into the renderer's video layer |
+| `native/mgu-render-id7-touch` | Full-width touch, the optional Store tool that gives apps the screen's left edge |
 | `tools/release.py` | lays out the Store catalog (`catalog.json` and its assets) |
 
 ## Build and test on a computer

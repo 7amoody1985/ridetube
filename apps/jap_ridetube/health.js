@@ -5,7 +5,7 @@
  * type, so it works driving or parked. Where the HMI runs the screen (no buttons drawn), the menu entry pressed
  * again runs it again. The service sends the rows as each check finishes, then done.
  *
- *   const drawHealth = require('./health')({ model, say, fit, t, message, count, C, focus, X0, TOP, H, W, OFF, OFF2 });
+ *   const drawHealth = require('./health')({ model, say, fit, t, message, count, C, focus, X0, TOP, H, W, OFF, OFF2, edge });
  *   drawHealth(cv)        // from render, mode 'health'
  */
 module.exports = function healthPage(o) {
@@ -13,10 +13,10 @@ module.exports = function healthPage(o) {
     const LIT = { literal: true }, LITB = { literal: true, font: 'bold' };
     const GREEN = '#35d07f', GREY = '#5c6380';
     // the service's keys in the order shown (the rows come as each probe ends); others after them, as they came
-    const ORDER = ['service', 'node', 'node22', 'python', 'ytdlp', 'uid', 'lease', 'dns', 'tls', 'free', 'audio', 'socket'];
+    const ORDER = ['service', 'node', 'node22', 'python', 'ytdlp', 'uid', 'lease', 'dns', 'tls', 'free', 'audio', 'socket', 'width'];
     const rank = (k) => { const i = ORDER.indexOf(k); return i < 0 ? ORDER.length : i; };
     // "... unknown" (e.g. the socket lock before that package lands): not a failure, a grey dash
-    const unknown = (r) => !r.ok && /\bunknown\b/i.test(r.text);
+    const unknown = (r) => !r.ok && (r.hint || /\bunknown\b/i.test(r.text));   // (hint: a suggestion, not a failure)
     const mark = (cv, x, y, ok, unk) => {
         cv.circle(x, y, 15, ok ? GREEN : unk ? GREY : C.red);
         if (ok) cv.polyline([[x - 7, y], [x - 2, y + 6], [x + 8, y - 6]], 4, '#ffffff');
@@ -27,7 +27,12 @@ module.exports = function healthPage(o) {
         const X0 = o.X0, TOP = o.TOP;
         if (!model.connected) return say(cv, o.OFF, o.OFF2);
         const h = model.health || { items: [], loading: false };
-        const bottom = H + (cv.own ? cv.extra : 0), rows = h.items.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r.key) - rank(b.r.key) || a.i - b.i).map((x) => x.r);
+        const items = h.items.slice();
+        // the app's own row, full screen only: can it use the screen's left edge (o.edge: true, false, null = not full screen)
+        const edge = o.edge ? o.edge() : null;
+        if (edge !== null && (items.length || h.error)) items.push(edge ? { key: 'width', ok: true, text: t("Taps reach the screen's left edge") }
+            : { key: 'width', ok: false, hint: true, text: t('For the full width, install Full-width touch from the MGU Store') });
+        const bottom = H + (cv.own ? cv.extra : 0), rows = items.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r.key) - rank(b.r.key) || a.i - b.i).map((x) => x.r);
         const bad = rows.filter((r) => !r.ok && !unknown(r)).length;
         const head = h.loading ? t('Checking...') : h.error ? t('Health check: ') + t(h.error)
             : !rows.length ? t('No result yet') : bad ? o.count(bad, '{count} check failed', '{count} checks failed', t) : t('Everything works');

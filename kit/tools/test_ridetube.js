@@ -1551,7 +1551,7 @@ async function wp7Frames(x) {
 // the English words of RideTube's strings (tests/test_runtime.js's list): none may show while Russian is chosen
 function rideTubeWords() {
     const ru = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'ru.json'), 'utf8'));
-    const keep = /^(ridetube|youtube|jap|ridetube|mgu|store|render|gpu|sponsorblock|sponsor|ajay|app|github|wi|fi|shorts|google|com|device|cc|by|nc|sa|p|s|v|query|name|count|percent|title|seconds|time|date|soc|limit|error|www|https|ok)$/;
+    const keep = /^(ridetube|youtube|jap|ridetube|mgu|store|render|gpu|sponsorblock|sponsor|ajay|app|github|wi|fi|shorts|google|com|device|cc|by|nc|sa|p|s|v|query|name|count|percent|title|seconds|time|date|soc|limit|error|www|https|ok|full|width|touch)$/;   // (full, width, touch: the Store tool Full-width touch, named in English)
     const out = new Set();
     Object.keys(ru).forEach((k) => k.split(/[^A-Za-z]+/).forEach((w) => { w = w.toLowerCase(); if (w.length > 1 && !keep.test(w)) out.add(w); }));
     return out;

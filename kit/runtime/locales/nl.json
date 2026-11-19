@@ -214,5 +214,7 @@
   "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "De telefoon maakt verbinding met de Wi-Fi-hotspot van de auto en scant een code die hier staat; de pagina komt van de auto zelf.",
   "Could not turn it on: {error}": "Aanzetten mislukt: {error}",
   "Turn on": "Aanzetten",
-  "To switch it, press Phone remote in the menu again": "Druk nogmaals op Telefoon als afstandsbediening in het menu om het aan of uit te zetten"
+  "To switch it, press Phone remote in the menu again": "Druk nogmaals op Telefoon als afstandsbediening in het menu om het aan of uit te zetten",
+  "For the full width, install Full-width touch from the MGU Store": "Installeer Full-width touch uit de MGU Store voor de volledige breedte",
+  "Taps reach the screen's left edge": "Tikken bereiken de linkerrand van het scherm"
 }

@@ -22,17 +22,18 @@ function confKeys(text) {
     return o;
 }
 
-/** "0,0,1920,720" -> [0, 0, 1920, 720]; "auto" or anything else -> null. */
+/** "0,0,1920,720" -> [0, 0, 1920, 720]; "auto" or anything else -> null (spaces inside a number too, as sscanf). */
 function rect(v) {
-    const m = /^(-?\d+),(-?\d+),(\d+),(\d+)$/.exec(String(v || '').replace(/\s/g, ''));
+    const m = /^(-?\d+)\s*,\s*(-?\d+)\s*,\s*(\d+)\s*,\s*(\d+)$/.exec(String(v || '').trim());
     return m ? m.slice(1).map(Number) : null;
 }
 
 /**
- * One renderer's command line (argv) -> 'full' (its area reaches x 0 across the width), 'off' (it routes no touch)
- * or 'clipped' (auto, part of the width, or not readable). read(path) returns a file's text, or null.
+ * One renderer's command line (argv) -> 'full' (its area is the whole screen), 'off' (it routes no touch) or
+ * 'clipped' (auto, part of the screen, or not readable). read(path) returns a file's text, null when the file is
+ * absent, or undefined when it can't be read (the renderer is root, the app is not).
  */
-function rendererArea(argv, width, read) {
+function rendererArea(argv, width, read, height) {
     let area = 'auto', touch = '1', local = LOCAL, bad = false;
     const apply = (o) => {
         if (o.touch_area !== undefined) area = o.touch_area;
@@ -40,16 +41,17 @@ function rendererArea(argv, width, read) {
         if (o.local_conf !== undefined) local = o.local_conf;
     };
     for (let i = 1; i < argv.length; i++) {
-        if (argv[i] === '-c' && i + 1 < argv.length) { const t = read(argv[++i]); if (t === null) bad = true; else apply(confKeys(t)); }
-        else if (argv[i] === '-s' && i + 1 < argv.length) { const kv = argv[++i], k = kv.split('=')[0]; const o = {}; o[k] = kv.slice(k.length + 1); apply(o); }
+        if (argv[i] === '-c' && i + 1 < argv.length) { const t = read(argv[++i]); if (typeof t !== 'string') bad = true; else apply(confKeys(t)); }
+        else if (argv[i] === '-s' && i + 1 < argv.length) { const kv = argv[++i], k = kv.split('=')[0].trim(); const o = {}; o[k] = kv.slice(k.length + 1); apply(o); }
     }
     // the local conf comes last in the renderers that read it (not every build does: then it must not narrow the area either)
     const lt = local ? read(local) : null;
-    const lk = lt === null ? {} : confKeys(lt);
+    if (lt === undefined) bad = true;
+    const lk = typeof lt === 'string' ? confKeys(lt) : {};
     // off only when no reading turns it on (touch = 0 there, and the local conf, if it says, agrees)
     if (Number(touch) === 0 && (lk.touch === undefined || Number(lk.touch) === 0)) return 'off';
     if (bad) return 'clipped';
-    const full = (v) => { const r = rect(v); return !!r && r[0] <= 0 && r[0] + r[2] >= width; };
+    const full = (v) => { const r = rect(v); return !!r && r[0] <= 0 && r[0] + r[2] >= width && r[1] <= 0 && (!height || r[1] + r[3] >= height); };
     if (!full(area)) return 'clipped';
     if (lk.touch_area !== undefined && !full(lk.touch_area)) return 'clipped';
     return 'full';
@@ -72,12 +74,12 @@ function renderers() {
  * { full, why }: full when at least one renderer routes touch and every one that does reaches the left edge.
  * (list, read: tests.)
  */
-function leftEdge(width, list, read) {
-    read = read || ((f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } });
+function leftEdge(width, list, read, height) {
+    read = read || ((f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return e.code === 'ENOENT' ? null : undefined; } });
     const rs = (list || renderers)();
     const seen = {};
-    const res = rs.filter((a) => { const k = a.join(' '); if (seen[k]) return false; seen[k] = 1; return true; })   // (a renderer's threads)
-        .map((a) => [a[0].split('/').pop(), rendererArea(a, width, read)]);
+    const res = rs.filter((a) => { const k = a.join(' '); if (seen[k]) return false; seen[k] = 1; return true; })   // (the same renderer seen twice)
+        .map((a) => [a[0].split('/').pop(), rendererArea(a, width, read, height)]);
     const routing = res.filter((r) => r[1] !== 'off');
     return { full: routing.length > 0 && routing.every((r) => r[1] === 'full'), why: res.map((r) => r.join(' ')).join(', ') || 'no renderer seen' };
 }

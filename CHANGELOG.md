@@ -54,6 +54,30 @@ Thanks to @marilykinson-glitch, whose fork brought the History and Liked feeds, 
 handling, the dropout recovery and the command-sequence tests, and to 小白151 (JackieZ123430) for the Chinese
 translation.
 
+## App 0.5.1
+
+- YouTube's dark greys: a #0f0f0f background with grey cards. In fill mode the pages use the whole screen: they
+  start at the top, and four wider tiles reach the right edge, with a shelf's next arrow over the fourth tile.
+- The rail sits at the screen's left edge, over the strip where the car's back arrow usually is, and the tiles get
+  wider. That needs both renderers to give the app taps there, which Full-width touch (below) does. RideTube
+  reads each renderer's touch area at start; where one keeps that strip for the car (its default today), the
+  rail stays right of it, as in 0.4.3, so a tap meant for RideTube never lands on the hidden back arrow and closes
+  the app.
+- Health check has a width row: whether taps reach the left edge, and if not, that Full-width touch gives the full
+  width.
+- The player is grey when no video shows, and the phone remote's QR code is bigger.
+
+## Full-width touch 1.4.0 (`mgu-render-id7-touch`, new Store tool)
+
+- Optional, iDrive 7. It gives both renderers (the Store's `mgu-render` and the kit's `idrive7-renderd`) the
+  whole screen as the area apps may claim, 0,0,1920,720 instead of 84,0,1836,720. Apps claim only what they
+  draw, so the others still leave the back column to the car and keep its back arrow. Leave a full-screen app with
+  the BACK or MENU button.
+- Install restarts a renderer only when it runs without that area. Removal puts the renderers' settings back; the
+  running renderers keep the area until the head unit's next start.
+- The same default is proposed to the renderers themselves (robertnisipeanu/mgu-store and
+  cauliflowermossgrape/idrive7-apps). Once it ships, the tool can be removed.
+
 ## App 0.4.3
 
 - Search page on the rail: Type a search (typing works only while parked), your last 10 searches as tiles that

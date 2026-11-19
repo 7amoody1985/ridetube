@@ -214,5 +214,7 @@
   "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "O telefone liga-se ao hotspot Wi-Fi do carro e lê um código mostrado aqui; a página vem do próprio carro.",
   "Could not turn it on: {error}": "Não foi possível ligar: {error}",
   "Turn on": "Ligar",
-  "To switch it, press Phone remote in the menu again": "Para ligar ou desligar, toque de novo em Telefone como comando no menu"
+  "To switch it, press Phone remote in the menu again": "Para ligar ou desligar, toque de novo em Telefone como comando no menu",
+  "For the full width, install Full-width touch from the MGU Store": "Para a largura total, instale o Full-width touch a partir da MGU Store",
+  "Taps reach the screen's left edge": "Os toques chegam à borda esquerda do ecrã"
 }

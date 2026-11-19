@@ -464,7 +464,7 @@ test('touch area: the left edge is the app\'s only when every touch-routing rend
         '/c/full.conf': 'a = 1\ntouch_area = 0,0,1920,720\n', '/c/auto.conf': 'touch_area = auto\n', '/c/old.conf': 'touch_area = 84,0,1836,720\n',
         '/c/none.conf': 'touch = 1\n', '/c/off.conf': 'touch = 0\n', '/c/junk.conf': 'touch_area = left\n',
     };
-    const read = (local) => (f) => (f === '/var/opt/mgu-render/mgu-render.local.conf' ? (local === undefined ? null : local) : files[f] === undefined ? null : files[f]);
+    const read = (local) => (f) => (f === '/var/opt/mgu-render/mgu-render.local.conf' ? (local === undefined ? null : local === 'EACCES' ? undefined : local) : files[f] === undefined ? null : files[f]);
     const id7 = ['/x/mgu-renderd', '-s', 'socket_path=/run/mgu-renderd/renderd.sock'];
     const store = (c) => ['/x/mgu-render', '-c', c];
     const area = (argv, local) => rendererArea(argv, 1920, read(local));
@@ -479,6 +479,12 @@ test('touch area: the left edge is the app\'s only when every touch-routing rend
     assert.strictEqual(area(store('/c/none.conf'), 'touch_area = 0,0,1920,720\n'), 'clipped', 'the local conf alone: not every build reads it, so it never widens');
     assert.strictEqual(area(store('/c/full.conf'), 'touch_area = auto\n'), 'clipped', 'the local conf narrows it');
     assert.strictEqual(area(id7.concat(['-s', 'touch_area=0,0,1920,720']), 'touch_area = 84,0,1836,720\n'), 'clipped', 'a build that may read the local conf: it must agree');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area=0,0,1920,720', '-s', 'touch_area = 84,0,1836,720'])), 'clipped', '-s key with spaces (the renderer trims it)');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area=0,0,1 920,720'])), 'clipped', 'a space inside a number (sscanf refuses it)');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area= 0 , 0 , 1920 , 720 '])), 'full', 'spaces around the numbers');
+    assert.strictEqual(area(id7.concat(['-s', 'touch_area=0,0,1920,720']), 'EACCES'), 'clipped', 'a local conf the app may not read');
+    assert.strictEqual(rendererArea(id7.concat(['-s', 'touch_area=0,76,1920,644']), 1920, read(), 720), 'clipped', 'the title strip left out (the column\'s top is the HMI\'s)');
+    assert.strictEqual(rendererArea(id7.concat(['-s', 'touch_area=0,0,1920,720']), 1920, read(), 720), 'full', 'the whole screen, height checked');
     assert.strictEqual(area(store('/c/off.conf')), 'off', 'touch = 0');
     assert.strictEqual(area(store('/c/off.conf'), 'touch = 1\n'), 'clipped', 'touch = 0, the local conf turns it on (auto)');
     const both = (a, b, local) => leftEdge(1920, () => [a, b], read(local)).full;

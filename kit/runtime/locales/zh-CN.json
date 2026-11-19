@@ -246,5 +246,7 @@
   "The phone joins the car's Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.": "手机连接车辆的 Wi-Fi 热点并扫描此处显示的二维码；页面来自车辆本身。",
   "Could not turn it on: {error}": "无法开启：{error}",
   "Turn on": "开启",
-  "To switch it, press Phone remote in the menu again": "如需开启或关闭，请在菜单中再次按“手机遥控”"
+  "To switch it, press Phone remote in the menu again": "如需开启或关闭，请在菜单中再次按“手机遥控”",
+  "For the full width, install Full-width touch from the MGU Store": "如需全宽显示，请从 MGU Store 安装 Full-width touch",
+  "Taps reach the screen's left edge": "触摸可到达屏幕左边缘"
 }

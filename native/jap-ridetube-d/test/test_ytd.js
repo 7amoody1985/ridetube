@@ -2960,8 +2960,9 @@ async function main() {
                 assert.ok(page.headers['content-security-policy'].indexOf("script-src 'sha256-" + hashOf(page.text) + "'") >= 0, lang + ': the CSP hash matches the script');
             }
             const { buildPage } = require('../remote.js');
-            const evil = buildPage(html, { fr: { 'Send to the car': '</script><script>alert(1)</script>' } }, 'fr').page;
+            const evil = buildPage(html, { fr: { 'Send to the car': '</script><script>alert(1)</script>', 'Too long': "$' $& $$" } }, 'fr').page;
             assert.strictEqual((evil.match(/<\/script>/g) || []).length, 2, 'a word cannot close its block');
+            assert.strictEqual(JSON.parse(/<script type="application\/json" id="words">([\s\S]*?)<\/script>/.exec(evil)[1])['Too long'], "$' $& $$", 'a $ in a word stays as written');
         });
 
         await t('WP9 off: the rule removed, nothing listens, remote.sock gone; on again: a new token, the old one refused', async () => {

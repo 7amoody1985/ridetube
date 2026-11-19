@@ -24,7 +24,7 @@
  *   commands: auth, sign_out, feed, positions, send_logs...).
  *
  * The child: `node remote.js serve` as the web uid (no groups, env {}, cwd /), exits when its stdin closes.
- *   stdin:  {"token","port","sock","page"} first, then {"addr":"<ipv4>"|null} when the hotspot's address changes
+ *   stdin:  {"token","port","sock","page","strings","lang"} first, then {"addr":"<ipv4>"|null} when the hotspot's address changes
  *   stdout: {"listening":["127.0.0.1",..],"error"} and {"log":"<line>"}
  *   It listens on 127.0.0.1 and on the hotspot interface's (wlan_bridge) IPv4 address while there is one.
  *   GET / is the page (remote.html, no external assets). With "Authorization: Bearer <token>" (constant-time compare):
@@ -379,7 +379,7 @@ function buildPage(html, strings, lang) {
     const l = LANGS.indexOf(lang) >= 0 ? lang : 'en';
     const words = strings && typeof strings[l] === 'object' ? strings[l] : {};
     const block = '<script type="application/json" id="words">' + JSON.stringify(words).replace(/</g, '\\u003c') + '</script>';
-    const page = String(html).replace('<html lang="en">', '<html lang="' + l + '">').replace('<!--words-->', block);
+    const page = String(html).replace('<html lang="en">', '<html lang="' + l + '">').replace('<!--words-->', () => block);   // (a function: a $' in a word stays a $')
     const script = (/<script>([\s\S]*?)<\/script>/.exec(page) || [null, ''])[1];
     const csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-" + crypto.createHash('sha256').update(script).digest('base64') +
         "'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";

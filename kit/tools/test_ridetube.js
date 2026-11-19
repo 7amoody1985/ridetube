@@ -598,15 +598,15 @@ async function appFrames() {
         assert.deepStrictEqual(ks.slice(0, 4), ['rail:search', 'rail:home', 'rail:subs', 'rail:wl'], 'the rail first: ' + ks);
         assert.ok(ks.indexOf('rail:library') < 0, 'no Library');
         assert.ok(ks.indexOf('rail:player') < 0, 'nothing playing: no Playing');
-        assert.ok(ks.indexOf('r:0:lib1') > 3 && ks.indexOf('r:0:lib2') > 3, 'then the tiles: ' + ks);
+        assert.ok(ks.indexOf('r:1:lib1') > 3 && ks.indexOf('r:1:lib2') > 3, 'then the tiles: ' + ks);
         // the controller on a tile, pressed: the player; pushed left: back on that tile
-        disp.onPageFocus('r:0:lib1');
-        disp.pageTargets.find((t) => t.key === 'r:0:lib1').run();
+        disp.onPageFocus('r:1:lib1');
+        disp.pageTargets.find((t) => t.key === 'r:1:lib1').run();
         await hu.loopFn();
         assert.ok(keys().indexOf('ov:back') >= 0, 'the tile opens the player');
         assert.ok(disp.onBack(false) === true);
         await hu.loopFn();
-        assert.strictEqual(disp.focusKey, 'tgt:r:0:lib1', 'the controller back on the tile it left from');
+        assert.strictEqual(disp.focusKey, 'tgt:r:1:lib1', 'the controller back on the tile it left from');
         console.log('ok   no bar, rail (Playing while a video plays), back from the player onto the tile');
     }
     console.log('ok   app frames (Home signed out, results, offline search, player through the renderer stream)');
@@ -991,6 +991,7 @@ async function appFrames() {
     if (own) await wp5Frames({ hu, d, disp, keys, drawn, texts, wp5, rock: (v) => rockerH({ operationPushButtonAudioAutomaticTuningSteeringWheel: v }), speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     else console.log('skip WP5 frames (the stub does not run the screen)');
     if (own) await wp7Frames({ hu, d, disp, drawn, texts, file, hmiLang, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
+    if (own) await wp10Frames({ hu, d, disp, drawn, texts, wp5, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
 }
@@ -1432,4 +1433,149 @@ function rideTubeWords() {
     return out;
 }
 
-clientAndModel().then(helloCaps).then(wp5Model).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+clientAndModel().then(helloCaps).then(wp5Model).then(wp10Unit).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+
+// ======== WP10 Search page (apps/jap_ridetube/search.js): the rail's Search, Type a search (parked only), the
+// recent searches (10, newest first, in the settings), Clear, Menu, then the results
+function wp10Unit() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-search-')), legacy = path.join(dir, 'recent.json');
+    fs.writeFileSync(legacy, JSON.stringify(['old one', 3, '', 'old two']));
+    const store = {}, settings = { get: (k) => store[k], set: (k, v) => { store[k] = v; } };
+    const model = { q: null, searching: false, searchError: null, results: [] };
+    let moving = false, typed = 0, ran = [], flashed = [], changed = 0;
+    const id = (s) => s, X = () => {};
+    const page = require('../../apps/jap_ridetube/search')({ settings, legacy, model, t: id, whole: id, message: (k, v) => k.replace(/\{(\w+)\}/g, (_, n) => v[n]),
+        moving: () => moving, type: () => typed++, run: (q) => ran.push(q), menu: () => ran.push('MENU'), flash: (s) => flashed.push(s), changed: () => changed++, glyphs: () => ({ KEYS: X, ALL: X, X }) });
+    assert.deepStrictEqual([page.list(), store.recent], [['old one', 'old two'], ['old one', 'old two']], '0.4\'s recent.json taken over once (bad rows dropped), into the settings');
+    const ids = () => page.sections((x) => x)[0].items.map((r) => r.id);
+    assert.deepStrictEqual(ids(), ['::type', '::menu', '::recent0', '::recent1', '::clear'], 'Type a search, Menu, the recents, Clear');
+    page.sections((x) => x)[0].items[4].act();
+    assert.deepStrictEqual([page.list(), store.recent, changed, ids()], [[], [], 1, ['::type', '::menu']], 'Clear: none left (saved, the HMI menu told), no Clear tile');
+    assert.strictEqual(page.sections((x) => x).length, 1, 'empty: no search yet, the row alone');
+    for (let i = 0; i < 12; i++) page.add('q' + i);
+    page.add('Q3');
+    assert.deepStrictEqual(store.recent, ['Q3', 'q11', 'q10', 'q9', 'q8', 'q7', 'q6', 'q5', 'q4', 'q2'], 'at most 10, newest first, one row per search (case aside)');
+    page.sections((x) => x)[0].items[3].act();
+    assert.deepStrictEqual(ran, ['q11'], 'a recent pressed runs it');
+    // typing: parked, the keyboard; driving, why not (the keyboard never asked)
+    const typeTile = () => page.sections((x) => x)[0].items[0];
+    assert.strictEqual(typeTile().sub, 'Opens the keyboard');
+    typeTile().act();
+    moving = true;
+    assert.strictEqual(typeTile().sub, 'Typing works only while parked', 'driving: the tile says why');
+    typeTile().act();
+    assert.deepStrictEqual([typed, flashed], [1, ['Typing works only while parked']], 'driving: no keyboard, the note');
+    page.sections((x) => x)[0].items[1].act();
+    assert.strictEqual(ran.slice(-1)[0], 'MENU', 'Menu: the HMI menu');
+    // the results row: searching, an error, nothing found, results (shown() applied)
+    const second = () => page.sections((r) => r.filter((x) => !x.hide))[1];
+    model.q = 'cats'; model.searching = true;
+    assert.deepStrictEqual([second().title, second().items], ['Searching "cats"...', []]);
+    model.searching = false; model.searchError = 'search offline';
+    assert.deepStrictEqual([second().title, second().sub], ['Search: search offline', 'Try again from Search']);
+    model.searchError = null;
+    assert.deepStrictEqual([second().title, second().sub], ['Nothing found for "cats"', 'Try other words']);
+    model.results = [{ id: 'a' }, { id: 'b', hide: true }];
+    assert.deepStrictEqual([second().title, second().items, second().grid], ['Results for “cats”', [{ id: 'a' }], true]);
+    // a later start reads the settings, not the old file
+    fs.writeFileSync(legacy, JSON.stringify(['stale']));
+    const again = require('../../apps/jap_ridetube/search')({ settings, legacy, model, t: id });
+    assert.deepStrictEqual(again.list(), store.recent, 'the settings win over recent.json');
+    console.log('ok   WP10 search page model: recent.json taken over, 10 newest first, Clear, typing parked only, the results row');
+}
+
+async function wp10Frames(x) {
+    const { hu, d, disp, drawn, texts, wp5, speed } = x;
+    const tgt = (k) => disp.pageTargets.find((t) => t.key === k);
+    const keys = () => disp.pageTargets.map((t) => t.key);
+    // the HMI's speller, faked (as speller.js drives it): it answers with `typed` once started
+    let typed = null;
+    const fakeApp = { getUseCaseFactory: () => ({ create: () => {
+        let cb = null;
+        return Promise.resolve({ token: 1, proxy: {
+            init: async () => {}, waitUntilAvailable: async () => {}, interactionState: { getValue: async () => 'READY' },
+            notify: { subscribe: async (fn) => { cb = fn; return 1; }, unsubscribe: async () => {} },
+            start: async () => { setTimeout(() => cb(typed === null ? { interactionState: 'ABORTED' } : { interactionParameters: new Map([[102, typed], [105, true]]) }), 10); },
+        } });
+    } }) };
+    Object.defineProperty(hu.ctx, 'app', { configurable: true, get() { wp5.spells++; return fakeApp; } });
+    const opened = [], oo = hu.ui.open, hmi = {}, ot = hu.ui.text;
+    hu.ui.open = function (n) { opened.push(n); return oo.apply(this, arguments); };
+    hu.ui.text = function (n, t) { hmi[n] = t; return ot.apply(this, arguments); };
+    speed(0);
+    d.send({ ev: 'state', state: 'idle' });
+    hu.handlers.BTN_HOME(); await drawn();
+    // the rail's Search: the page (no longer the HMI menu)
+    tgt('rail:search').run();
+    await sleep(50); await drawn();
+    assert.ok(opened.indexOf('MAIN') < 0, 'the rail\'s Search opens the page, not the menu');
+    ['Search', 'Type a search', 'Opens the keyboard', 'Menu', 'Account, settings, logs'].forEach((t) => assert.ok(texts.indexOf(t) >= 0, t + ': ' + texts.join('|')));
+    assert.ok(keys().indexOf('r:0:::recent0') >= 0 && tgt('r:0:::clear'), 'the earlier searches: ' + keys());
+    // empty: Clear, the row has Type a search and Menu only; the HMI menu's slots go back to the suggestions
+    tgt('r:0:::clear').run();
+    await drawn();
+    assert.deepStrictEqual(keys().filter((k) => /^r:0:/.test(k)), ['r:0:::type', 'r:0:::menu'], 'cleared: ' + keys());
+    assert.deepStrictEqual([hu.ctx.settings.get('recent'), hmi.BTN_S1, hmi.BTN_S6], [[], 'Music', 'Trailers'], 'saved empty; the menu: the suggestions');
+    // typed while parked: searched, saved first, the results under the row; the controller (in use) onto the first
+    disp.onPageFocus('r:0:::type');
+    typed = 'kittens';
+    const n0 = wp5.spells;
+    tgt('r:0:::type').run();
+    await until(() => d.cmds('search').slice(-1)[0].q === 'kittens', 2000, 'typed search sent');
+    assert.ok(wp5.spells > n0, 'parked: the keyboard opened');
+    assert.deepStrictEqual(hu.ctx.settings.get('recent'), ['kittens'], 'in the settings');
+    await drawn();
+    assert.ok(texts.indexOf('Searching "kittens"...') >= 0, 'searching: ' + texts.join('|'));
+    const res = Array.from({ length: 9 }, (_, i) => ({ id: ('KITTEN' + i + 'xxxxxx').slice(0, 11), title: 'Kitten ' + i, channel: 'Cats', duration_s: 60 + i }));
+    d.send({ ev: 'results', q: 'kittens', items: res });
+    await sleep(100); await drawn(); await sleep(20);
+    assert.ok(texts.indexOf('Results for “kittens”') >= 0 && tgt('r:1:' + res[0].id) && texts.indexOf('kittens') >= 0, 'results and the recent: ' + texts.join('|'));
+    assert.strictEqual(disp.focusKey, 'tgt:r:1:' + res[0].id, 'the controller on the first result');
+    assert.ok(tgt('r:1:' + res[0].id).y < 520, 'the results scrolled into view: ' + tgt('r:1:' + res[0].id).y);
+    // left without a search: back on the page, nothing sent
+    typed = null;
+    const nS = d.cmds('search').length;
+    opened.length = 0;
+    tgt('r:0:::type').run();
+    await sleep(100);
+    assert.deepStrictEqual([d.cmds('search').length, opened.slice(-1)[0]], [nS, 'VIEW'], 'cancelled: no search, the page again');
+    // a recent pressed runs it again; an error shows on the page
+    typed = 'dogs'; hu.handlers.BTN_SEARCH(); await until(() => d.cmds('search').slice(-1)[0].q === 'dogs', 2000, 'dogs');
+    typed = 'birds'; hu.handlers.BTN_SEARCH(); await until(() => d.cmds('search').slice(-1)[0].q === 'birds', 2000, 'birds');
+    assert.deepStrictEqual(hu.ctx.settings.get('recent').slice(0, 3), ['birds', 'dogs', 'kittens'], 'newest first');
+    await drawn();
+    d.send({ ev: 'error', msg: 'search offline' });
+    await sleep(100); await drawn();
+    assert.ok(texts.indexOf('Search: search offline') >= 0 && texts.indexOf('Try again from Search') >= 0 && !keys().some((k) => /^r:1:/.test(k)), 'the error: ' + texts.join('|'));
+    disp.onPageFocus(null);
+    const rk = keys().filter((k) => /^r:0:::recent/.test(k));
+    assert.strictEqual(rk.length >= 3, true, 'the recents: ' + keys());
+    // (the row turns sideways: the third recent may sit past the arrow; the controller brings it in)
+    disp.onPageFocus('r:0:::recent2'); await drawn();
+    tgt('r:0:::recent2').run();
+    await until(() => d.cmds('search').slice(-1)[0].q === 'kittens', 2000, 'the recent searched again');
+    d.send({ ev: 'results', q: 'kittens', items: [] });
+    await sleep(100); await drawn();
+    assert.ok(texts.indexOf('Nothing found for "kittens"') >= 0, 'nothing found: ' + texts.join('|'));
+    // driving: the tile says why, a press opens nothing and says it again; a recent still runs
+    speed(50 * 64);
+    disp.onPageFocus('r:0:::type');
+    await sleep(300); await drawn();
+    assert.ok(texts.indexOf('Typing works only while parked') >= 0, 'driving: ' + texts.join('|'));
+    const sp = wp5.spells;
+    tgt('r:0:::type').run();
+    await sleep(100); await drawn();
+    assert.strictEqual(wp5.spells, sp, 'driving: no keyboard');
+    assert.strictEqual(texts.filter((t) => t === 'Typing works only while parked').length, 2, 'the tile and the note: ' + texts.join('|'));
+    disp.onPageFocus('r:0:::recent1'); await drawn();
+    tgt('r:0:::recent1').run();
+    await until(() => d.cmds('search').slice(-1)[0].q === 'birds', 2000, 'a recent runs while driving');
+    assert.strictEqual(wp5.spells, sp, 'still no keyboard');
+    // Menu: the HMI menu (the account, Settings, Send logs)
+    tgt('r:0:::menu').run();
+    await sleep(50);
+    assert.strictEqual(opened.slice(-1)[0], 'MAIN', 'Menu opens the HMI menu');
+    speed(0);
+    hu.ui.open = oo; hu.ui.text = ot;
+    console.log('ok   WP10 search page: from the rail, Clear, typed parked (saved, results, the controller on the first), cancelled, error, nothing found, driving: no keyboard, Menu');
+}

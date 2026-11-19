@@ -88,7 +88,6 @@
   "Searching \"{query}\"...": "Поиск «{query}»…",
   "Try again from Search": "Повторите поиск",
   "Nothing found for \"{query}\"": "По запросу «{query}» ничего не найдено",
-  "Search (bar button) to find videos": "Нажмите «Поиск», чтобы найти видео",
   "Try other words": "Попробуйте другие слова",
   "Results for “{query}”": "Результаты: «{query}»",
   "Signing in needs a newer jap-ridetube-d tool on the car": "Для входа нужна более новая версия jap-ridetube-d в машине",
@@ -192,5 +191,11 @@
   "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "Видео во время движения только для пассажиров, в машине, закодированной на видео в движении. Водитель никогда не должен его смотреть. Соблюдайте закон там, где вы едете. Вы используете эту настройку на свой страх и риск: авторы RideTube не несут ответственности за неправильное использование, аварии, штрафы или ущерб.",
   "Video while driving": "Видео во время движения",
   "I agree": "Я согласен",
-  "Agreeing needs the touchscreen. Pick any page to leave it off": "Для согласия нужен сенсорный экран. Выберите любую страницу, чтобы оставить выключенным"
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "Для согласия нужен сенсорный экран. Выберите любую страницу, чтобы оставить выключенным",
+  "Type a search": "Ввести запрос",
+  "Typing works only while parked": "Ввод только на стоянке",
+  "Opens the keyboard": "Открывает клавиатуру",
+  "Clear recent searches": "Очистить недавние запросы",
+  "Menu": "Меню",
+  "Account, settings, logs": "Аккаунт, настройки, журналы"
 }

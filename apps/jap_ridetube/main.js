@@ -956,7 +956,7 @@ mgu.run({
         let OFF = translate('The RideTube service (jap-ridetube-d) is not running');
         let OFF2 = translate('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         PAGES.health = require('./health')({ model, say, fit, t: whole, message: whole, count, C, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
-        remote = require('./remote')({ model, send: (o) => ctl.send(o), changed, say, fit, t: whole, message: whole, C, QR, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
+        remote = require('./remote')({ model, send: (o) => ctl.send(o), changed, lang: getLanguage, say, fit, t: whole, message: whole, C, QR, focus: () => focusKey, get X0() { return X0; }, TOP, H, W, get OFF() { return OFF; }, get OFF2() { return OFF2; } });
         PAGES.remote = remote.draw;
         // a phone action, as a tap: a search shows its results, a video plays (the picture only as the parked rule allows)
         remote.onDo = (a) => { if (a.do === 'search') search(a.q, true); else play(a.id); changed(); };

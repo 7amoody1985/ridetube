@@ -6,9 +6,10 @@
  * Off by default; Turn on / Turn off here (where the HMI runs the screen, the menu entry pressed again). The QR code (the
  * URL with the access code in its fragment) shows only while the remote is on.
  *
- *   const remote = require('./remote')({ model, send, changed, say, fit, t, message, C, QR, focus, X0, TOP, H, W, OFF, OFF2 });
+ *   const remote = require('./remote')({ model, send, changed, lang, say, fit, t, message, C, QR, focus, X0, TOP, H, W, OFF, OFF2 });
  *   remote.onDo = ({do, q|id}) => ...   main.js: a checked phone action, only while the remote is on
- *   remote.onMsg(m)     every daemon event: remote, remote_do
+ *   remote.onMsg(m)     every daemon event: hello (a service with the cap: its remote's state asked; a new connection may
+ *                       find it on), remote, remote_do
  *   remote.refresh()    asks the service for the state (the page opened)
  *   remote.toggle()     on / off
  *   remote.down()       the service went away: off
@@ -25,7 +26,9 @@ module.exports = function remotePage(o) {
         onDo: null,
         state: st,
         onMsg(m) {
-            if (m.ev === 'remote') {
+            if (m.ev === 'hello') {
+                if (Array.isArray(m.caps) && m.caps.indexOf('remote') >= 0) o.send({ cmd: 'remote' });
+            } else if (m.ev === 'remote') {
                 st.on = m.on === true;
                 st.url = st.on && typeof m.url === 'string' && URL_RE.test(m.url) ? m.url : null;
                 st.expires = typeof m.expires === 'number' && m.expires > 0 ? m.expires : 0;
@@ -42,7 +45,7 @@ module.exports = function remotePage(o) {
         toggle() {
             if (!model.can('remote') || st.asking) return false;
             st.asking = true; st.error = null;
-            if (o.send({ cmd: 'remote', on: !st.on })) { o.changed(); return true; }
+            if (o.send({ cmd: 'remote', on: !st.on, lang: o.lang() })) { o.changed(); return true; }   // (the phone page in the app's language)
             st.asking = false;
             return false;
         },

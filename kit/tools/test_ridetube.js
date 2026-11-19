@@ -1350,9 +1350,11 @@ async function wp9Frames(x) {
     await sleep(100);
     assert.deepStrictEqual([d.cmds('remote').length, vis.filter(Boolean).length], [0, 0], 'no cap: hidden, nothing asked');
     // a 0.5.0 service: shown; opening the page asks the state; off: Turn on, no code
+    const nAsk = d.cmds('remote').length;
     d.send({ ev: 'hello', service: '0.5.0', caps: ['health', 'related', 'hist', 'remote'] });
     await sleep(100); await drawn();
     assert.strictEqual(vis.slice(-1)[0], true, 'the entry shown');
+    assert.deepStrictEqual(d.cmds('remote').slice(nAsk), [{ cmd: 'remote' }], 'hello: the state asked (a new connection may find it on)');
     hu.handlers.BTN_REMOTE();
     await lastIs(d, { cmd: 'remote' }, 'the page asks the state');
     d.send({ ev: 'remote', on: false, url: null, expires: 0 });
@@ -1361,19 +1363,19 @@ async function wp9Frames(x) {
     assert.ok(!rects.some((r) => r.c === '#ffffff' && r.w === r.h && r.w > 200), 'no code while off');
     // Turn on: asked once, waiting; on with the hotspot's address: the QR code of the URL (the token only in the code)
     tgt('remote:toggle').run();
-    await lastIs(d, { cmd: 'remote', on: true }, 'Turn on');
+    await lastIs(d, { cmd: 'remote', on: true, lang: 'en' }, 'Turn on, the page in the app\'s language');
     await drawn();
     assert.ok(texts.indexOf('Please wait...') >= 0 && !tgt('remote:toggle'), 'asking: no second press: ' + texts.join('|') + ' ' + !!tgt('remote:toggle'));
-    d.send({ ev: 'remote', on: true, url: null, expires: 1800 });
+    d.send({ ev: 'remote', on: true, url: null, expires: 3600 });
     await sleep(100); await drawn();
     assert.ok(texts.indexOf('Waiting for the car\'s Wi-Fi hotspot') >= 0 && tgt('remote:toggle'), 'no hotspot address yet: ' + texts.join('|'));
     for (const addr of ['172.16.222.97', '255.255.255.255']) {   // (the longest address: 61 bytes, still a QR code)
-        d.send({ ev: 'remote', on: true, url: 'http://' + addr + ':8471/#' + HEX, expires: 1800 });
+        d.send({ ev: 'remote', on: true, url: 'http://' + addr + ':8471/#' + HEX, expires: 3600 });
         await sleep(100); await drawn();
         const n = require('../runtime/qr').encode('http://' + addr + ':8471/#' + HEX).length, side = (n + 8) * 9;
         assert.ok(rects.some((r) => r.c === '#ffffff' && r.w === side && r.h === side), addr + ': the QR code, ' + side + ' px');
         assert.ok(rects.filter((r) => r.c === '#000000' && r.h === 9).length > 100, 'its dark modules');
-        assert.ok(texts.indexOf('Address ' + addr + ':8471 · turns off by itself in 30 min') >= 0, texts.join('|'));
+        assert.ok(texts.indexOf('Address ' + addr + ':8471 · turns off by itself in 60 min') >= 0, texts.join('|'));
         assert.ok(!texts.some((t) => t.indexOf(HEX) >= 0), 'the token is never written out');
     }
     assert.ok(texts.indexOf('2. Scan this code with its camera') >= 0 && tgt('remote:toggle'), 'the steps, Turn off');
@@ -1409,7 +1411,7 @@ async function wp9Frames(x) {
     hu.handlers.BTN_REMOTE();
     await sleep(100); await drawn();
     tgt('remote:toggle').run();
-    await lastIs(d, { cmd: 'remote', on: false }, 'Turn off');
+    await lastIs(d, { cmd: 'remote', on: false, lang: 'en' }, 'Turn off');
     d.send({ ev: 'remote', on: false, url: null, expires: 0, error: 'the control socket is open to every app' });
     d.send({ ev: 'remote_do', do: 'play', id: 'PHONE000002' });
     await sleep(150); await drawn();
@@ -1431,11 +1433,11 @@ async function wp9Hmi({ d, hu, disp }) {
     d.send({ ev: 'remote', on: false, url: null, expires: 0 });
     await sleep(100);
     hu.handlers.BTN_REMOTE();
-    await lastIs(d, { cmd: 'remote', on: true }, 'pressed again: on');
-    d.send({ ev: 'remote', on: true, url: 'http://172.16.222.97:8471/#' + HEX, expires: 1800 });
+    await lastIs(d, { cmd: 'remote', on: true, lang: 'en' }, 'pressed again: on');
+    d.send({ ev: 'remote', on: true, url: 'http://172.16.222.97:8471/#' + HEX, expires: 3600 });
     await sleep(100);
     hu.handlers.BTN_REMOTE();
-    await lastIs(d, { cmd: 'remote', on: false }, 'and again: off');
+    await lastIs(d, { cmd: 'remote', on: false, lang: 'en' }, 'and again: off');
     d.send({ ev: 'remote', on: false, url: null, expires: 0 });
     await sleep(50);
     console.log('ok   WP9 phone remote where the HMI runs the screen: the menu entry asks the state, then on, then off');
@@ -1487,8 +1489,10 @@ async function wp7Frames(x) {
     await page('hist', async () => hu.handlers.BTN_HIST());
     await page('health', async () => { hu.handlers.BTN_HEALTH(); d.send({ ev: 'health', key: 'dns', ok: false, text: 'нет ответа' }); d.send({ ev: 'health', key: 'tls', ok: false, text: 'нет ответа' }); d.send({ ev: 'health', done: true }); });
     assert.ok(texts.indexOf('2 проверки не пройдены') >= 0, 'few: ' + texts.join('|'));
-    await page('phone remote', async () => { hu.handlers.BTN_REMOTE(); d.send({ ev: 'remote', on: true, url: 'http://172.16.222.97:8471/#' + HEX, expires: 1800 }); });
+    await page('phone remote', async () => { hu.handlers.BTN_REMOTE(); d.send({ ev: 'remote', on: true, url: 'http://172.16.222.97:8471/#' + HEX, expires: 3600 }); });
     assert.ok(texts.indexOf('Пульт на телефоне') >= 0, 'the remote page: ' + texts.join('|'));
+    disp.pageTargets.find((x) => x.key === 'remote:toggle').run();
+    await lastIs(d, { cmd: 'remote', on: false, lang: 'ru' }, 'the phone page follows the app\'s language');
     d.send({ ev: 'remote', on: false, url: null, expires: 0 });
     await page('logs', async () => hu.handlers.BTN_LOGS());
     await page('logs cancel', async () => tgt('logs:cancel').run());

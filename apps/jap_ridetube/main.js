@@ -101,6 +101,7 @@ const helloLang = (lang, hmi, auto) => {
     return car ? { lang: auto ? car.lang : l, region: car.region } : { lang: l };
 };
 const CLOCK_MSG = 'The head unit\'s clock is wrong (it says {date}). RideTube is skipping the certificate date check so videos still play. While the clock is wrong, the security of the app and of your car can be compromised. Set the car\'s date and time to fix it.';
+const RISK_MSG = 'Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.';
 const LOGS_MS = 45000;                                   // a log report with no answer by then failed (the service gives up at 31 s)
 const LOGS_ERR = { closed: 'Log reporting is closed for now', busy: 'Too many reports right now - try again later',
     offline: 'No connection - try again later', failed: 'Sending failed - try again later', old: 'Sending logs needs a newer jap-ridetube-d tool on the car' };
@@ -126,8 +127,10 @@ mgu.run({
         // the drive lock: Video while driving counts only once switched on while parked, so a press while moving
         // cannot bring the picture up; switching it off works at once
         let videoDrivingOk = false;
+        // the disclaimer (risk page): switched on, the setting counts only once I agree is pressed; already on at start = agreed before
+        let riskAgreed = settings.get('video_driving') === true, riskAsk = false, riskFrom = 'home';
         const noVideo = () => {
-            const on = settings.get('video_driving') === true, moving = parked.moving();
+            const on = settings.get('video_driving') === true && riskAgreed, moving = parked.moving();
             videoDrivingOk = moving ? videoDrivingOk && on : on;
             return moving && !videoDrivingOk;
         };
@@ -152,9 +155,11 @@ mgu.run({
         let clockSeen = false, clockFrom = 'home';   // the wrong-clock warning: shown once this app session, left from there
         function show(m) {
             if (mode === 'clock' && m !== 'clock') clockSeen = true;
+            if (mode === 'risk' && m !== 'risk' && riskAsk) { riskAsk = false; settings.set('video_driving', false); }   // left without I agree
+            if (m === 'risk') riskAsk = true;
             if (m !== mode) { dirty = true; if (laid.mode === mode && laid.where[focusKey]) backKey[mode] = focusKey; }   // (a tile of this page)
             mode = m;
-            if (m !== 'player' && m !== 'logs' && m !== 'clock') browse = m; else if (m === 'player') wake();
+            if (m !== 'player' && m !== 'logs' && m !== 'clock' && m !== 'risk') browse = m; else if (m === 'player') wake();
             openFeed(); sync(); labels();
         }
         function goBack(m) {
@@ -1064,6 +1069,26 @@ mgu.run({
             cv.target(MID - w / 2, y, w, h, () => { goBack(clockFrom); dirty = true; }, 'clock:ok', 38);
             return undefined;
         }
+        // the Video while driving disclaimer: I agree turns the setting on for real, Cancel (or any other page) turns it off
+        function drawRisk(cv) {
+            const lines = String(whole(RISK_MSG)).split(' ').reduce((ls, w) => {
+                const t = ls.length ? ls[ls.length - 1] + ' ' + w : w;
+                if (ls.length && cv.textWidth(t, 28, LIT) <= 1240) ls[ls.length - 1] = t; else ls.push(w);
+                return ls;
+            }, []);
+            cv.text(whole('Video while driving'), MID, 104, 34, C.amber, { literal: true, font: 'bold', align: 'center' });
+            lines.slice(0, 6).forEach((l, i) => cv.text(l, MID, 160 + i * 40, 28, '#ffffff', { literal: true, align: 'center' }));
+            if (!cv.own) return cv.text(whole('Agreeing needs the touchscreen. Pick any page to leave it off'), MID, 440, 24, C.dim, { literal: true, align: 'center' });
+            const btn = (x, label, key, fn, accent) => {
+                const w = 300, h = 76, y = 410;
+                cv.roundRect(x - w / 2, y, w, h, 38, key === focusKey ? '#ffffff' : accent ? C.red : C.card);
+                cv.text(whole(label), x, y + 49, 30, key === focusKey ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
+                cv.target(x - w / 2, y, w, h, () => { fn(); dirty = true; }, key, 38);
+            };
+            btn(MID - 180, 'I agree', 'risk:ok', () => { riskAgreed = true; riskAsk = false; log.info('video while driving: agreed'); goBack(riskFrom); }, true);
+            btn(MID + 180, 'Cancel', 'risk:cancel', () => goBack(riskFrom));
+            return undefined;
+        }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
             cv.fillRect(BOX.x, BOX.y, BOX.w, BOX.h, '#000000');
@@ -1368,7 +1393,7 @@ mgu.run({
             const now = Date.now();
             upNext = autoNext();
             // the wrong-clock warning, the first time a page (not the player or the logs) is drawn this app session
-            if (model.clock && !clockSeen && mode !== 'clock' && mode !== 'player' && mode !== 'logs') { clockFrom = mode; show('clock'); }
+            if (model.clock && !clockSeen && mode !== 'clock' && mode !== 'player' && mode !== 'logs' && mode !== 'risk') { clockFrom = mode; show('clock'); }
             else if (mode === 'clock' && !model.clock) goBack(clockFrom);   // set right meanwhile
             // redraw on a change (and 4 times a second); unchanged, the same frame again keeps the layer alive (>= 1 message/s)
             if (!last || dirty || model.rev !== lastRev || now - lastT > 250) {
@@ -1380,7 +1405,7 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
-                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (mode === 'risk') drawRisk(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     if (browsing() && now < liveNote) {
                         const nt = whole("Live videos can't be played yet"), nw = cv.textWidth(nt, 26, LIT) + 60, ny = H + (cv.own ? cv.extra : 0) - 96;
                         cv.roundRect(MID - nw / 2, ny, nw, 64, 32, '#4a3a10');
@@ -1413,7 +1438,12 @@ mgu.run({
             labels(); info(); openFeed();
             dirty = true;
         }
-        if (settings.onChange) settings.onChange((key) => { if (key === 'language') relang(); });
+        if (settings.onChange) settings.onChange((key) => {
+            if (key === 'language') relang();
+            if (key !== 'video_driving') return;
+            if (settings.get('video_driving') !== true) { riskAgreed = false; if (mode === 'risk' && riskAsk) { riskAsk = false; goBack(riskFrom); } }
+            else if (!riskAgreed && mode !== 'risk') { riskFrom = mode; show('risk'); }
+        });
         if (ctx.hmiLanguage) ctx.hmiLanguage(() => relang());   // the country follows the car in every mode
         log.info('ridetube app started');
     },

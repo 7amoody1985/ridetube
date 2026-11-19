@@ -220,5 +220,9 @@
   "{count} subscriptions, A-Z|{count} subscriptions, A-Z": "{count} 个订阅，按 A-Z 排序",
   "{count} hidden|{count} hidden": "已隐藏 {count} 个",
   "{count} check failed|{count} checks failed": "{count} 项检查失败",
-  "{count} video hidden: members-only (Settings) or a hidden channel|{count} videos hidden: members-only (Settings) or a hidden channel": "已隐藏 {count} 个视频：会员专享（设置）或已隐藏的频道"
+  "{count} video hidden: members-only (Settings) or a hidden channel|{count} videos hidden: members-only (Settings) or a hidden channel": "已隐藏 {count} 个视频：会员专享（设置）或已隐藏的频道",
+  "Video while driving is only for passengers, in a car coded for video in motion. The driver must never watch it. Follow the law where you drive. You use this setting at your own risk: the authors of RideTube are not responsible for any misuse, accident, fine or damage.": "行驶中播放视频仅供乘客观看，且车辆须已编码为允许行驶中播放视频。驾驶员绝不能观看。请遵守当地法律。使用此设置的风险由您自行承担：RideTube 的作者对任何误用、事故、罚款或损失概不负责。",
+  "Video while driving": "行驶中播放视频",
+  "I agree": "我同意",
+  "Agreeing needs the touchscreen. Pick any page to leave it off": "同意需要使用触摸屏。选择任意页面即可保持关闭"
 }

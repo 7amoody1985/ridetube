@@ -70,8 +70,10 @@ video decoder) and `jap-node22`, the Node.js 22 that the service runs on, with i
   Русский or 中文. YouTube's language and country follow the car's iDrive language setting (on Auto; the
   country always), so feeds and search match what the car is set to.
 - **Video while driving**: off by default. Leave it off unless the car is coded for video in motion and only
-  passengers can see the screen. You use it at your own risk. It takes effect only once switched on while the
-  car is parked: pressed while driving, the picture stays off until the next stop.
+  passengers can see the screen. Switched on, it first shows a disclaimer and counts only once you press I agree;
+  Cancel turns it off again. You use it at your own risk: RideTube's authors are not responsible for any misuse,
+  accident, fine or damage. It takes effect only once switched on while the car is parked: pressed while driving,
+  the picture stays off until the next stop.
 - **Fill the screen**: off by default (black bars); on, the picture is cropped to fill the screen.
 - **Video quality**: auto (720p on Wi-Fi, 480p on phone data), 720p, 480p or 360p.
 - **Show members-only videos**: off by default. A channel can also be hidden from its page.

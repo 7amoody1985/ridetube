@@ -499,9 +499,24 @@ async function appFrames() {
         assert.ok(!frame().vrect, 'no video while driving');
         // Video while driving on (a car coded for video in motion): switched on while moving, it waits for a stop;
         // switched on while parked, the picture stays while moving
+        // switched on, it shows the disclaimer first: Cancel turns it off again, only I agree makes it count
         hu.ctx.settings.set('video_driving', true);
         await sleep(300); await hu.loopFn();
-        assert.ok(!frame().vrect, 'Video while driving switched on while moving: no picture until parked');
+        assert.ok(disp.pageTargets.some((t) => t.key === 'risk:ok') && disp.pageTargets.some((t) => t.key === 'risk:cancel'), 'disclaimer: ' + keys());
+        disp.pageTargets.find((t) => t.key === 'risk:cancel').run();
+        await sleep(300); await hu.loopFn();
+        assert.strictEqual(hu.ctx.settings.get('video_driving'), false, 'Cancel turns Video while driving off');
+        hu.ctx.settings.set('video_driving', true);
+        await sleep(300); await hu.loopFn();
+        speedH({ speedVehicleCentreOfGravity: 0 });          // parked, not agreed yet: still nothing while moving after
+        await sleep(300); await hu.loopFn();
+        speedH({ speedVehicleCentreOfGravity: 50 * 64 });
+        await sleep(300); await hu.loopFn();
+        assert.ok(!frame().vrect, 'not agreed: no video while driving');
+        disp.pageTargets.find((t) => t.key === 'risk:ok').run();
+        await sleep(300); await hu.loopFn();
+        assert.strictEqual(hu.ctx.settings.get('video_driving'), true, 'I agree keeps it on');
+        assert.ok(!frame().vrect, 'Video while driving agreed while moving: no picture until parked');
         speedH({ speedVehicleCentreOfGravity: 0 });
         await sleep(300); await hu.loopFn();
         speedH({ speedVehicleCentreOfGravity: 50 * 64 });

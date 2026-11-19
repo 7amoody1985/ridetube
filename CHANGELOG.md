@@ -46,12 +46,20 @@ short. Each version's own section below has the details.
 
 - Send logs: one button sends a cleaned-up log and shows a code to add to your GitHub issue. Health check runs
   12 checks on the car and shows which one fails. (0.3.12, 0.4.0)
-- Video while driving only turns on when you switch it on while parked. (0.3.7)
+- Video while driving only turns on when you switch it on while parked, and only after you agree to its
+  disclaimer. (0.3.7, 0.4.2)
 - Only RideTube itself can talk to its service now; before, any app on the head unit could. (service 0.4.0)
 
 Thanks to @marilykinson-glitch, whose fork brought the History and Liked feeds, related videos, the Shorts
 handling, the dropout recovery and the command-sequence tests, and to 小白151 (JackieZ123430) for the Chinese
 translation.
+
+## App 0.4.2
+
+- Video while driving now asks first. Switched on, it shows a disclaimer: only for passengers in a car coded for
+  video in motion, follow the law where you drive, and RideTube's authors are not responsible for any misuse,
+  accident, fine or damage. The setting counts only once you press I agree; Cancel, or leaving the page, turns
+  it off again. A car where it was already on keeps it. In English, Russian and Chinese.
 
 ## App 0.4.1
 

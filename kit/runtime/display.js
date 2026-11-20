@@ -324,6 +324,8 @@ class Display {
         if (Math.abs(d) > 64) d = 0;                     // a counter reset
         const down = (x) => x === 1 || x === 2;
         const press = down(pb) && !(L && down(L.pb));
+        // the press let go: to the target that took it down (cv.target's hold)
+        if (this.knobHold && !down(pb)) { const h = this.knobHold; this.knobHold = null; this._hold(h, false, true); }
         const tilt = TILT[df] && !(L && TILT[L.df] === TILT[df]) ? TILT[df] : null;
         const tl = this._tabList(), here = Math.max(0, tl.sel >= 0 ? tl.sel : tl.settings);
         if (this.sheet) {
@@ -366,10 +368,12 @@ class Display {
         if (press && i >= 0) {
             const p = ring[i];
             if (p.tab != null) this._openTab(p.tab);
+            else if (p.tgt && p.tgt.hold) { this.knobHold = p.tgt; this._hold(p.tgt, true); this.pressed = p.k; this.pressedT = Date.now(); this._repaint(); }
             else if (p.tgt) { try { Promise.resolve(p.tgt.run()).catch((e) => this.log.error('target', e)); } catch (e) { this.log.error('target', e); } this.pressed = p.k; this.pressedT = Date.now(); this._repaint(); }
             else if (p.bar) this._click(p.bar);
         }
     }
+    _hold(t, down, on) { try { t.hold(down, on); } catch (e) { this.log.error('hold', e); } this._repaint(); }
     /** Pushed left with nothing there: the app's back to its previous page first (ctx.onBack(true)); false = none, the screen closes. */
     _edgeBack() {
         if (!this.onBack) return false;
@@ -440,6 +444,10 @@ class Display {
             const tab = !bar && (this.tabs || []).find(inside);
             const tgt = !bar && !tab && !this.sheet ? (this.pageTargets || []).find(inside) : null;
             const key = bar ? 'bar:' + bar.id : tab ? 'tab:' + tab.i : tgt ? 'tgt:' + tgt.key : this.sheet ? 'sheet:' + (this.sheetTargets || []).findIndex(inside) : null;
+            // a target that tells a tap from a long press (cv.target's hold): its down and its let go, not run
+            if (phase === 3 && this.holdTgt) { const h = this.holdTgt, on = !this.dragging && key === this.ownDown; this.holdTgt = null; this.dragging = false; this.ownDown = null; this._hold(h, false, on); return; }
+            if (phase === 1 && tgt && tgt.hold && !this.sheet) { this.ownDown = key; this.downAt = { x, y }; this.lastX = x; this.lastY = y; this.dragging = false; this.holdTgt = tgt; this._hold(tgt, true); return; }
+            if (phase === 2 && this.holdTgt) { if (Math.abs(x - this.downAt.x) > 40 || Math.abs(y - this.downAt.y) > 40) this.dragging = true; return; }
             if (phase === 3 && this.dragging && !this.sheet) { this.dragging = false; this.ownDown = null; return; }
             if (phase === 3 && !this.dragging && key && key === this.ownDown && (tab || tgt)) {
                 this.ownDown = null;

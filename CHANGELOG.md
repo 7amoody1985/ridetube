@@ -5,11 +5,10 @@
 - Playlists show all their videos (#17). YouTube's TV answer holds 15 videos a page, and the service only read the
   first one. It now reads the next pages too, up to 1000 videos, for playlists and Watch later. The first 15 show
   at once while the rest load. If a later page fails, the videos already read still show.
-- Previous and next buttons (#18). In the player and in the podcast view, the -10 s and +10 s buttons are now
-  previous and next, as in YouTube's own app. Next plays the next video in the list, then what YouTube plays after
-  it. Previous goes back to the start, or to the video before when pressed in the first 3 seconds. To seek, double
-  tap the picture's left or right side (player), turn the knob on the progress bar, or hold the steering wheel's
-  skip button.
+- Previous and next on the -10 s and +10 s buttons (#18). In the player and in the podcast view, a tap still
+  seeks 10 s. Held for over half a second, the button turns into previous or next, and letting go takes it. This
+  works with a finger and with the controller's press. Next plays the next video in the list, then what YouTube
+  plays after it. Previous goes back to the start, or to the video before when used in the first 3 seconds.
 - The controller knob goes straight from tile to tile. Before, its first turn put a red frame round the whole page
   and scrolled it to the end before reaching any tile. A finger still drags the page.
 - Where the car's own menu bar runs the screen (not the kit), its buttons are still -10 s and +10 s.

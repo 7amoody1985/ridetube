@@ -23,8 +23,8 @@
  *           a tile brings it into view (ctx.onPageFocus), the arrows at a shelf's edges turn it for a finger.
  *           Thumbs are asked only for the tiles drawn, and drawn from a pool of 56 picture ids.
  *           player   where the kit runs the screen: the video over the whole screen (no header, no bar), under
- *                    the overlay: back to the list and the title / channel (top), previous, play / pause,
- *                    next (middle), the progress bar with the times (bottom). A tap or the controller shows
+ *                    the overlay: back to the list and the title / channel (top), -10 s, play / pause,
+ *                    +10 s (held: previous / next video) (middle), the progress bar with the times (bottom). A tap or the controller shows
  *                    it; it hides 4 s later while the picture plays (a tap beside the controls hides it at once);
  *                    preparing, paused, driving or no picture: it stays, with the "Preparing... N %" ring.
  *                    The controller pushed left goes back to the list (the HMI's BACK key closes the screen).
@@ -590,6 +590,29 @@ mgu.run({
         setInterval(() => { try { batteryGuard(); } catch (e) { log.error('battery', e); } }, 1000);
         let ovUntil = 0, qrUntil = 0;   // qrUntil: the On phone QR card shows until then
         function wake() { ovUntil = Date.now() + OVERLAY_MS; dirty = true; }
+        // the overlay's -10 s / +10 s (#18): a tap (finger or controller press) seeks 10 s; held SKIP_HOLD_MS the
+        // button turns into previous / next video, and letting go takes it. skipHold: {dir, armed, t} while held
+        let skipHold = null;
+        const SKIP_HOLD_MS = 600;
+        const skipHeld = (dir) => !!skipHold && skipHold.dir === dir && skipHold.armed;
+        const skipBtn = (dir) => (down, on) => {
+            if (down) {
+                clearTimeout(skipHold && skipHold.t);
+                const h = skipHold = { dir, armed: false, t: null };
+                h.t = setTimeout(() => { if (skipHold === h) { h.armed = true; wake(); } }, SKIP_HOLD_MS);
+                wake(); return;
+            }
+            const h = skipHold;
+            skipHold = null;
+            if (!h || h.dir !== dir) return;
+            clearTimeout(h.t);
+            if (on !== false) {
+                if (!h.armed) model.skip(dir * 10000);
+                else if (dir < 0) skipPrev(false);
+                else skipNext(false, true);
+            }
+            wake();
+        };
         // it stays while there is no moving picture to look at
         const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || !!scrub || !!model.resumedNow(Date.now());
         const overlay = () => pinned() || Date.now() < ovUntil || Date.now() < qrUntil;
@@ -1190,9 +1213,9 @@ mgu.run({
          * the page's px (dx, dy). Hidden, the same keys cover the whole screen and only show it again (the
          * controller stays on its key, so a turn or a press wakes it; a tap anywhere too).
          */
-        const OVK = ['ov:back', 'ov:qr', 'ov:close', 'ov:prev', 'ov:play', 'ov:next', 'ov:q', 'ov:zoom', 'ov:bar'];
+        const OVK = ['ov:back', 'ov:qr', 'ov:close', 'ov:rw', 'ov:play', 'ov:ff', 'ov:q', 'ov:zoom', 'ov:bar'];
         // podcast mode (driving): artwork, title, chapter, the bar with chapter ticks and skipped segments, controls
-        // a glove can hit (previous, play/pause, next, Close), the next video, a skipped-sponsor notice
+        // a glove can hit (-10 s, play/pause, +10 s (held: previous / next), Close), the next video, a skipped-sponsor notice
         function drawPodcast(cv, SW, SH, LX, tg, run, live) {
             cv.fillRect(0, 0, SW, SH, C.bg);
             const x0 = LX + 46, top = 40, ch = model.channel || (model.item(model.id) || {}).channel;
@@ -1236,24 +1259,25 @@ mgu.run({
             } else if (model.state === 'preparing') cv.text(prepText(), x0, by + 50, 26, C.dim, LIT);
             // controls
             const mid = x0 + bw / 2 + 100;                        // four buttons: previous, play, next, Close
-            const big = (key, x, r, light, fn, glyph) => {
+            const big = (key, x, r, light, fn, glyph, hold) => {
                 const f = focusKey === key;
                 cv.circle(x, cy, r, f ? '#3ea6ff' : light ? '#ffffff' : C.ph);
                 glyph(light && !f ? C.bg : '#ffffff');
-                tg(x - r - 10, cy - r - 10, 2 * r + 20, 2 * r + 20, run(fn), key, r + 10);
+                tg(x - r - 10, cy - r - 10, 2 * r + 20, 2 * r + 20, run(fn), key, r + 10, undefined, hold);
             };
-            // previous / next video (#18), drawn as the overlay's
-            const track = (key, x, dir, fn) => big(key, x, 58, false, fn, (c) => {
+            // -10 s / +10 s; held, previous / next video, as the overlay's
+            const skip = (key, x, dir) => big(key, x, 58, false, () => model.skip(dir * 10000), (c) => {
+                if (!skipHeld(dir)) { cv.text(dir < 0 ? '-10' : '+10', x, cy + 14, 38, c, { literal: true, font: 'bold', align: 'center' }); return; }
                 cv.quad([[x - 18 * dir, cy - 26], [x - 18 * dir, cy + 26], [x + 16 * dir, cy], [x - 18 * dir, cy - 26]], c);
                 cv.fillRect(dir > 0 ? x + 17 : x - 26, cy - 26, 9, 52, c);
-            });
+            }, skipBtn(dir));
             if (live) {
-                track('ov:prev', mid - 300, -1, () => skipPrev(false));
+                skip('ov:rw', mid - 300, -1);
                 big('ov:play', mid - 100, 72, true, () => model.toggle(), (c) => {
                     if (model.state === 'paused') tri(cv, mid - 92, cy, 60, c);
                     else { cv.roundRect(mid - 124, cy - 32, 16, 64, 4, c); cv.roundRect(mid - 92, cy - 32, 16, 64, 4, c); }
                 });
-                track('ov:next', mid + 100, 1, () => skipNext(false, true));
+                skip('ov:ff', mid + 100, 1);
             }
             else if (model.state === 'error' && model.id) big('ov:play', mid - 100, 72, true, again, (c) => retryGlyph(cv, mid - 100, cy, 30, c));
             if (model.active()) {
@@ -1288,7 +1312,7 @@ mgu.run({
             // read: the page stays placed as the browsing pages (reaching down), so oy, and the targets with it, hold
             void cv.extra;
             const ctls = [];                               // the controls this frame shows (a double tap on them is theirs)
-            const tg = (x, y, w, h, run, key, r, turn) => { ctls.push({ x, y, w, h }); return cv.target(x - dx, y - dy, w, h, run, key, r, turn); };
+            const tg = (x, y, w, h, run, key, r, turn, hold) => { ctls.push({ x, y, w, h }); return cv.target(x - dx, y - dy, w, h, run, key, r, turn, hold); };
             cv.xf(1, 0, 0).fillRect(0, 0, pl.w, pl.h, '#000000');
             seekBar = null;                                // (set again where this frame draws the bar)
             const pod = model.active() && noVideo();   // driving: podcast mode (no picture, big controls, always shown)
@@ -1304,11 +1328,11 @@ mgu.run({
             const cx = SW / 2, cy = SH / 2 - 6, run = (fn) => () => { fn(); wake(); };
             if (pod) { drawPodcast(cv, SW, SH, LX, tg, run, live); hmiIcons(cv); return; }
             // a round control: dark, white when the controller is on it (its glyph dark then)
-            const ctl = (key, x, y, r, fn, glyph) => {
+            const ctl = (key, x, y, r, fn, glyph, hold) => {
                 const f = focusKey === key;
                 cv.circle(x, y, r, f ? '#ffffff' : '#00000099');
                 glyph(f ? '#0f0f0f' : '#ffffff');
-                tg(x - r - 6, y - r - 6, 2 * r + 12, 2 * r + 12, run(fn), key, r + 6);
+                tg(x - r - 6, y - r - 6, 2 * r + 12, 2 * r + 12, run(fn), key, r + 6, undefined, hold);
             };
             // top: back to the list, the title and channel over a scrim
             cv.gradientRect(0, 0, SW, 160, [[0, '#000000d8'], [1, '#00000000']]);
@@ -1343,7 +1367,7 @@ mgu.run({
                 ctl('ov:close', kx, cy, 42, closeVideo, (c) => xGlyph(cv, kx, cy, 15, c));
                 cv.text(translate('Close'), kx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
             }
-            // middle: previous, play / pause, next; preparing: the ring with the percentage
+            // middle: -10 s, play / pause, +10 s (held: previous / next); preparing: the ring with the percentage
             let mid = null;
             if (!model.connected) mid = OFF;
             else if (model.state === 'error') mid = translate('Error: ') + (model.error ? whole(model.error) : translate('playback stopped'));
@@ -1363,17 +1387,23 @@ mgu.run({
                 cv.text(Math.round(p) + '%', cx, cy + 10, 30, '#ffffff', { literal: true, font: 'bold', align: 'center' });
                 cv.text(prepText(), cx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
             } else if (live) {
-                // previous / next video (#18; -10 s / +10 s stay on a double tap on the picture's sides, and on the knob)
-                const track = (key, x, dir, fn) => ctl(key, x, cy, 42, fn, (c) => {
-                    cv.quad([[x - 14 * dir, cy - 20], [x - 14 * dir, cy + 20], [x + 12 * dir, cy], [x - 14 * dir, cy - 20]], c);
-                    cv.fillRect(dir > 0 ? x + 13 : x - 20, cy - 20, 7, 40, c);
-                });
-                track('ov:prev', cx - 210, -1, () => skipPrev(false));
+                // -10 s / +10 s; held, previous / next video (#18: the button shows it, letting go takes it)
+                const skip = (key, x, dir) => ctl(key, x, cy, 42, () => model.skip(dir * 10000), (c) => {
+                    if (skipHeld(dir)) {
+                        cv.quad([[x - 14 * dir, cy - 20], [x - 14 * dir, cy + 20], [x + 12 * dir, cy], [x - 14 * dir, cy - 20]], c);
+                        cv.fillRect(dir > 0 ? x + 13 : x - 20, cy - 20, 7, 40, c);
+                        return;
+                    }
+                    cv.arc(x, cy, 19, 23.5, dir < 0 ? 0 : 60, dir < 0 ? 300 : 360, c);
+                    cv.quad([[x - 1 * dir, cy - 29], [x + 9 * dir, cy - 21], [x - 1 * dir, cy - 13], [x - 1 * dir, cy - 29]], c);
+                    cv.text('10', x, cy + 7, 18, c, { literal: true, font: 'bold', align: 'center' });
+                }, skipBtn(dir));
+                skip('ov:rw', cx - 210, -1);
                 ctl('ov:play', cx, cy, 58, () => model.toggle(), (c) => {
                     if (model.state === 'paused') tri(cv, cx + 5, cy, 46, c);
                     else { cv.roundRect(cx - 17, cy - 22, 12, 44, 3, c); cv.roundRect(cx + 5, cy - 22, 12, 44, 3, c); }
                 });
-                track('ov:next', cx + 210, 1, () => skipNext(false, true));
+                skip('ov:ff', cx + 210, 1);
                 // right: Video quality (a press takes the next one; the video starts again there) and zoom (fill crops)
                 const qv = String(settings.get('quality') || 'auto'), fl = settings.get('fill') !== false, qx = SW - 330, zx = SW - 150;
                 ctl('ov:q', qx, cy, 42, () => { const q = QUALITIES[(QUALITIES.indexOf(qv) + 1) % QUALITIES.length]; settings.set('quality', q); model.quality(q); },

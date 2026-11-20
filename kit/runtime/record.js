@@ -113,9 +113,11 @@ class Recorder {
      * Something on the page a tap (or the iDrive controller, turned onto it and pressed) runs: run().
      * key names it from frame to frame (the controller stays on it). Drawn by the caller; where the kit
      * runs the screen (display.js) it rings the one the controller is on. turn(d), optional: the knob
-     * turned while on it goes to turn (d detents, + = clockwise) instead of to the next place.
+     * turned while on it goes to turn (d detents, + = clockwise) instead of to the next place. hold(down, on),
+     * optional: a finger or the controller's press going down (true) and letting go (false; on: let go on it)
+     * go to hold instead of run, so the app can tell a tap from a long press.
      */
-    target(x, y, w, h, run, key, r, turn) { this.targets.push({ x, y, w, h, run, key: String(key), r, turn }); return this; }
+    target(x, y, w, h, run, key, r, turn, hold) { this.targets.push({ x, y, w, h, run, key: String(key), r, turn, hold }); return this; }
 
     /* ---------- canvas.js API ---------- */
     /** Draw pixel image `id` (see setImage) scaled into x, y, w, h (nearest pixel). */

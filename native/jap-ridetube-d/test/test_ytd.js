@@ -310,10 +310,22 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
     });
 
-    await t('no decoded frames for the watchdog period -> child restarted', async () => {
+    await t('the audio clock holds (a slow player, an announcement): ytdec waits with it, no watchdog kill', async () => {
         fs.writeFileSync(ytlog, ''); setMode('stall');
         await playing();
-        await sleep(2200);
+        const wd = logs.filter((l) => /watchdog/.test(l)).length;
+        for (let i = 0; i < 11; i++) { tick(5000 + (i % 2) * 100); await sleep(200); }   // 2.2 s of wall time, 0.1 s of audio
+        assert.strictEqual(logs.filter((l) => /watchdog/.test(l)).length, wd, 'no kill while the audio holds');
+        assert.strictEqual(ytdecLines().filter((l) => / argv /.test(l)).length, 1);
+        setMode('ok');
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+    });
+
+    await t('no decoded frames for the watchdog period of audio played -> child restarted', async () => {
+        fs.writeFileSync(ytlog, ''); setMode('stall');
+        await playing();
+        for (let i = 0; i < 11; i++) { tick(1000 + i * 200); await sleep(200); }          // audio plays in step with the clock
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(argv.length >= 2, 'restarted: ' + argv.length);
         assert.ok(logs.some((l) => /watchdog/.test(l)));
@@ -645,6 +657,50 @@ async function main() {
     const hdir = (id) => path.join(cache, id);
     const ytdecIns = () => ytdecLines().map((l) => l.split(' ').slice(1).join(' ')).filter((l) => /^in (pause|resume|seek)/.test(l));
     const stopIdle = async () => { c.send({ cmd: 'stop' }); await c.waitFor((x) => x.ev === 'state' && x.state === 'idle'); };
+    const spawns = () => ytdecLines().filter((l) => / argv /.test(l)).length;
+    const last = () => ytdecIns().slice(-1)[0];
+
+    await t('seek past the video fetched: the seek, then a new ytdec at the clock once the video is there; once', async () => {
+        // ytdec reads its index again only when it runs out of frames: a seek past it decoded up to the target unseen
+        // (car, 2026-11-20: ~100 s of a frozen picture after a quality restart at 23 min)
+        fs.writeFileSync(ctl, ''); fs.writeFileSync(ytlog, ''); setMode('ok');
+        await fetchPlay('FFFFFFFFFS1');
+        await waitUntil(() => d.fetchedMs === 12000 && spawns() === 1);
+        c.send({ cmd: 'seek', ms: 2000 }); // within what it knew at its start: a plain seek
+        await waitUntil(() => last() === 'in seek 2000');
+        c.send({ cmd: 'seek', ms: 300000 }); // past the video fetched: the seek now
+        await waitUntil(() => last() === 'in seek 300000');
+        tick(300200); tick(300400);
+        await sleep(150);
+        assert.strictEqual(spawns(), 1, 'no new ytdec before the video is there');
+        fs.writeFileSync(ctl, 'done');
+        await waitUntil(() => d.fetchedMs === Infinity);
+        tick(300600); // the next tick sees the video there
+        await waitUntil(() => spawns() === 2 && /^in seek 30/.test(last()));
+        assert.ok(/^in seek 30\d{4}$/.test(last()) && Number(last().slice(8)) >= 300400, last());
+        assert.ok(logs.some((l) => /past the seek: ytdec again at/.test(l)));
+        tick(301000); tick(301300);
+        c.send({ cmd: 'seek', ms: 40000 }); // the new one read all of it: a plain seek (the fake ticks say 60 s in all)
+        await waitUntil(() => last() === 'in seek 40000');
+        assert.strictEqual(spawns(), 2, 'once');
+        await stopIdle();
+    });
+
+    await t('edge-of-fetch buffering without a seek: no new ytdec; a seek past what it knew at its start: a new one there', async () => {
+        fs.writeFileSync(ctl, ''); fs.writeFileSync(ytlog, ''); setMode('ok');
+        await fetchPlay('FFFFFFFFFS2');
+        await waitUntil(() => d.fetchedMs === 12000 && spawns() === 1);
+        tick(11500);
+        await c.waitFor((x) => x.ev === 'state' && x.buffering === true);
+        fs.writeFileSync(ctl, 'done');
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === false);
+        tick(12500); tick(13000);
+        await sleep(150);
+        assert.strictEqual(spawns(), 1);
+        c.send({ cmd: 'seek', ms: 30000 }); // fetched now, but this ytdec started with 12 s of it
+        await waitUntil(() => spawns() === 2 && last() === 'in seek 30000');
+        await stopIdle();
+    });
 
     await t('head: plays audio.head.m4a on audio_head + 10 s video; audio_ready -> playFile(audio.m4a) on the same connection + setTime; head removed', async () => {
         const id = 'FFFFFFFFFH1';
@@ -716,10 +772,21 @@ async function main() {
         assert.deepStrictEqual(ytdecIns(), ['in pause']);
         fs.writeFileSync(ctl, 'done'); // all of it: past the 12 s of video fetched, buffering ends with the fetch
         await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === false);
-        assert.deepStrictEqual(called('setTime').map((x) => x.a.newTimeElapsed), [58600]);
+        // the stopped player ignores playFile on its connection (car, 2026-11-20): audio.m4a on a new one, set there after
+        // its first tick, and the ticks after that move the clock again
+        await waitUntil(() => called('playFile').length === 2);
         assert.strictEqual(path.basename(called('playFile').slice(-1)[0].a.path), 'audio.m4a');
-        await waitUntil(() => ytdecIns().length === 3);
+        assert.deepStrictEqual(calls.filter((x) => x.m === 'connect' || x.m === 'disconnect').map((x) => x.m), ['connect', 'disconnect', 'connect'], 'released and connected again');
+        assert.strictEqual(called('setTime').length, 0, 'no setTime before the new file ticks');
+        tick(300);
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime').map((x) => x.a.newTimeElapsed), [58600]);
         assert.deepStrictEqual(ytdecIns(), ['in pause', 'in seek 58600', 'in resume']);
+        c.clear();
+        tick(58700); tick(59900);
+        const tm = await c.waitFor((x) => x.ev === 'time');
+        assert.ok(tm.elapsed >= 58700, JSON.stringify(tm));
+        assert.strictEqual(d.elapsed, 59900);
         await stopIdle();
     });
 
@@ -745,6 +812,9 @@ async function main() {
         assert.ok(!called('sendButtonEvent').some((x) => x.a.button === 'PLAY'));
         fs.writeFileSync(ctl, 'done'); // all of it: past the 12 s of video fetched, buffering ends with the fetch
         await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === false);
+        await waitUntil(() => called('playFile').length === 2);
+        tick(300); // the new connection's first tick
+        await waitUntil(() => called('setTime').length === 1);
         assert.deepStrictEqual(called('setTime').map((x) => x.a.newTimeElapsed), [300000]);
         await waitUntil(() => ytdecIns().slice(-2).join() === 'in seek 300000,in resume');
         await stopIdle();
@@ -820,7 +890,7 @@ async function main() {
         await waitUntil(() => ytdecLines().some((l) => / argv /.test(l)));
         tick(4000);
         c.send({ cmd: 'fill', on: true });
-        await waitUntil(() => ytdecLines().filter((l) => / argv /.test(l)).length === 2);
+        await waitUntil(() => ytdecLines().filter((l) => / argv /.test(l)).length === 2 && ytdecLines().some((l) => / in seek /.test(l)));
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(!/--fill/.test(argv[0]) && /--rect 1280x720 --fill /.test(argv[1]), argv.join('\n'));
         assert.ok(ytdecLines().some((l) => / in seek 40\d\d$/.test(l)), 'at the clock');
@@ -1499,6 +1569,18 @@ async function main() {
         assert.deepStrictEqual([x.asked, x.evs.map((e) => [e.ev, e.which, e.partial, e.items.length])], [['VLWL', 'p2', 'p3'], [['feed', 'wl', true, 3, ], ['feed', 'wl', undefined, 9]]], 'Watch later: the same');
         feed = 'home'; x = await run(null);
         assert.deepStrictEqual([x.asked, x.evs.length, x.ev.items.length], [['FEwhat_to_watch'], 1, 3], 'Home: one page, no next one asked (only playlists are read page by page)');
+        // a Mix (RD + its video): no VL page (400), read from /next's playlist shelf, as the car got it 2026-11-20
+        const mixAsked = [], mixEvs = [];
+        const nextBody = { contents: { singleColumnWatchNextResults: { playlist: { playlist: { title: 'Mix - Rock Mafia' } }, pivot: { sectionListRenderer: { contents: [
+            { shelfRenderer: { content: { horizontalListRenderer: { items: [tile(9)] } } } },
+            { shelfRenderer: { content: { horizontalListRenderer: { items: [1, 2].map((n) => ({ playlistPanelVideoWrapperRenderer: { primaryRenderer: tile(n) } })) } } } }] } } } } };
+        const myt = (method, url, headers, body) => { mixAsked.push([url.replace(/^.*\/v1\//, ''), body.playlistId, body.videoId]); return Promise.resolve({ status: 200, body: JSON.stringify(nextBody) }); };
+        await new Account({ accountFile: file, ytRequest: myt, ytTimeoutMs: 1000, log: () => {} }, (e) => mixEvs.push(e)).playlist('RDZ1KRmp65PyE');
+        assert.deepStrictEqual(mixAsked, [['next', 'RDZ1KRmp65PyE', 'Z1KRmp65PyE']], 'one /next with the Mix and its video');
+        assert.deepStrictEqual([mixEvs.length, mixEvs[0].title, mixEvs[0].items.map((v) => v.title)], [1, 'Mix - Rock Mafia', ['Song 1', 'Song 2']], 'the panel shelf, not the suggestions');
+        const bad = [];
+        await new Account({ accountFile: file, ytRequest: () => Promise.resolve({ status: 400, body: '{}' }), ytTimeoutMs: 1000, log: () => {} }, (e) => bad.push(e)).playlist('RDZ1KRmp65PyE');
+        assert.deepStrictEqual(bad.map((e) => e.error), ['feed offline'], 'a failed /next: the usual error');
     });
 
     await t('setTime is never 0 (the car\'s player ignores it): the start is asked as 1 ms', async () => {

@@ -670,7 +670,7 @@ mgu.run({
             wake(); changed();
         }
         setInterval(() => { try { batteryGuard(); } catch (e) { log.error('battery', e); } }, 1000);
-        let ovUntil = 0, qrUntil = 0;   // qrUntil: the On phone QR card shows until then
+        let ovUntil = 0, qrUntil = 0, qrAt = 0;   // qrUntil: the On phone QR card shows until then; qrAt: the time it links to
         function wake() { ovUntil = Date.now() + OVERLAY_MS; dirty = true; }
         // the overlay's -10 s / +10 s (#18): a tap (finger or controller press) seeks 10 s; held SKIP_HOLD_MS the
         // button turns into previous / next video, and letting go takes it. skipHold: {dir, armed, t} while held
@@ -837,9 +837,11 @@ mgu.run({
             const sel = railSel(), bottom = H + (cv.own ? cv.extra : 0);
             const rail = RAIL.concat(RAIL_MORE.filter((r) => model.can(r[3])));
             const items = cv.own && model.active() ? rail.concat([PLAYING]) : rail;
-            const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
+            // where the kit runs the screen the entries share the whole strip, top to bottom (20/11: Badre saw an empty band
+            // above Search); under the HMI's tabs they start below them, as before
+            const n = items.length, pitch = cv.own ? bottom / n : Math.min(100, (bottom - 156) / (n - 1));
             items.forEach(([m, name, glyph], i) => {
-                const cx = 62 + RX, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
+                const cx = 62 + RX, cy = cv.own ? Math.round(pitch * (i + 0.5)) - 4 : 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
                 if (on) { cv.roundRect(18 + RX, cy - 38, 90, 84, 16, bg); cv.roundRect(18 + RX, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
                 cv.text(translate(name === 'Subscriptions' ? 'Subs' : name === 'Watch later' && dict.Later ? 'Later' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
@@ -1128,7 +1130,7 @@ mgu.run({
                 secs = (model.resume.length ? [{ title: translate('Continue watching'), items: model.resume }] : [])
                     .concat(f.shelves || [{ title: translate('Recommended'), items: f.items, grid: true }])
                     .concat(wl && wl.items.length ? [{ title: translate('Watch later'), items: wl.items.slice(0, SHELF_MAX) }] : []);
-            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: translate(NAMES[which]), sub: count(f.items.length, '{count} videos', '{count} videos'), items: f.items, grid: true }];
+            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: translate(NAMES[which]), sub: count(f.items.length, '{count} videos', '{count} videos') + (f.loading ? ' · ' + translate('Loading...') : ''), items: f.items, grid: true }];
             if (which === 'subs') secs = chanSections().concat(chanQ || !f || !f.items.length ? [] : secs);
             drawPage(cv, secs.map((sc) => (sc.chan ? sc : Object.assign({}, sc, { items: shown(sc.items) }))).filter((sc) => sc.chan || sc.items.length));
         }
@@ -1156,7 +1158,7 @@ mgu.run({
             // as Watch later: members-only videos (the setting off) and hidden channels left out, and said so
             const vids = shown(p.items), off = p.items.length - vids.length;
             if (!vids.length) return say(cv, message('Nothing to show in {name}', { name: p.title || translate('this playlist') }), count(off, '{count} video hidden: members-only (Settings) or a hidden channel', '{count} videos hidden: members-only (Settings) or a hidden channel'));
-            drawPage(cv, [{ title: p.title || translate('Playlist'), sub: count(vids.length, '{count} video', '{count} videos') + (off ? ' · ' + count(off, '{count} hidden', '{count} hidden') : ''), items: vids, grid: true }]);
+            drawPage(cv, [{ title: p.title || translate('Playlist'), sub: count(vids.length, '{count} video', '{count} videos') + (off ? ' · ' + count(off, '{count} hidden', '{count} hidden') : '') + (p.loading ? ' · ' + translate('Loading...') : ''), items: vids, grid: true }]);
         }
         // not signed in: a QR code for the sign-in page, the code to enter there in big letters, on a card
         function drawSignIn(cv) {
@@ -1448,21 +1450,22 @@ mgu.run({
             // top right, On phone: a QR code of the video's public link at this second (nothing is kept on the car)
             if (model.id) {
                 const px = SW - 150;
-                ctl('ov:qr', px, by, 30, () => { qrUntil = qrUntil > Date.now() ? 0 : Date.now() + 30000; }, (c) => {
+                ctl('ov:qr', px, by, 30, () => { qrUntil = qrUntil > Date.now() ? 0 : Date.now() + 30000; qrAt = model.elapsed; }, (c) => {
                     cv.strokeRoundRect(px - 10, by - 17, 20, 34, 4, 3, c); cv.fillRect(px - 4, by + 10, 8, 3, c);
                 });
                 cv.text(translate('On phone'), px - 42, by + 9, 24, '#ffffff', Object.assign({}, LIT, { align: 'right' }));
             }
             if (model.id && qrUntil > Date.now()) {
-                const url = 'https://youtu.be/' + model.id + (model.elapsed > 5000 ? '?t=' + Math.floor(model.elapsed / 1000) : ''), mod = 8;
+                const url = 'https://youtu.be/' + model.id + (qrAt > 5000 ? '?t=' + Math.floor(qrAt / 1000) : ''), mod = 8;   // a fixed code while it is scanned
                 const n = QR.encode(url).length, side = (n + 8) * mod, cw = side + 520, chh = side + 60, qx0 = cx - cw / 2, qy0 = cy - chh / 2;
                 cv.roundRect(qx0, qy0, cw, chh, 24, '#212121f2');
                 cv.roundRect(qx0 + 30 - 6, qy0 + 30 - 6, side + 12, side + 12, 18, '#ffffff');
                 QR.draw(cv, url, qx0 + 30, qy0 + 30, mod);
                 cv.text(translate('Continue on your phone'), qx0 + side + 80, qy0 + chh / 2 - 20, 34, '#ffffff', LITB);
-                cv.text(translate('Scan with the camera to go on from ') + clock(model.elapsed), qx0 + side + 80, qy0 + chh / 2 + 24, 22, '#cccccc', LIT);
+                cv.text(translate('Scan with the camera to go on from ') + clock(qrAt), qx0 + side + 80, qy0 + chh / 2 + 24, 22, '#cccccc', LIT);
                 tg(qx0, qy0, cw, chh, () => { qrUntil = 0; wake(); }, 'ov:qrcard', 24);
                 cv.xf();
+                hmiIcons(cv);
                 return;
             }
             // middle left, Close: the video ends and the list shows again (mirrors Quality / Zoom on the right)

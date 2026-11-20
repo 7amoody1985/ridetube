@@ -226,6 +226,7 @@ class Model {
             const p = this.plist;
             if (!p || m.id !== p.id) return;                                          // another playlist's late answer
             p.loading = m.partial === true;                                           // its first page: the rest follows
+            p.rest = p.loading; if (p.loading) p.t = Date.now();                      // the rest's clock starts now
             if (m.error) p.error = String(m.error); else {
                 p.error = null; p.items = valid(m.items, PL_ITEMS);
                 if (m.title) p.title = String(m.title);
@@ -235,6 +236,7 @@ class Model {
             if (FEEDS.indexOf(m.which) < 0) return;
             const f = this.feeds[m.which] = this.feeds[m.which] || { items: [] };
             f.loading = m.partial === true;                                           // a playlist feed's first page
+            f.rest = f.loading; if (f.loading) f.t = Date.now();
             if (m.error) f.error = String(m.error); else {
                 f.error = null; f.items = valid(m.items, m.which === 'wl' ? PL_ITEMS : FEED_MAX);
                 // shelves: none (an older daemon, or a playlist) = the flat list as a grid
@@ -386,7 +388,7 @@ class Model {
         if (FEEDS.indexOf(which) < 0) return false;
         const f = this.feeds[which] = this.feeds[which] || { items: [] };
         if (f.loading || this.auth.state !== 'signed_in') return false;
-        f.loading = true; f.error = null; f.t = Date.now();
+        f.loading = true; f.error = null; f.t = Date.now(); f.rest = false;
         this._changed();
         if (this.send({ cmd: 'feed', which })) return true;
         f.loading = false; f.error = 'The RideTube service (jap-ridetube-d) is not running';
@@ -396,7 +398,7 @@ class Model {
     checkFeeds(now, ms) {
         let any = false;
         FEEDS.map((w) => this.feeds[w]).concat([this.chans, this.chan, this.pls, this.plist, this.related, this.health])
-            .forEach((f) => { if (f && f.loading && now - f.t >= (f === this.health ? HEALTH_MS : ms)) { f.loading = false; f.error = 'No answer from the RideTube service'; any = true; } });
+            .forEach((f) => { if (f && f.loading && now - f.t >= (f === this.health ? HEALTH_MS : f.rest ? ms * 6 : ms)) { f.loading = false; f.error = 'No answer from the RideTube service'; any = true; } });
         if (any) this._changed();
         return any;
     }
@@ -452,7 +454,7 @@ class Model {
         if (!this.plist || this.plist.id !== id) { this.plist = { id, title: String(title || ''), items: [] }; this._prune(); }
         const p = this.plist;
         if (p.loading) return false;
-        p.loading = true; p.error = null; p.t = Date.now();
+        p.loading = true; p.error = null; p.t = Date.now(); p.rest = false;
         this._changed();
         if (this.send({ cmd: 'playlist', id })) return true;
         p.loading = false; p.error = 'The RideTube service (jap-ridetube-d) is not running';

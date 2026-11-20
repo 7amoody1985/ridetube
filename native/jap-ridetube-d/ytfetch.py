@@ -65,7 +65,7 @@ def unplayable(info):
         return "Live videos can't be played yet"
     fs = info.get('formats') or []
     if not any((f.get('vcodec') or '').startswith('avc1') for f in fs):
-        return 'no avc1 video'
+        return 'YouTube offers this video in no format RideTube can play'
     if not any((f.get('vcodec') or '').startswith('avc1') and f.get('protocol') in (None, 'https') for f in fs):
         return "This video is only offered as a stream RideTube can't play yet"
     return None
@@ -93,6 +93,15 @@ def clock_wrong(e):
     if 'certificate is not yet valid' not in t and 'certificate has expired' not in t:
         return None
     return "Wrong head unit clock (" + time.strftime('%Y-%m-%d', time.gmtime()) + "): set the car's date and time"
+
+
+BOT_MSG = "YouTube is blocking this connection as a bot: try another network, such as the phone's hotspot"
+
+
+def bot_check(e):
+    """The user's message when YouTube asks to sign in to prove it's no bot (an IP it distrusts; seen on a US car
+    2026-11-19, yt-dlp's raw text there advised cookies); None for any other error."""
+    return BOT_MSG if 'not a bot' in str(e) else None
 
 
 # --no-cert-time: the daemon found the head unit's clock before the service's build date (ytd.js BUILT), so every
@@ -820,8 +829,25 @@ def usable(info):
             and any(f.get('ext') == 'm4a' and f.get('vcodec') == 'none' for f in fs))
 
 
-def extract(yt_dlp, a, url):
-    """One extraction: PLAYER_CLIENTS first, then once more with yt-dlp's default clients."""
+def redirect(info):
+    """The watch URL a Premium-only music video points to (yt-dlp gives {_type: url, url: <the free version's id>}
+    instead of formats, seen on d1QurfIzO2E 2026-11-20); None for anything else."""
+    t = info.get('url') if info.get('_type') == 'url' and info.get('ie_key') == 'Youtube' else None
+    return 'https://www.youtube.com/watch?v=' + t if isinstance(t, str) and ID_RE.match(t) else None
+
+
+def extract(yt_dlp, a, url, hop=True):
+    """One extraction: PLAYER_CLIENTS first, then once more with yt-dlp's default clients; one redirect followed."""
+    info = extract_once(yt_dlp, a, url)
+    to = hop and redirect(info)
+    if not to:
+        return info
+    info = extract(yt_dlp, a, to, hop=False)
+    info['original_url'] = url   # the asked video: load_info matches the prefetch on it
+    return info
+
+
+def extract_once(yt_dlp, a, url):
     if PLAYER_CLIENTS:
         p = dict(ydl_params(a, None), extractor_args={'youtube': {'player_client': PLAYER_CLIENTS}})
         try:
@@ -842,7 +868,8 @@ def load_info(path, vid):
         if path and time.time() - os.path.getmtime(path) < INFO_MAX_S:
             with open(path) as f:
                 info = json.load(f)
-            if info.get('id') == vid and usable(info):
+            # a followed redirect keeps the asked id in original_url
+            if (info.get('id') == vid or (info.get('original_url') or '').endswith('=' + vid)) and usable(info):
                 return info
     except (OSError, ValueError, AttributeError):
         pass
@@ -871,7 +898,7 @@ def extract_cmd(a):
     try:
         info = extract(yt_dlp, a, 'https://www.youtube.com/watch?v=' + a.id)
     except Exception as e:  # noqa: BLE001
-        fail(clock_wrong(e) or f'extract: {e}')
+        fail(clock_wrong(e) or bot_check(e) or f'extract: {e}')
     tmp = a.dir + '.tmp'
     with open(tmp, 'w') as f:
         json.dump(yt_dlp.YoutubeDL.sanitize_info(info), f)
@@ -958,7 +985,7 @@ def fetch(a):
     try:
         info = info or extract(yt_dlp, a, url)
     except Exception as e:  # noqa: BLE001 - any yt-dlp failure is reported to the daemon
-        fail(clock_wrong(e) or f'extract: {e}')
+        fail(clock_wrong(e) or bot_check(e) or f'extract: {e}')
     meta = {'id': a.id, 'title': info.get('title'), 'channel': info.get('channel') or info.get('uploader'),
             'duration_s': info.get('duration'),
             'chapters': [[int((c.get('start_time') or 0) * 1000), str(c.get('title') or '')[:80]]
@@ -1232,7 +1259,7 @@ def request_cmd():
             raise ValueError('answer too big')
         out = {'status': r.status, 'body': data.decode('utf-8', 'replace')}
     except Exception as e:  # noqa: BLE001 - every failure is the daemon's error text
-        out = {'error': clock_wrong(e) or str(e)[:300] or type(e).__name__}
+        out = {'error': clock_wrong(e) or bot_check(e) or str(e)[:300] or type(e).__name__}
     sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode('utf-8'))
     sys.stdout.flush()
 # ---------------------------------------------------------------- yt-dlp updates

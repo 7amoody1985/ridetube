@@ -84,7 +84,7 @@ module.exports = function remotePage(o) {
                 return undefined;
             }
             line(t('A passenger\'s phone sends videos and searches to RideTube'), 30, C.text, true);
-            line(t('The phone joins the car\'s Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.'), 24, C.dim);
+            t('The phone joins the car\'s Wi-Fi hotspot and scans a code shown here; the page comes from the car itself.').replace(/([;；])\s*/, '$1\n').split('\n').forEach((s) => line(s, 24, C.dim));
             // (the service's own words, in English: not in the catalogs)
             if (st.error) line(o.message('Could not turn it on: {error}', { error: st.error }), 24, '#ffb3b3');
             button(cv, X0, bottom, t('Turn on'));

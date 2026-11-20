@@ -23,7 +23,7 @@ const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
 const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
-const VERSION = '0.4.3';   // component.json's (test_ytd.js checks): sent with a log report
+const VERSION = '0.4.7';   // component.json's (test_ytd.js checks): sent with a log report
 // the day this build was released (UTC), bumped with VERSION at each release (tools/release.py refuses one in the
 // future). A head unit clock before it is provably wrong: only then does TLS skip the certificate dates (certTime)
 const BUILT = '2026-11-19';
@@ -112,7 +112,7 @@ const isMembers = (t) => /BADGE_STYLE_TYPE_MEMBERS|"Members (only|first)"/i.test
 // shortcut: the values are YouTube's live enums from its other clients, no TVHTML5 live capture in test/; check on the first one
 const LIVE_VALUES = ['LIVE', 'UPCOMING', 'THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE', 'BADGE_STYLE_TYPE_LIVE_NOW'];
 const isLive = (marks, duration) => duration === null && marks.some((x) => LIVE_VALUES.indexOf(x) >= 0);
-const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country|can't be played|can't play|head unit clock/i;
+const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country|can't be played|can't play|head unit clock|blocking this connection/i;   // the last: ytfetch.py BOT_MSG, no retry nor yt-dlp update
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function withTimeout(p, ms, what) {
     return new Promise(function (resolve, reject) {
@@ -878,7 +878,31 @@ Account.prototype.playlists = async function () {
 };
 Account.prototype.playlist = function (id) {
     if (!isPl(id)) { this.emit({ ev: 'playlist', id: String(id), error: 'bad playlist' }); return Promise.resolve(); }
+    if (/^RD/.test(id)) return this.mix(id);
     return this.browseEv({ ev: 'playlist', id: id }, 'VL' + id, (j) => ({ title: playlistTitle(j), items: feedItems(j).slice(0, PLAYLIST_MAX) }), 0, PLAYLIST_MAX);
+};
+// A Mix (RD + the video it grew from: a saved "Mix - ..." in Playlists) has no browse page (VLRD... -> 400, seen on the
+// owner's car 2026-11-20): its videos are the watch page's playlist shelf (/next with playlistId), its title the panel's
+Account.prototype.mix = async function (id) {
+    const head = { ev: 'playlist', id: id }, g = this.gen;
+    const body = { playlistId: id };
+    if (/^RD[\w-]{11}$/.test(id)) body.videoId = id.slice(2);
+    const next = (tok) => this.json('POST', YT + '/youtubei/v1/next', Object.assign({ context: { client: this.client() } }, body), { Authorization: 'Bearer ' + tok });
+    try {
+        let r = await next(await this.token(false));
+        if (r.status === 401) r = await next(await this.token(true));
+        if (g !== this.gen) throw Object.assign(new Error('signed out'), { signedOut: true });
+        if (r.status !== 200 || !r.j) throw new Error('next ' + r.status);
+        const w = (r.j.contents && r.j.contents.singleColumnWatchNextResults) || {};
+        const shelves = (w.pivot && w.pivot.sectionListRenderer && w.pivot.sectionListRenderer.contents) || [];
+        const shelf = shelves.find((s) => JSON.stringify(s).indexOf('playlistPanelVideoWrapperRenderer') >= 0);
+        const pl = (w.playlist && w.playlist.playlist) || {};
+        this.emit(Object.assign({}, head, { title: typeof pl.title === 'string' ? pl.title : '', items: shelf ? feedItems(shelf).slice(0, PLAYLIST_MAX) : [] }));
+    } catch (e) {
+        if (!e.signedOut) this.log('playlist: ' + e.message);
+        this.emit(Object.assign({}, head, { error: e.signedOut ? 'signed out' : e.noUid ? e.message : 'feed offline' }));
+    }
+    return undefined;
 };
 // pagesMax: follow a playlist's next pages up to that many videos; parse then gets the array of pages, and the
 // first page goes out at once with partial: true (the whole list follows, without it)
@@ -1291,6 +1315,8 @@ function Daemon(o) {
     this.preparing = null; // id the fetcher is writing
     this.fetcher = null;   // ytfetch.py, as the fetch uid
     this.fetchedMs = Infinity; // video fetched up to there (pts ms)
+    this.ytdecKnew = Infinity; // fetchedMs when the running ytdec started (its index then)
+    this.videoBehind = false; // its last seek went past the video fetched: a new ytdec at the clock once it is there
     this.buffering = false;
     this.head = null;      // {ms}: playing audio.head.m4a (the first ms of the audio) until audio.m4a is ready
     this.fullReady = false; // audio.m4a complete
@@ -1934,6 +1960,14 @@ Daemon.prototype.isBuffering = function () {
 };
 Daemon.prototype.checkBuffering = function () {
     if (this.isBuffering() !== this.buffering) this.sendState();
+    if (this.videoBehind && this.child && this.state === 'playing' && !this.paused && !this.headWait) { // ytdecSeek
+        const at = Math.round(this.elapsed + (Date.now() - this.lastTickAt));
+        if (at + 1000 < this.fetchedMs) {
+            this.log('video: ' + this.fetchedMs + ' fetched, past the seek: ytdec again at ' + at);
+            this.killYtdec();
+            this.spawnYtdec(at);
+        }
+    }
 };
 
 Daemon.prototype.prune = function () {
@@ -2202,19 +2236,30 @@ Daemon.prototype.onFullAudio = function () {
     }
     return this.switchToFull();
 };
-// playFile(audio.m4a) on the live connection, then setTime where the head was. ytdec keeps its clock meanwhile
-// (or, waiting, is paused at elapsed), so the target is the extrapolated clock (or elapsed).
+// playFile(audio.m4a) on the live connection, then setTime at the extrapolated clock (ytdec keeps its own meanwhile).
+// Waiting (waitFull stopped the player): audio.m4a on a new connection instead, as resume() does - the stopped player
+// ignores playFile on its own (car, 2026-11-20: replay OK, then no tick, the clock frozen at a quality restart's place).
 Daemon.prototype.switchToFull = async function () {
-    const gen = this.gen, waiting = this.headWait;
+    if (this.headWait) {
+        this.log('audio: head -> full at ' + this.elapsed + ' (waiting)');
+        this.stoppedAt = this.elapsed;
+        this.head = null;
+        this.headWait = false;
+        this.checkBuffering();
+        await this.replayAt('audio switch');
+        try { fs.unlinkSync(path.join(this.cur.dir, 'audio.head.m4a')); } catch (e) { /* gone, or stopped meanwhile */ }
+        return undefined;
+    }
+    const gen = this.gen;
     this.switching = true;
     this.head = null;
     this.sawPlay = false;
-    this.log('audio: head -> full at ' + this.elapsed + (waiting ? ' (waiting)' : ''));
+    this.log('audio: head -> full at ' + this.elapsed);
     let target;
     try {
         await this.audio.replay(path.join(this.cur.dir, 'audio.m4a'));
         if (gen !== this.gen) return undefined;
-        target = waiting ? this.elapsed : this.elapsed + (Date.now() - this.lastTickAt);
+        target = this.elapsed + (Date.now() - this.lastTickAt);
         if (this.total) target = Math.min(target, Math.max(0, this.total - 1000));
         await this.audio.seek(target);
     } catch (e) {
@@ -2224,14 +2269,9 @@ Daemon.prototype.switchToFull = async function () {
     }
     if (gen !== this.gen) return undefined;
     this.switching = false;
-    this.headWait = false;
     this.elapsed = target;
     this.lastTickAt = Date.now();
     this.settle = { ms: target, until: Date.now() + 3000 };
-    if (waiting) {
-        this.toYtdec('seek ' + target);
-        if (!this.paused) this.toYtdec('resume');
-    }
     if (this.paused) await this.hold(target); // paused during the switch: the playFile started it
     this.checkBuffering();
     try { fs.unlinkSync(path.join(this.cur.dir, 'audio.head.m4a')); } catch (e) { /* the player keeps reading it until then */ }
@@ -2418,7 +2458,7 @@ Daemon.prototype.resume = async function () {
     if (this.waiting()) return;
     if (this.state !== 'paused') return;
     this.paused = false;
-    this.lastProgress = Date.now();
+    this.lastProgress = Date.now(); this.played = 0;
     this.setState('playing');
     if (this.headWait) return; // still past the head: ytdec and the player stay paused until the switch
     if (this.stoppedAt !== null && this.stoppedAt !== undefined) return this.replayAt('resume'); // the player stopped mid-file
@@ -2430,7 +2470,7 @@ Daemon.prototype.resume = async function () {
 Daemon.prototype.replayAt = async function (why) {
     const gen = this.gen;
     this.sawPlay = false; // the new file's own STOP/PLAY is not a stop mid-file
-    this.toYtdec('seek ' + this.stoppedAt);
+    this.ytdecSeek(this.stoppedAt);
     this.toYtdec('resume');
     try {
         await this.audio.release();
@@ -2459,10 +2499,10 @@ Daemon.prototype.seek = async function (ms) {
     if (this.state !== 'playing' && this.state !== 'paused') return;
     if (this.total) ms = Math.min(ms, Math.max(0, this.total - 1000));
     this.elapsed = ms;
-    this.lastProgress = Date.now();
+    this.lastProgress = Date.now(); this.played = 0;
     this.lastTickAt = Date.now();
     this.settle = null; // a seek back right after the switch: its times are ours
-    this.toYtdec('seek ' + ms);
+    this.ytdecSeek(ms);
     // shortcut: once waiting, a seek back into the head still waits for audio.m4a (a few s), simpler than replaying the head
     if (this.headWait) return this.checkBuffering();
     if (this.head && !this.switching && ms > this.head.ms - this.opts.headMarginMs) return this.waitFull(ms);
@@ -2472,7 +2512,7 @@ Daemon.prototype.seek = async function (ms) {
 };
 Daemon.prototype.setVideo = function (on) {
     this.videoOn = on;
-    this.lastProgress = Date.now();
+    this.lastProgress = Date.now(); this.played = 0;
     this.toYtdec('video ' + (on ? 1 : 0));
 };
 
@@ -2505,6 +2545,8 @@ Daemon.prototype.onTime = function (v) {
     if (this.tickWaiter) { this.tickWaiter(); return; } // resume(): the restarted file plays, its setTime can follow
     if (this.switching || this.headWait) return; // the restart's times, or a paused player
     if (this.settle && Date.now() < this.settle.until && v.elapsed < this.settle.ms - 2000) return; // before our setTime landed
+    const step = v.elapsed - this.elapsed;
+    if (step > 0 && step < 2000) this.played = (this.played || 0) + step;   // the watchdog's audio time (seeks excluded)
     this.elapsed = v.elapsed;
     this.lastTickAt = Date.now();
     this.total = this.head ? (this.cur.durationMs || v.total) : v.total; // the head's own total is ~60 s
@@ -2621,17 +2663,30 @@ Daemon.prototype.spawnYtdec = function (seekMs) {
         return this.ytdecDied(null, 'spawn: ' + e.message);
     }
     this.child = child;
-    this.lastProgress = Date.now();
+    this.lastProgress = Date.now(); this.played = 0;
     this.lastDecoded = -1;
     this.eof = false;
     child.stdin.on('error', () => { /* EPIPE when it dies: handled by exit */ });
     child.on('error', (e) => this.ytdecDied(child, e.message));
     child.on('exit', (code, sig) => this.ytdecDied(child, 'exit ' + (sig || code)));
     readline.createInterface({ input: child.stdout }).on('line', (l) => this.guard(() => this.onYtdecLine(child, l)));
+    this.ytdecKnew = this.fetchedMs;   // its index at the start: the video fetched so far
+    this.videoBehind = seekMs !== null && seekMs + 1000 >= this.fetchedMs;
     if (seekMs !== null) this.toYtdec('seek ' + seekMs);
-    if (this.paused) this.toYtdec('pause');
+    if (this.paused || this.headWait) this.toYtdec('pause');
     if (!this.videoOn) this.toYtdec('video 0');
     this.log('ytdec ' + args.join(' ') + (seekMs !== null ? ' (restart at ' + seekMs + ')' : ''));
+};
+// ytdec reads its index again only when it runs out of frames, and a seek past the frames it has starts at its last
+// keyframe and decodes up to the target unseen (car, 2026-11-20: ~100 s of a frozen picture, the sound playing, after a
+// quality restart at 23 min; the whole index was there after 12 s). So past what this ytdec knew at its start: a new one
+// there, which reads all of it; past the video fetched: the seek now, a new ytdec at the clock once it is (checkBuffering)
+Daemon.prototype.ytdecSeek = function (ms) {
+    if (!this.child) return;
+    if (ms + 1000 < this.ytdecKnew) { this.toYtdec('seek ' + ms); return; }
+    if (ms + 1000 < this.fetchedMs) { this.killYtdec(); this.spawnYtdec(ms); return; }
+    this.videoBehind = true;
+    this.toYtdec('seek ' + ms);
 };
 Daemon.prototype.toYtdec = function (line) {
     if (!this.child) return;
@@ -2644,10 +2699,10 @@ Daemon.prototype.onYtdecLine = function (child, l) {
     if (m.ev === 'stats') {
         if (typeof m.decoded === 'number' && m.decoded !== this.lastDecoded) {
             this.lastDecoded = m.decoded;
-            this.lastProgress = Date.now();
+            this.lastProgress = Date.now(); this.played = 0;
         }
     } else if (m.ev === 'ready') {
-        this.lastProgress = Date.now();
+        this.lastProgress = Date.now(); this.played = 0;
     } else if (m.ev === 'eof') {
         this.eof = true;
     } else if (m.ev === 'error') {
@@ -2677,12 +2732,14 @@ Daemon.prototype.ytdecDied = function (child, why) {
 Daemon.prototype.watchdog = function () {
     if (!this.child || this.state !== 'playing' || !this.videoOn || this.eof) return;
     // waiting for video not fetched yet (buffering, or the fetcher ended early): not a stall
-    if (this.headWait || this.elapsed + 1000 > this.fetchedMs) { this.lastProgress = Date.now(); return; }
-    if (Date.now() - this.lastProgress < this.opts.watchdogMs) return;
-    this.log('watchdog: no decoded frames for ' + this.opts.watchdogMs + ' ms');
+    if (this.headWait || this.elapsed + 1000 > this.fetchedMs) { this.lastProgress = Date.now(); this.played = 0; return; }
+    // ytdec holds while the audio clock holds (a slow player, an announcement): a stall is watchdogMs of AUDIO played
+    // with no frame decoded, not of wall time (20/11: 3 plays went audio only on audio that ran ~3x slower than the clock)
+    if (Date.now() - this.lastProgress < this.opts.watchdogMs || (this.played || 0) < this.opts.watchdogMs) return;
+    this.log('watchdog: no decoded frames for ' + this.opts.watchdogMs + ' ms of audio');
     const c = this.child;
     try { c.kill('SIGKILL'); } catch (e) { /* gone */ }
-    this.lastProgress = Date.now();
+    this.lastProgress = Date.now(); this.played = 0;
 };
 
 Daemon.prototype.close = async function () {

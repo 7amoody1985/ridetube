@@ -1,5 +1,33 @@
 # Changelog
 
+## App 0.5.1 and service 0.4.7
+
+Fixes found while testing 0.5.0 in the car and in the emulator.
+
+Service:
+- Changing the quality could leave the picture frozen while the sound went on. Two causes, both fixed. After a
+  restart at a late point, ytdec seeked past the frames it knew about and decoded up to the target without showing
+  anything (about 100 s on a 23-minute video). It now starts a new ytdec there, or right after the video it needs
+  has arrived. And when the restart had to wait for the full audio, the player ignored the new file and the clock
+  stayed where it was; the full audio now plays on a new connection, as a resume does.
+- The frame watchdog counts audio played, not wall time. On a slow player the old count stopped videos that were
+  fine and left them audio only.
+- Saved Mixes ("Mix - ..." in Playlists) open. YouTube has no playlist page for them, so the service reads the Mix
+  from its watch page.
+- When YouTube asks to sign in to prove you are not a bot, the error says so and suggests another network, such as
+  the phone's hotspot. The service no longer retries or updates yt-dlp for it.
+- Some music videos are Premium only and point to a free version. RideTube now plays that version.
+- "no avc1 video" now reads "YouTube offers this video in no format RideTube can play".
+
+App:
+- Where RideTube runs the whole screen, the rail entries spread over the full height of the strip, with no empty
+  band above Search.
+- Liked videos and Watch later: after the first 15 videos, the app waited only 15 s for the rest and then asked for
+  the whole list again. It now waits up to 90 s and asks once. The header says "Loading..." until the rest is there.
+- On phone: the QR code keeps the time of the press, so it no longer changes while someone scans it, and the car's
+  home and back icons stay on screen.
+- Phone remote: the description wraps to two lines (it was cut off in Russian).
+
 ## RideTube 0.5: app 0.5.0 and service 0.4.3
 
 The first big update since 0.4. After the update, RideTube opens once on a "What's new" page with the list below

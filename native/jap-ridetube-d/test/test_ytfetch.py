@@ -469,6 +469,17 @@ class ClockWrong(unittest.TestCase):
         e.args = (1, 'certificate verify failed: unable to get local issuer certificate')
         self.assertEqual(ytfetch._why(e), 'certificate not trusted')
 
+    def test_bot_check(self):
+        # yt-dlp's words when YouTube flags the address (seen in a car's log report, 2026-11)
+        e = Exception("ERROR: [youtube] abcdefghijk: Sign in to confirm you’re not a bot. Use --cookies-from-browser")
+        self.assertEqual(ytfetch.bot_check(e), ytfetch.BOT_MSG)
+        self.assertIsNone(ytfetch.bot_check(Exception('HTTP Error 403: Forbidden')))
+        # ytd.js's PERMANENT_RE keys on these words: no retry, no yt-dlp update for it
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'ytd.js'), encoding='utf-8') as f:
+            perm = next(l for l in f if l.startswith('const PERMANENT_RE'))
+        self.assertIn('blocking this connection', perm)
+        self.assertIn('blocking this connection', ytfetch.BOT_MSG)
+
 
 def openssl(*args, cwd):
     subprocess.run(['openssl'] + list(args), cwd=cwd, check=True, capture_output=True)
@@ -639,7 +650,7 @@ class Playable(unittest.TestCase):
             self.assertEqual(ytfetch.unplayable({'live_status': live, 'formats': [https]}),
                              "Live videos can't be played yet")
         self.assertIn("can't play", ytfetch.unplayable({'formats': [hls]}))
-        self.assertEqual(ytfetch.unplayable({'formats': [dict(https, vcodec='vp09')]}), 'no avc1 video')
+        self.assertEqual(ytfetch.unplayable({'formats': [dict(https, vcodec='vp09')]}), 'YouTube offers this video in no format RideTube can play')
 
     @unittest.skipUnless(os.path.isfile(PYZ), 'no build/ytdlp.pyz')
     def test_video_pick_is_never_hls(self):
@@ -930,6 +941,37 @@ class CheckJson(unittest.TestCase):
         self.assertEqual(ytfetch._why(urllib.error.URLError(OSError(errno.EHOSTUNREACH, 'No route to host'))), 'no route to host')
         self.assertEqual(ytfetch._why(urllib.error.URLError(OSError(5, 'odd 10.0.0.1'))), 'failed')
         self.assertEqual(ytfetch._why(ValueError('10.0.0.1')), 'failed')
+
+
+class Redirect(unittest.TestCase):
+    def test_premium_music_video_follows_to_the_free_version(self):
+        ok = {'id': 's6NUEu1x64I', 'formats': [{'vcodec': 'avc1.4d401f', 'protocol': 'https'},
+                                                {'ext': 'm4a', 'vcodec': 'none'}]}
+        asked = []
+
+        class YDL:
+            def __init__(self, p): pass
+
+            def extract_info(self, url, download, process):
+                asked.append(url)
+                if url.endswith('=d1QurfIzO2E'):
+                    return {'_type': 'url', 'ie_key': 'Youtube', 'url': 's6NUEu1x64I'}
+                if url.endswith('=loopLoop123'):
+                    return {'_type': 'url', 'ie_key': 'Youtube', 'url': 'loopLoop123'}
+                return dict(ok)
+
+        yd = type('M', (), {'YoutubeDL': YDL})
+        a = type('A', (), {'cache_dir': '/tmp', 'node': 'node'})
+        info = ytfetch.extract(yd, a, 'https://www.youtube.com/watch?v=d1QurfIzO2E')
+        self.assertEqual(info['id'], 's6NUEu1x64I')
+        self.assertTrue(ytfetch.usable(info))
+        self.assertTrue(asked[-1].endswith('=s6NUEu1x64I'))
+        self.assertTrue(info['original_url'].endswith('=d1QurfIzO2E'))   # load_info matches the prefetch on it
+        # one hop only, other hosts never
+        self.assertEqual(ytfetch.extract(yd, a, 'https://www.youtube.com/watch?v=loopLoop123').get('_type'), 'url')
+        self.assertIsNone(ytfetch.redirect({'_type': 'url', 'ie_key': 'Generic', 'url': 's6NUEu1x64I'}))
+        self.assertIsNone(ytfetch.redirect({'_type': 'url', 'ie_key': 'Youtube', 'url': 'https://evil.example/x'}))
+        self.assertIsNone(ytfetch.redirect(ok))
 
 
 if __name__ == '__main__':

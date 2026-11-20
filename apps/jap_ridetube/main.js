@@ -71,7 +71,7 @@ function count(n, one, other, tr) {
 const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
 const Parked = require('./kit/parked');
-const { TwoFingerScroll, TouchMode, MODE: PAD_MODE } = require('./kit/touchpad');
+const { Touchpad, TouchMode, MODE: PAD_MODE } = require('./kit/touchpad');
 const { Ctl, Model, clock, SOCKET, FEEDS, SHELF_MAX } = require('./yt');
 const { spell } = require('./speller');
 
@@ -575,7 +575,9 @@ mgu.run({
         /* ---------- the controller's touchpad: two fingers scroll the page, as on an iPhone (kit/touchpad.js) ---------- */
         // the pad sends fingers only in touch mode: on while our page shows where the kit runs the screen, off after
         const padWanted = () => ui.isVisible('VIEW') && (!ui.hasFocus || ui.hasFocus('VIEW')) && !!(last && last.own);   // (last: the frame drawn last)
-        const pad = new TwoFingerScroll((dy) => { if (ctx.scroll && ctx.scroll(dy)) dirty = true; });
+        // two fingers scroll, one finger moves the pointer, a tap presses what it is on
+        const pad = new Touchpad((dy) => { if (ctx.scroll && ctx.scroll(dy)) dirty = true; },
+            (dx, dy) => { if (ctx.pointer) ctx.pointer.move(dx, dy); }, () => { if (ctx.pointer) ctx.pointer.tap(); });
         const touchMode = ctx.signals.proxy && ctx.signals.set ? new TouchMode(ctx.signals, log) : null;
         Promise.resolve(ctx.signals.watch('de.bmw.infotainment.ControllerElements', '1', {
             ZBETouchFrontSide: (v) => {
@@ -1036,7 +1038,7 @@ mgu.run({
             if (cv.own && st.max > 0) cv.scroll = { tiles: true };
         }
         // the controller on a tile: its shelf turned and the page scrolled so that it shows whole
-        if (ctx.onPageFocus) ctx.onPageFocus((key) => {
+        if (ctx.onPageFocus) ctx.onPageFocus((key, how) => {
             if (key !== focusKey) dirty = true;
             focusKey = key;
             // resting ~1 s on a video: the daemon looks its streams up now, so a press plays ~2.5 s sooner
@@ -1045,6 +1047,7 @@ mgu.run({
             const lw = laid.mode === mode && laid.where[key], lr = lw && laid.rows[lw.ri].items[lw.i];
             if (vid && !(lr && lr.live)) dwell = setTimeout(() => { if (focusKey === key) model.prefetch(vid[1]); }, 1000);
             if (key && key.indexOf('ov:') === 0) { wake(); return; }      // the controller in the player: its overlay
+            if (how === 'pointer') return;                                 // the pointer picks what shows: the page stays put
             const w = key && laid.mode === mode && laid.where[key];
             if (!w) return;
             const st = vs(mode), row = laid.rows[w.ri];

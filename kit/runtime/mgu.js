@@ -609,6 +609,8 @@ async function runInner(impl) {
         onScroll(fn) { display.onScroll = fn; },
         /** scroll(dy): move what the page shows by dy px (+ = further down: a sheet's list, else a cv.scroll page), as a finger would; false when nothing moved (the controller's touchpad: touchpad.js). */
         scroll(dy) { return display.scrollPage(dy); },
+        /** pointer.move(dx, dy) / pointer.tap(): the touchpad's pointer (display.js pointerMove); tap() is false when it is on nothing. */
+        pointer: { move(dx, dy) { display.pointerMove(dx, dy); }, tap() { return display.pointerTap(); } },
         /** onSwipe(fn): fn(dx) on a finger dragged sideways over the page where the kit runs the screen (+ = the finger went left, logical px); true when the page moved. A drag is no tap. */
         onSwipe(fn) { display.onSwipe = fn; },
         /**

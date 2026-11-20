@@ -78,6 +78,7 @@ const LAYOUTS = ['full', 'standard'];
 
 // the HMI's page animation when a screen opens (the picture shows after it)
 const SHOW_DELAY_MS = 350;
+const PTR_MS = 2500;   // the touchpad's pointer hides this long after the finger stops
 
 class Display {
     constructor(ui, log, spec, settings, themeFn) {
@@ -327,6 +328,7 @@ class Display {
         // the press let go: to the target that took it down (cv.target's hold)
         if (this.knobHold && !down(pb)) { const h = this.knobHold; this.knobHold = null; this._hold(h, false, true); }
         const tilt = TILT[df] && !(L && TILT[L.df] === TILT[df]) ? TILT[df] : null;
+        if ((d || tilt) && this.ptr) { this.ptr.t = 0; this._repaint(); }   // the knob back in charge: no pointer
         const tl = this._tabList(), here = Math.max(0, tl.sel >= 0 ? tl.sel : tl.settings);
         if (this.sheet) {
             // pushed up: the header's tabs (the knob along them, press opens one); pushed down: back to the sheet
@@ -365,13 +367,59 @@ class Display {
             this._focus(ring[i]);
             this._repaint();
         }
-        if (press && i >= 0) {
-            const p = ring[i];
-            if (p.tab != null) this._openTab(p.tab);
-            else if (p.tgt && p.tgt.hold) { this.knobHold = p.tgt; this._hold(p.tgt, true); this.pressed = p.k; this.pressedT = Date.now(); this._repaint(); }
-            else if (p.tgt) { try { Promise.resolve(p.tgt.run()).catch((e) => this.log.error('target', e)); } catch (e) { this.log.error('target', e); } this.pressed = p.k; this.pressedT = Date.now(); this._repaint(); }
-            else if (p.bar) this._click(p.bar);
+        if (press && i >= 0) this._press(ring[i], true);
+    }
+    /** A press on place p (the controller's, or a tap on the touchpad: knob false, no hold then). */
+    _press(p, knob) {
+        if (p.tab != null) this._openTab(p.tab);
+        else if (p.tgt && p.tgt.hold && knob) { this.knobHold = p.tgt; this._hold(p.tgt, true); this.pressed = p.k; this.pressedT = Date.now(); this._repaint(); }
+        else if (p.tgt) { try { Promise.resolve(p.tgt.run()).catch((e) => this.log.error('target', e)); } catch (e) { this.log.error('target', e); } this.pressed = p.k; this.pressedT = Date.now(); this._repaint(); }
+        else if (p.bar) this._click(p.bar);
+    }
+    /**
+     * The touchpad's pointer (ctx.pointer, kit/touchpad.js): a round dot, no arrow. One finger moves it (screen px);
+     * the place under it gets the controller (its ring; the app is told 'pointer', so it does not scroll the page
+     * under it), a press of the knob or a tap on the pad presses that place. Hidden PTR_MS after the finger stops,
+     * or at once when the knob turns. It starts where the controller is.
+     */
+    pointerMove(dx, dy) {
+        if (this.sheet || !this.own()) return;   // shortcut: sheets keep the knob only; upgrade by hit-testing sheetTargets
+        const pl = this.place, now = Date.now();
+        if (!this.ptrShown()) {
+            const ring = this._ring(), at = ring.find((q) => q.k === this.focusKey), r = at && this._rectOf(at);
+            const cx = r && r.x + r.w / 2, cy = r && r.y + r.h / 2, on = r && cx >= 0 && cx < pl.w && cy >= 0 && cy < pl.h;
+            this.ptr = on ? { x: cx, y: cy } : { x: pl.w / 2, y: pl.h / 2 };   // off screen (scrolled away): the middle
         }
+        const p = this.ptr;
+        p.x = Math.max(0, Math.min(pl.w - 1, p.x + dx)); p.y = Math.max(0, Math.min(pl.h - 1, p.y + dy)); p.t = now;
+        this._pointAt();
+        if (!this.ptrPaint) this.ptrPaint = setTimeout(() => { this.ptrPaint = null; this._repaint(); }, 30);   // ~30 fps
+        clearTimeout(this.ptrHide);
+        this.ptrHide = setTimeout(() => this._repaint(), PTR_MS + 50);
+    }
+    /** a tap on the pad: presses what the pointer is on (true), else nothing (false) */
+    pointerTap() {
+        if (!this.ptrShown() || this.sheet) return false;
+        this._pointAt();
+        const p = this._ring().find((q) => q.k === this.focusKey && !q.scroll);
+        if (!p) return false;
+        this.ptr.t = Date.now();
+        this._press(p, false);
+        return true;
+    }
+    ptrShown() { return !!(this.ptr && Date.now() - this.ptr.t < PTR_MS); }
+    /** the smallest place under the pointer gets the controller (none: nothing is selected) */
+    _pointAt() {
+        const p = this.ptr;
+        let best = null, area = Infinity;
+        this._ring().forEach((q) => {
+            if (q.scroll) return;
+            const r = this._rectOf(q);
+            if (r && p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h && r.w * r.h < area) { best = q; area = r.w * r.h; }
+        });
+        if ((best ? best.k : null) === this.focusKey) return;
+        this.pointing = true;
+        try { this._focus(best); } finally { this.pointing = false; }
     }
     _hold(t, down, on) { try { t.hold(down, on); } catch (e) { this.log.error('hold', e); } this._repaint(); }
     /** Pushed left with nothing there: the app's back to its previous page first (ctx.onBack(true)); false = none, the screen closes. */
@@ -384,7 +432,9 @@ class Display {
     /** ctx.scroll: what the page shows moved by dy logical px (+ = further down): an open sheet's list, else a scrolling page. */
     scrollPage(dy) {
         if (this.sheet) { if (!this.sheet.scroll) return false; this.sheet.scroll(dy); if (this.sheet.release) this.sheet.release(); this._paintSheet(); return true; }
-        return !!(this.pageScroll && this.onScroll && this._scrollBy(dy));
+        const moved = !!(this.pageScroll && this.onScroll && this._scrollBy(dy));
+        if (moved && this.ptrShown()) setTimeout(() => { if (this.ptrShown()) { this._pointAt(); this._repaint(); } }, 120);   // the page moved under it
+        return moved;
     }
     /** A scrolling page (ctx.onScroll) moved by dy logical px; false when it was at its end already. */
     _scrollBy(dy) {
@@ -431,7 +481,7 @@ class Display {
         this.focused = p && p.bar ? p.bar : null;
         if (this.focused) this._scroll();
         // the app hears which of its targets the controller is on (null: none), to bring it into view
-        if (this.onPageFocus && !this.sheet) try { this.onPageFocus(p && p.tgt ? p.tgt.key : null); } catch (e) { this.log.error('page focus', e); }
+        if (this.onPageFocus && !this.sheet) try { this.onPageFocus(p && p.tgt ? p.tgt.key : null, this.pointing ? 'pointer' : undefined); } catch (e) { this.log.error('page focus', e); }
     }
 
     /**
@@ -891,6 +941,13 @@ class Display {
         } else {
             c.clip(sx, 0, W - sx, HMI.status.h).clear(0).noclip();
             if (hx > 0) c.clip(0, 0, hx, HMI.colEnd - pl.y).clear(0).noclip();
+        }
+        // the touchpad's pointer: a white dot in a soft halo
+        if (this.ptrShown()) {
+            const p = this.ptr;
+            c.circle(p.x, p.y, 22, G.withAlpha('#ffffff', 0.18));
+            c.circle(p.x, p.y, 11, G.withAlpha('#000000', 0.45));
+            c.circle(p.x, p.y, 8, '#ffffff');
         }
         drawCredit(c, W - 18, fill ? 17 : FULL.headH + 17);
         r.xf(1, 0, 0).append(c).xf();

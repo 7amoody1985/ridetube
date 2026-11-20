@@ -337,6 +337,7 @@ async function appFrames() {
         on: async (p, name, fn) => { car.ev[name] = fn; },
     };
     hu.ctx.scroll = (dy) => disp.scrollPage(dy);
+    hu.ctx.pointer = { move: (dx, dy) => disp.pointerMove(dx, dy), tap: () => disp.pointerTap() };
     // the strings each frame draws (the recorder keeps only glyphs)
     const RecP = require(path.join(hu.kitDir, 'record')).Recorder.prototype;
     const strs = car.drawn = []; const rText = RecP.text;
@@ -1851,7 +1852,33 @@ async function wp12Frames(x) {
       assert.ok(t3().y > yB + 50, 'two fingers down: they came back down (' + yB + ' -> ' + t3().y + ')');
       const yC = t3().y;
       await stroke(200, 203, true);
-      assert.strictEqual(t3().y, yC, 'a resting hand (3 units): no scroll'); }
+      assert.strictEqual(t3().y, yC, 'a resting hand (3 units): no scroll');
+      // one finger, slowly: the pointer moves, what is under it gets the controller, the page stays put;
+      // a short tap on the pad plays the tile it is on; a turn of the knob hides it
+      const one = async (x, y) => { car.padH({ statusSystemModeFrontSide: 3, touchCoordinatesX1FrontSide: x, touchCoordinatesY1FrontSide: y, touchCoordinatesZ1FrontSide: 0 }); await sleep(20); };
+      const visible = (q) => { const r = disp._rectOf(q); return r && /^tgt:h:\d+:[A-Za-z0-9_-]{11}$/.test(q.k) && r.x >= disp.place.touchX * 1.2 && r.x + r.w * 2.2 < disp.place.w && r.y >= 100 && r.y + r.h < disp.place.h; };
+      const from = disp._ring().find(visible);
+      assert.ok(from, 'a whole tile on screen with one to its right');
+      disp.ptr = null; disp._focus(from); await settle(); await sleep(100); await settle();   // (the one-finger stroke above left it showing)
+      await one(200, 200); await sleep(250);
+      for (let k = 1; k <= 10; k++) await one(200 + k * 10, 200);   // right, 0.5 pad unit/ms: about one tile
+      lift(); await settle(); await sleep(80); await settle();
+      assert.ok(disp.ptrShown(), 'one finger: the pointer shows');
+      const fk = disp.focusKey, pr = disp.ptr, at = disp._ring().find((q) => q.k === fk), ar = at && disp._rectOf(at);
+      assert.ok(ar && pr.x >= ar.x && pr.x < ar.x + ar.w && pr.y >= ar.y && pr.y < ar.y + ar.h, 'the controller is on what the pointer is on: ' + fk + ' ' + JSON.stringify(pr));
+      assert.ok(fk !== from.k && fk.split(':')[2] === from.k.split(':')[2], 'moved right along the row: ' + from.k + ' -> ' + fk);
+      assert.strictEqual(t3().y, yC, 'the pointer moved: the page did not');
+      const tile = /^tgt:[a-z]+:\d+:([A-Za-z0-9_-]{11})$/.exec(fk || '');
+      assert.ok(tile, 'the pointer landed on a video: ' + fk);
+      const nPlay = d.cmds('play').length;
+      await one(300, 300); lift();
+      await until(() => d.cmds('play').length > nPlay, 2000, 'a tap on the pad plays the video under the pointer');
+      assert.strictEqual(d.cmds('play').slice(-1)[0].id, tile[1], 'the one under the pointer');
+      hu.handlers.BTN_HOME && hu.handlers.BTN_HOME(); await settle();
+      await one(200, 200); await sleep(250); for (let k = 1; k <= 5; k++) await one(200 + k * 4, 200); lift(); await settle();
+      assert.ok(disp.ptrShown(), 'the pointer back');
+      await turn(1);
+      assert.ok(!disp.ptrShown(), 'a turn of the knob: the pointer goes'); }
     // the volume (the audio manager's events): a pill with the level and up / down, 2 s
     { await until(() => car.ev.volumeChanged, 2000, 'volumeChanged subscribed');
       const pill = () => { car.drawn.length = 0; return settle().then(() => sleep(300)).then(settle).then(() => car.drawn.slice()); };

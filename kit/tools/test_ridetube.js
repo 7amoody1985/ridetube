@@ -313,6 +313,22 @@ function scan(s) {
 async function appFrames() {
     const stage = path.join(__dirname, '..', '..', 'dist', 'jap_ridetube');
     if (!fs.existsSync(path.join(stage, 'source', 'javascript', 'app.js'))) { console.log('skip app frames (python3 kit/tools/build.py jap_ridetube first)'); return; }
+    // What's new (news.js): after an update to a new series, never at a first install, once; every note in every catalog
+    { const news = require('../../apps/jap_ridetube/news');
+      assert.deepStrictEqual(news.due(undefined, false, '0.5.0'), { show: null, seen: '0.5' }, 'first install: nothing new');
+      assert.deepStrictEqual(news.due(undefined, true, '0.5.0'), { show: '0.5', seen: '0.5' }, 'an update from before (saved settings): the notes');
+      assert.deepStrictEqual(news.due('0.4', true, '0.5.2'), { show: '0.5', seen: '0.5' }, '0.4 -> 0.5: the notes');
+      assert.deepStrictEqual(news.due('0.5', true, '0.5.3'), { show: null, seen: '0.5' }, 'within 0.5: once only');
+      assert.deepStrictEqual(news.due('0.5', true, '0.6.0'), { show: null, seen: '0.6' }, 'a series without notes: nothing');
+      const appV = require('../../apps/jap_ridetube/app.json').version;
+      assert.ok(news.NOTES[news.series(appV)], 'this release (' + appV + ') has notes');
+      const keys = [news.TITLE].concat(...Object.values(news.NOTES));
+      fs.readdirSync(path.join(__dirname, '..', 'runtime', 'locales')).forEach((f) => {
+        const cat = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', f), 'utf8'));
+        keys.forEach((k) => assert.ok(cat[k], f + ': ' + k));
+        assert.ok(cat[news.TITLE].indexOf('{version}') >= 0, f + ': the title keeps {version}');
+      });
+      console.log('ok   What\'s new: due rules, notes in every catalog'); }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-app-'));
     const sock = path.join(dir, 'ctl.sock'), file = path.join(dir, 'stream.bin');
     const d = await fakeDaemon(sock);
@@ -1882,6 +1898,9 @@ async function wp12Frames(x) {
       assert.strictEqual(t3().y, yC, 'the pointer moved: the page did not');
       const tile = /^tgt:[a-z]+:\d+:([A-Za-z0-9_-]{11})$/.exec(fk || '');
       assert.ok(tile, 'the pointer landed on a video: ' + fk);
+      { const RP = require(path.join(hu.kitDir, 'record')).Recorder.prototype, seen = [], os = RP.strokeRoundRect; RP.strokeRoundRect = function (x, y, w, h, r, lw, c) { seen.push([w, lw, c]); return os.apply(this, arguments); };
+        disp._focus(null); await settle(); disp._focus(at); await sleep(300); await settle(); RP.strokeRoundRect = os;
+        assert.ok(seen.some(([w, lw, c]) => c === '#ffffff' && lw === 4 && w > 300), 'the selected tile: a white frame'); }
       const nPlay = d.cmds('play').length;
       await one(300, 300); lift();
       await until(() => d.cmds('play').length > nPlay, 2000, 'a tap on the pad plays the video under the pointer');

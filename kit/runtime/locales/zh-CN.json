@@ -249,5 +249,13 @@
   "To switch it, press Phone remote in the menu again": "如需开启或关闭，请在菜单中再次按“手机遥控”",
   "For the full width, install Full-width touch from the MGU Store": "如需全宽显示，请从 MGU Store 安装 Full-width touch",
   "Taps reach the screen's left edge": "触摸可到达屏幕左边缘",
-  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "自动更新 yt-dlp：每天检查最新版本（关闭：使用本 RideTube 服务自带的版本）"
+  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "自动更新 yt-dlp：每天检查最新版本（关闭：使用本 RideTube 服务自带的版本）",
+  "What's new in RideTube {version}": "RideTube {version} 新功能",
+  "Playlists and Watch later show all their videos, not just the first 15": "播放列表和稍后观看会显示全部视频，不再只有前 15 个",
+  "Hold -10 s or +10 s and it turns into previous or next video": "按住 -10 秒或 +10 秒，按钮会变成上一个或下一个视频",
+  "Two fingers on the controller's touchpad scroll the page, as on a phone": "在控制器触控板上用两指滑动页面，就像在手机上一样",
+  "One finger on the touchpad moves a pointer: tap, or press the knob, to play the video under it": "在触控板上用一指移动指针：轻点或按下旋钮即可播放指针下的视频",
+  "Turning the volume shows the level, and whether it goes up or down": "调节音量时会显示音量大小以及升高还是降低",
+  "The knob goes straight from video to video": "旋钮直接在视频之间切换",
+  "With Video while driving agreed to, you can type a search while driving": "同意行驶中播放视频后，行驶中也可以输入搜索"
 }

@@ -351,7 +351,7 @@ function rideTubeStrings() {
     ['Settings', 'Done', 'Back', 'Version'].forEach(add);
     return [...out];
 }
-const RT_SOURCES = ['apps/jap_ridetube/main.js', 'apps/jap_ridetube/health.js', 'apps/jap_ridetube/search.js', 'apps/jap_ridetube/remote.js', 'apps/jap_ridetube/yt.js', 'apps/jap_ridetube/app.json', 'kit/runtime/sheet.js']
+const RT_SOURCES = ['apps/jap_ridetube/main.js', 'apps/jap_ridetube/health.js', 'apps/jap_ridetube/search.js', 'apps/jap_ridetube/remote.js', 'apps/jap_ridetube/yt.js', 'apps/jap_ridetube/news.js', 'apps/jap_ridetube/app.json', 'kit/runtime/sheet.js']
     .map((f) => fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8')).join('\n').replace(/\\(['"])/g, '$1');
 const RU = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'runtime', 'locales', 'ru.json'), 'utf8'));
 const BRAND = /^(RideTube|720p)$/;   // names, no row

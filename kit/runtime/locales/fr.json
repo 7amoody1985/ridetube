@@ -217,5 +217,13 @@
   "To switch it, press Phone remote in the menu again": "Pour l'activer ou la désactiver, appuyez à nouveau sur Télécommande par téléphone dans le menu",
   "For the full width, install Full-width touch from the MGU Store": "Pour la pleine largeur, installez Full-width touch depuis le MGU Store",
   "Taps reach the screen's left edge": "Les touches atteignent le bord gauche de l'écran",
-  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "Mettre à jour yt-dlp tout seul : la dernière version, cherchée chaque jour (désactivé : celle du service RideTube)"
+  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "Mettre à jour yt-dlp tout seul : la dernière version, cherchée chaque jour (désactivé : celle du service RideTube)",
+  "What's new in RideTube {version}": "Nouveautés de RideTube {version}",
+  "Playlists and Watch later show all their videos, not just the first 15": "Les playlists et À regarder plus tard montrent toutes leurs vidéos, pas seulement les 15 premières",
+  "Hold -10 s or +10 s and it turns into previous or next video": "Maintenez -10 s ou +10 s : le bouton devient vidéo précédente ou suivante",
+  "Two fingers on the controller's touchpad scroll the page, as on a phone": "Deux doigts sur le pavé tactile du contrôleur font défiler la page, comme sur un téléphone",
+  "One finger on the touchpad moves a pointer: tap, or press the knob, to play the video under it": "Un doigt sur le pavé tactile déplace un pointeur : touchez, ou appuyez sur la molette, pour lire la vidéo dessous",
+  "Turning the volume shows the level, and whether it goes up or down": "Tourner le volume affiche le niveau, et s'il monte ou descend",
+  "The knob goes straight from video to video": "La molette passe directement de vidéo en vidéo",
+  "With Video while driving agreed to, you can type a search while driving": "Avec Vidéo en roulant acceptée, la recherche au clavier marche aussi en roulant"
 }

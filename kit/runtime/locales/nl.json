@@ -217,5 +217,13 @@
   "To switch it, press Phone remote in the menu again": "Druk nogmaals op Telefoon als afstandsbediening in het menu om het aan of uit te zetten",
   "For the full width, install Full-width touch from the MGU Store": "Installeer Full-width touch uit de MGU Store voor de volledige breedte",
   "Taps reach the screen's left edge": "Tikken bereiken de linkerrand van het scherm",
-  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "yt-dlp zelf bijwerken: de nieuwste versie, dagelijks gezocht (uit: die in de RideTube-dienst)"
+  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "yt-dlp zelf bijwerken: de nieuwste versie, dagelijks gezocht (uit: die in de RideTube-dienst)",
+  "What's new in RideTube {version}": "Nieuw in RideTube {version}",
+  "Playlists and Watch later show all their videos, not just the first 15": "Playlists en Later bekijken tonen al hun video's, niet alleen de eerste 15",
+  "Hold -10 s or +10 s and it turns into previous or next video": "Houd -10 s of +10 s vast: hij wordt vorige of volgende video",
+  "Two fingers on the controller's touchpad scroll the page, as on a phone": "Twee vingers op het touchpad van de controller scrollen de pagina, zoals op een telefoon",
+  "One finger on the touchpad moves a pointer: tap, or press the knob, to play the video under it": "Eén vinger op het touchpad beweegt een aanwijzer: tik, of druk de knop in, voor de video eronder",
+  "Turning the volume shows the level, and whether it goes up or down": "Aan het volume draaien toont het niveau, en of het hoger of lager gaat",
+  "The knob goes straight from video to video": "De draaiknop gaat direct van video naar video",
+  "With Video while driving agreed to, you can type a search while driving": "Met Video tijdens het rijden geaccepteerd kun je ook rijdend een zoekopdracht typen"
 }

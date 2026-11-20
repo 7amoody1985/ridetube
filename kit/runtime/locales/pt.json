@@ -217,5 +217,13 @@
   "To switch it, press Phone remote in the menu again": "Para ligar ou desligar, toque de novo em Telefone como comando no menu",
   "For the full width, install Full-width touch from the MGU Store": "Para a largura total, instale o Full-width touch a partir da MGU Store",
   "Taps reach the screen's left edge": "Os toques chegam à borda esquerda do ecrã",
-  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "Atualizar o yt-dlp sozinho: a versão mais recente, procurada todos os dias (desligado: a do serviço RideTube)"
+  "Update yt-dlp by itself: the newest release, looked for daily (off: the one in this RideTube service)": "Atualizar o yt-dlp sozinho: a versão mais recente, procurada todos os dias (desligado: a do serviço RideTube)",
+  "What's new in RideTube {version}": "Novidades do RideTube {version}",
+  "Playlists and Watch later show all their videos, not just the first 15": "As playlists e Ver mais tarde mostram todos os vídeos, não só os 15 primeiros",
+  "Hold -10 s or +10 s and it turns into previous or next video": "Mantenha -10 s ou +10 s e vira vídeo anterior ou seguinte",
+  "Two fingers on the controller's touchpad scroll the page, as on a phone": "Dois dedos no touchpad do controlador rolam a página, como num telemóvel",
+  "One finger on the touchpad moves a pointer: tap, or press the knob, to play the video under it": "Um dedo no touchpad move um ponteiro: toque, ou prima o botão, para ver o vídeo por baixo",
+  "Turning the volume shows the level, and whether it goes up or down": "Rodar o volume mostra o nível e se sobe ou desce",
+  "The knob goes straight from video to video": "O botão passa diretamente de vídeo em vídeo",
+  "With Video while driving agreed to, you can type a search while driving": "Com Vídeo em movimento aceite, pode escrever uma pesquisa em andamento"
 }

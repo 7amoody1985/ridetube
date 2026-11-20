@@ -117,6 +117,10 @@ process.on('uncaughtException', (e) => { try { mgu.log.error('uncaught', e); } c
 mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
+        // What's new (news.js): read before anything is saved, so a first install is told from an update
+        const news = require('./news'), newsAt = news.due(settings.get('seen_series'), fs.existsSync(settings.file), APP_VERSION);
+        let newsDue = newsAt.show, newsFrom = 'home';
+        if (settings.get('seen_series') !== newsAt.seen) settings.set('seen_series', newsAt.seen);
         // the Language setting: a catalog the package has, else Auto: the car's HMI language when there is a catalog
         // for it (ru_RU, zh_CN, fr_FR, nl_NL...), else the package's own (English; a zh-CN build's Chinese)
         const pickLanguage = () => {
@@ -168,7 +172,7 @@ mgu.run({
             if (m === 'risk') riskAsk = true;
             if (m !== mode) { dirty = true; if (laid.mode === mode && laid.where[focusKey]) backKey[mode] = focusKey; }   // (a tile of this page)
             mode = m;
-            if (m !== 'player' && m !== 'logs' && m !== 'clock' && m !== 'risk') browse = m; else if (m === 'player') wake();
+            if (m !== 'player' && m !== 'logs' && m !== 'clock' && m !== 'risk' && m !== 'news') browse = m; else if (m === 'player') wake();
             openFeed(); sync(); labels();
         }
         function goBack(m) {
@@ -706,6 +710,7 @@ mgu.run({
             if (mode === 'logs') { if (!model.logs || model.logs.state !== 'sending') { model.dropLogs(); goBack(logsFrom); } return true; }   // (sending: stays for the code)
             if (mode === 'risk') { goBack(riskFrom); return true; }
             if (mode === 'clock') { goBack(clockFrom); return true; }
+            if (mode === 'news') { goBack(newsFrom); return true; }
             return false;
         });
 
@@ -843,10 +848,12 @@ mgu.run({
             });
         }
 
+        // the tile the controller or the touchpad's pointer is on: a lighter card in a white frame, seen at a glance
+        const focusCard = (cv, x, y) => { cv.roundRect(x - 10, y - 10, TW + 20, TILE_H + 16, 18, '#333333'); cv.strokeRoundRect(x - 10, y - 10, TW + 20, TILE_H + 16, 18, 4, '#ffffff'); };
         /* a tile: the 16:9 thumb, its length, two lines of title, the channel and the tile's meta (views, age) */
         function drawTile(cv, r, x, y, key) {
             const cur = r.id === model.id && model.active();
-            if (key === focusKey) cv.roundRect(x - 10, y - 10, TW + 20, TILE_H + 16, 18, C.card);
+            if (key === focusKey) focusCard(cv, x, y);
             const th = model.thumbs[r.id];
             if (!th) model.wantThumb(r.id);
             const pid = th && cv.place ? slot(r.id, th) : null;
@@ -884,7 +891,7 @@ mgu.run({
 
         /* a playlist: its first video's picture (two edges behind it: a stack), the video count, its name, its meta */
         function drawPlTile(cv, r, x, y, key) {
-            if (key === focusKey) cv.roundRect(x - 10, y - 10, TW + 20, TILE_H + 16, 18, C.card);
+            if (key === focusKey) focusCard(cv, x, y);
             cv.roundRect(x + 28, y - 8, TW - 56, 12, 6, '#ffffff26');
             cv.roundRect(x + 14, y - 4, TW - 28, 12, 6, '#ffffff4d');
             const th = r.thumb ? model.thumbs[r.thumb] : null;
@@ -906,7 +913,7 @@ mgu.run({
         /* a channel: a round mark with its initial, its name, its @handle; or an action (r.act: Search channels, All) */
         const HUES = ['#c62828', '#ad1457', '#6a1b9a', '#283593', '#1565c0', '#00838f', '#2e7d32', '#9e9d24', '#ef6c00', '#4e342e'];
         function drawChan(cv, r, x, y, key) {
-            if (key === focusKey) cv.roundRect(x - 10, y - 10, TW + 20, TILE_H + 16, 18, C.card);
+            if (key === focusKey) focusCard(cv, x, y);
             const cx = x + TW / 2, cy = y + TH / 2, name = String(r.title || r.id);
             let h = 0;
             for (const ch of r.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -1226,6 +1233,24 @@ mgu.run({
             cv.roundRect(MID - w / 2, y, w, h, 38, f ? '#ffffff' : C.red);
             cv.text(whole('OK'), MID, y + 49, 30, f ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
             cv.target(MID - w / 2, y, w, h, () => { goBack(clockFrom); dirty = true; }, 'clock:ok', 38);
+            return undefined;
+        }
+        // What's new after an update (news.js): the series' notes, one a line, and OK back to where it was
+        function drawNews(cv) {
+            newsDue = null;                              // (shown: once)
+            const v = news.series(APP_VERSION), notes = news.NOTES[v] || [];
+            cv.text(whole(news.TITLE, { version: v }), MID, 96, 36, C.amber, { literal: true, font: 'bold', align: 'center' });
+            const L = MID - 600;
+            notes.slice(0, 7).forEach((k, i) => {
+                const y = 150 + i * 40;
+                cv.circle(L, y - 9, 6, C.red);
+                cv.text(fit(cv, whole(k), 26, 1180, LIT), L + 22, y, 26, '#ffffff', LIT);
+            });
+            if (!cv.own) return cv.text(whole('Pick any page to go on'), MID, 460, 24, C.dim, { literal: true, align: 'center' });
+            const w = 300, h = 76, y = 430, f = focusKey === 'news:ok';
+            cv.roundRect(MID - w / 2, y, w, h, 38, f ? '#ffffff' : C.red);
+            cv.text(whole('OK'), MID, y + 49, 30, f ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
+            cv.target(MID - w / 2, y, w, h, () => { goBack(newsFrom); dirty = true; }, 'news:ok', 38);
             return undefined;
         }
         // the Video while driving disclaimer: I agree turns the setting on for real, Cancel (or any other page) turns it off
@@ -1578,6 +1603,7 @@ mgu.run({
             // the wrong-clock warning, the first time a page (not the player or the logs) is drawn this app session
             if (model.clock && !clockSeen && mode !== 'clock' && mode !== 'player' && mode !== 'logs' && mode !== 'risk') { clockFrom = mode; show('clock'); }
             else if (mode === 'clock' && !model.clock) goBack(clockFrom);   // set right meanwhile
+            else if (newsDue && mode !== 'clock' && mode !== 'player' && mode !== 'logs' && mode !== 'risk') { newsFrom = mode; show('news'); }
             // redraw on a change (and 4 times a second); unchanged, the same frame again keeps the layer alive (>= 1 message/s)
             if (!last || dirty || model.rev !== lastRev || now - lastT > 250) {
                 dirty = false; lastRev = model.rev; lastT = now;
@@ -1588,7 +1614,7 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv);
-                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (mode === 'risk') drawRisk(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    else if (mode === 'pl') drawPlaylists(cv); else if (mode === 'list') drawPlaylist(cv); else if (mode === 'logs') drawLogs(cv); else if (mode === 'clock') drawClock(cv); else if (mode === 'risk') drawRisk(cv); else if (mode === 'news') drawNews(cv); else if (PAGES[mode]) PAGES[mode](cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     if (browsing() && note && now < note.until) {
                         const nt = note.text, nw = cv.textWidth(nt, 26, LIT) + 60, ny = H + (cv.own ? cv.extra : 0) - 96;
                         cv.roundRect(MID - nw / 2, ny, nw, 64, 32, '#4a3a10');

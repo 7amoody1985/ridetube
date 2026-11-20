@@ -1,7 +1,14 @@
 # Changelog
 
-## Service 0.4.3 and app 0.4.9
+## RideTube 0.5: app 0.5.0 and service 0.4.3
 
+The first big update since 0.4. After the update, RideTube opens once on a "What's new" page with the list below
+in short.
+
+- What's new: the first time RideTube opens after an update to a new series (0.4 to 0.5, say), a page lists the
+  new features, in the app's language, with OK to go on. A first install does not show it, and neither does a
+  small update within the series.
+- The selected video (by the knob or the touchpad's pointer) is easier to see: a lighter card in a white frame.
 - Playlists show all their videos (#17). YouTube's TV answer holds 15 videos a page, and the service only read the
   first one. It now reads the next pages too, up to 1000 videos, for playlists and Watch later. The first 15 show
   at once while the rest load. If a later page fails, the videos already read still show.

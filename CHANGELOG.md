@@ -1,6 +1,6 @@
 # Changelog
 
-## Service 0.4.3 and app 0.4.6
+## Service 0.4.3 and app 0.4.7
 
 - Playlists show all their videos (#17). YouTube's TV answer holds 15 videos a page, and the service only read the
   first one. It now reads the next pages too, up to 1000 videos, for playlists and Watch later. The first 15 show
@@ -9,6 +9,10 @@
   seeks 10 s. Held for over half a second, the button turns into previous or next, and letting go takes it. This
   works with a finger and with the controller's press. Next plays the next video in the list, then what YouTube
   plays after it. Previous goes back to the start, or to the video before when used in the first 3 seconds.
+- Two fingers on the controller's touchpad scroll the page, as on an iPhone: fingers up, the videos go up. RideTube
+  turns the touchpad's touch mode on while it shows and off again when it hides, as the HMI's speller does.
+- A volume display: turning the volume knob (or the wheel's buttons, or muting) shows the level as a bar and a
+  number, with an arrow up or down, for 2 seconds. The car's own volume pop-up is hidden behind the video.
 - The controller knob goes straight from tile to tile. Before, its first turn put a red frame round the whole page
   and scrolled it to the end before reaching any tile. A finger still drags the page.
 - Where the car's own menu bar runs the screen (not the kit), its buttons are still -10 s and +10 s.

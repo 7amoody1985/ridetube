@@ -71,6 +71,7 @@ function count(n, one, other, tr) {
 const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
 const Parked = require('./kit/parked');
+const { TwoFingerScroll, TouchMode, MODE: PAD_MODE } = require('./kit/touchpad');
 const { Ctl, Model, clock, SOCKET, FEEDS, SHELF_MAX } = require('./yt');
 const { spell } = require('./speller');
 
@@ -85,6 +86,9 @@ let TW = 320, TH = 180, PITCH = 348;                     // tiles: 16:9 thumbs, 
 const PER_ROW = 4;
 let TILE_H = TH + 98;
 const HEAD_H = 50, SHELF_GAP = 30, GRID_GAP = 22;   // a tile with its text; a shelf's title row
+const VOL_MS = 2000;                                     // the volume pill shows this long after a change
+// shortcut: the car's top volume is not known yet (the first ones are logged); the bar grows past it - set it when measured
+const VOL_MAX = 40;
 const OVERLAY_MS = 4000;                                 // the player's controls hide this long after a tap (playing)
 const SEARCH_MS = 8000;                                  // a search with no answer by then is an error on screen
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'];
@@ -567,6 +571,78 @@ mgu.run({
         }
         Promise.resolve(ctx.signals.watch('de.bmw.infotainment.controlelements.SteeringWheelPushButton', '1', { statusSearchSwitch1: steer }, log))
             .catch((e) => log.warn('steering wheel: ' + e));
+
+        /* ---------- the controller's touchpad: two fingers scroll the page, as on an iPhone (kit/touchpad.js) ---------- */
+        // the pad sends fingers only in touch mode: on while our page shows where the kit runs the screen, off after
+        const padWanted = () => ui.isVisible('VIEW') && (!ui.hasFocus || ui.hasFocus('VIEW')) && !!(last && last.own);   // (last: the frame drawn last)
+        const pad = new TwoFingerScroll((dy) => { if (ctx.scroll && ctx.scroll(dy)) dirty = true; });
+        const touchMode = ctx.signals.proxy && ctx.signals.set ? new TouchMode(ctx.signals, log) : null;
+        Promise.resolve(ctx.signals.watch('de.bmw.infotainment.ControllerElements', '1', {
+            ZBETouchFrontSide: (v) => {
+                if (!padWanted()) { pad.reset(); return; }
+                if (v && v.statusSystemModeFrontSide !== PAD_MODE && touchMode) touchMode.lost();
+                pad.feed(v);
+            },
+        }, log)).catch((e) => log.warn('touchpad: ' + e));
+        if (touchMode) {
+            setInterval(() => { try { touchMode.want(padWanted()); } catch (e) { log.error('touch mode', e); } }, 500);
+            if (ctx.app && ctx.app.on) ctx.app.on('shutdown', () => touchMode.want(false));
+        }
+
+        /* ---------- the volume: the car's audio manager tells each change; a pill over the page shows it 2 s ---------- */
+        // vol: {v, dir (+1 up, -1 down, 0), muted, until}; sinkVol: the last volume of each sink (its first change has a direction too)
+        let vol = null, volMax = VOL_MAX, volLogs = 0;
+        const sinkVol = {}, sinkMute = {};
+        function volShow(sink, v, muted) {
+            const was = sinkVol[sink];
+            if (typeof v === 'number') { sinkVol[sink] = v; volMax = Math.max(volMax, v); }
+            const cur = sinkVol[sink];
+            if (typeof cur !== 'number') return;
+            if (volLogs < 20) { volLogs++; log.info('volume: sink ' + sink + ' ' + cur + (muted ? ' muted' : '') + ' (was ' + was + ')'); }
+            vol = { v: cur, dir: typeof v === 'number' && typeof was === 'number' ? Math.sign(v - was) : 0, muted: !!muted, until: Date.now() + VOL_MS };
+            dirty = true;
+        }
+        Promise.resolve().then(() => ctx.signals.proxy('org.genivi.am.commandinterface.CommandControl', '1')).then((p) => {
+            ctx.signals.call(p, 'getListMainSinks', {}).then((r) => {
+                const l = (r && r.listMainSinks) || [];
+                log.info('volume: sinks ' + l.map((k) => k.sinkID + ' ' + JSON.stringify(k.name) + ' ' + k.volume + ' ' + k.muteState).join(', '));
+                l.forEach((k) => { if (typeof k.volume === 'number') sinkVol[k.sinkID] = k.volume; });
+            }, (e) => log.warn('volume: sinks ' + e));
+            ctx.signals.on(p, 'volumeChanged', (m) => { if (m) volShow(m.sinkID, m.volume, sinkMute[m.sinkID]); }, log);
+            ctx.signals.on(p, 'sinkMuteStateChanged', (m) => {
+                if (!m) return;
+                sinkMute[m.sinkID] = m.muteState === 'MS_MUTED' || m.muteState === 1;
+                volShow(m.sinkID, undefined, sinkMute[m.sinkID]);
+            }, log);
+        }).catch((e) => log.warn('volume: ' + e));
+        // the pill: a speaker, the level as a bar and a number, an arrow up or down; top middle of the screen
+        function drawVolume(cv) {
+            if (!vol || Date.now() > vol.until) return;
+            const full = !!(cv.own && cv.place && cv.place.full && mode === 'player');
+            if (full) cv.xf(1, 0, 0); else cv.xf();
+            const ww = full ? cv.place.w : W, w = 460, h = 84, x = ww / 2 - w / 2, y = full ? 28 : 14, my = y + h / 2;
+            cv.roundRect(x, y, w, h, h / 2, '#1f1f1ff2');
+            const sx = x + 50;
+            cv.fillRect(sx - 18, my - 9, 11, 18, '#ffffff');
+            cv.quad([[sx - 8, my - 9], [sx + 7, my - 22], [sx + 7, my + 22], [sx - 8, my + 9]], '#ffffff');
+            if (vol.muted) {
+                cv.polyline([[sx + 16, my - 10], [sx + 34, my + 10]], 4, C.red);
+                cv.polyline([[sx + 34, my - 10], [sx + 16, my + 10]], 4, C.red);
+            } else {
+                cv.arc(sx + 8, my, 14, 18, 40, 140, '#ffffff');
+                if (vol.v > volMax / 2) cv.arc(sx + 8, my, 24, 28, 40, 140, '#ffffff');
+            }
+            const bx = x + 110, bw = 230, k = vol.muted ? 0 : Math.max(0, Math.min(1, vol.v / volMax));
+            cv.roundRect(bx, my - 6, bw, 12, 6, '#ffffff38');
+            if (k > 0) cv.roundRect(bx, my - 6, Math.max(12, bw * k), 12, 6, C.red);
+            const nx = x + w - 70;
+            cv.text(vol.muted ? '-' : String(vol.v), nx, my + 12, 34, '#ffffff', { literal: true, font: 'bold', align: 'center' });
+            if (vol.dir) {
+                const ax = x + w - 28, d = vol.dir > 0 ? -1 : 1;   // up: the point at the top
+                cv.quad([[ax - 11, my - 7 * d], [ax + 11, my - 7 * d], [ax, my + 10 * d], [ax - 11, my - 7 * d]], vol.dir > 0 ? '#7ddc8a' : '#ffb35c');
+            }
+            cv.xf();
+        }
 
         /* ---------- the 12 V battery while parked: a warning 5 points above the setting's level, paused below it ---------- */
         let soc = null, socWarned = false;
@@ -1518,6 +1594,7 @@ mgu.run({
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }
+                drawVolume(cv);
                 last = cv;
                 keepFocus(cv);
             }

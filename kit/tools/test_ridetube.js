@@ -322,11 +322,25 @@ async function appFrames() {
     const { headUnit } = require('./hu-stub');
     const hu = headUnit(stage, { dataDir: dir, fresh: true, image: () => Promise.resolve(), log: quiet });
     const disp = hu.display;
+    { const pres = disp.present.bind(disp); disp.present = (n, cv, si) => { hu.lastCv = cv; return pres(n, cv, si); }; }
     // parked: the car reads 0 km/h (the video gate counts no speed as moving)
     let speedH = null;
     let batH = null;
     let rockerH = null, rockerIface = null;
-    hu.ctx.signals = { watch: async (i, n, h) => { if (h && h.statusCarSpeed2) { speedH = h.statusCarSpeed2; speedH({ speedVehicleCentreOfGravity: 0 }); } if (h && h.statusBattery2) batH = h.statusBattery2; if (h && h.statusSearchSwitch1) { rockerH = h.statusSearchSwitch1; rockerIface = i + '/' + n; } return {}; } };
+    // the controller's touchpad and touch mode (FrontCCU set), the audio manager's sinks and volume events (CommandControl)
+    const car = { padH: null, sets: [], ev: {}, sinks: [{ sinkID: 1, name: 'Main', volume: 12, muteState: 'MS_UNMUTED' }] };
+    hu.ctx.signals = {
+        watch: async (i, n, h) => { if (h && h.statusCarSpeed2) { speedH = h.statusCarSpeed2; speedH({ speedVehicleCentreOfGravity: 0 }); } if (h && h.statusBattery2) batH = h.statusBattery2; if (h && h.statusSearchSwitch1) { rockerH = h.statusSearchSwitch1; rockerIface = i + '/' + n; } if (h && h.ZBETouchFrontSide) car.padH = h.ZBETouchFrontSide; return {}; },
+        proxy: async (i) => ({ i }),
+        set: async (p, f, v) => { car.sets.push(p.i + '.' + f + '=' + v.controlTouchActiveFrontSide); },
+        call: async (p, m) => (m === 'getListMainSinks' ? { listMainSinks: car.sinks, amError: 'E_OK' } : Promise.reject(new Error('no ' + m))),
+        on: async (p, name, fn) => { car.ev[name] = fn; },
+    };
+    hu.ctx.scroll = (dy) => disp.scrollPage(dy);
+    // the strings each frame draws (the recorder keeps only glyphs)
+    const RecP = require(path.join(hu.kitDir, 'record')).Recorder.prototype;
+    const strs = car.drawn = []; const rText = RecP.text;
+    RecP.text = function (str) { strs.push(String(str)); if (strs.length > 4000) strs.splice(0, 2000); return rText.apply(this, arguments); };
     // (the stub's ctx predates these: as kit/mgu.js)
     hu.ctx.hideButton = (id, hide) => disp.hideButton(id, hide);
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
@@ -1040,7 +1054,7 @@ async function appFrames() {
     if (own) { disp.gpu.touch = false; disp._place(); await hu.loopFn(); await wp9Hmi({ d, hu, disp }); disp.gpu.touch = true; disp._place(); await hu.loopFn(); }
     if (own) await wp7Frames({ hu, d, disp, drawn, texts, file, hmiLang, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     if (own) await wp10Frames({ hu, d, disp, drawn, texts, wp5, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
-    if (own) await wp12Frames({ hu, d, disp, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
+    if (own) await wp12Frames({ hu, d, disp, car, speed: (v) => speedH({ speedVehicleCentreOfGravity: v }) });
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
 }
@@ -1768,7 +1782,7 @@ async function wp10Frames(x) {
 // the controller never left on a key the page after a change lacks, pushed left goes back from the player and the
 // question pages (logs, clock warning, Video while driving)
 async function wp12Frames(x) {
-    const { hu, d, disp, speed } = x;
+    const { hu, d, disp, speed, car } = x;
     let K = 5000;
     const ccu = (o) => disp._ccu(Object.assign({ frontRotaryEncoderOperation: K, frontRotaryEncoderPushButton: 0, frontRotaryEncoderDeflection: 0 }, o));
     const settle = async () => { await hu.loopFn(); await sleep(5); await hu.loopFn(); };
@@ -1817,7 +1831,48 @@ async function wp12Frames(x) {
     // a finger still drags the page (the sweep left it at its bottom): dragged down, a tile of the third row moves down
     { const t3 = () => disp.pageTargets.find((t) => /^h:2:/.test(t.key)), y0 = t3().y, pl = disp.place, X = pl.ox + pl.w * 0.6, Y = pl.oy + pl.h * 0.3;
       disp._touch(1, X, Y); disp._touch(2, X, Y + 80); disp._touch(2, X, Y + 200); disp._touch(3, X, Y + 200); await settle(); await sleep(300); await settle();
-      assert.ok(t3().y > y0 + 50, 'dragged down: the page moved (' + y0 + ' -> ' + t3().y + ')'); }
+      assert.ok(t3().y > y0 + 50, 'dragged down: the page moved (' + y0 + ' -> ' + t3().y + ')');
+      // the controller's touchpad: touch mode on while the page shows; two fingers up = the page goes up with them
+      // (natural, as on an iPhone), down = it comes back; one finger or a lifted hand (Z1 = 2): nothing
+      await until(() => car.sets.indexOf('de.bmw.infotainment.controlelements.FrontCCU.ccsControlTouchCCU=TOUCH_AKTIV') >= 0, 2000, 'touch mode on while RideTube shows');
+      assert.ok(car.padH, 'the touchpad watched');
+      const pad = (y1, y2, z) => car.padH({ statusSystemModeFrontSide: 3, touchCoordinatesX1FrontSide: 200, touchCoordinatesY1FrontSide: y1, touchCcoordinatesX2FrontSide: y2 ? 280 : 0, touchCoordinatesY2FrontSide: y2 || 0, touchCoordinatesZ1FrontSide: z || 0 });
+      const lift = () => car.padH({ statusSystemModeFrontSide: 3 });
+      const stroke = async (a, b, two, z) => { for (let k = 0; k <= 10; k++) { const y = a + (b - a) * k / 10; pad(y, two ? y + 4 : 0, z); } lift(); await settle(); await sleep(300); await settle(); };
+      const yA = t3().y;
+      await stroke(100, 300, false);
+      assert.strictEqual(t3().y, yA, 'one finger on the pad: no scroll');
+      await stroke(100, 300, true, 2);
+      assert.strictEqual(t3().y, yA, 'a hovering hand (Z1 = 2): no scroll');
+      await stroke(100, 300, true);
+      assert.ok(t3().y < yA - 100, 'two fingers up: the tiles went up (' + yA + ' -> ' + t3().y + ')');
+      const yB = t3().y;
+      await stroke(300, 200, true);
+      assert.ok(t3().y > yB + 50, 'two fingers down: they came back down (' + yB + ' -> ' + t3().y + ')');
+      const yC = t3().y;
+      await stroke(200, 203, true);
+      assert.strictEqual(t3().y, yC, 'a resting hand (3 units): no scroll'); }
+    // the volume (the audio manager's events): a pill with the level and up / down, 2 s
+    { await until(() => car.ev.volumeChanged, 2000, 'volumeChanged subscribed');
+      const pill = () => { car.drawn.length = 0; return settle().then(() => sleep(300)).then(settle).then(() => car.drawn.slice()); };
+      car.ev.volumeChanged({ sinkID: 1, volume: 13 });
+      assert.ok((await pill()).indexOf('13') >= 0, 'volume up: the pill shows 13');
+      if (process.env.PILL_PNG) {   // a look at it: the page's last frame, drawn in software (the car draws the same words)
+        const { Canvas } = require(path.join(hu.kitDir, 'canvas')), { play } = require(path.join(hu.kitDir, 'record'));
+        const r = disp.frame || null, rec = hu.lastCv || null;
+        const L = disp.layers ? Object.values(disp.layers).find((l) => l && l.frame) : null;
+        const src = rec || (L && L.frame);
+        if (src) { const c = new Canvas(src.w || 1600, src.h || 520); play(src.words(), c); fs.writeFileSync(process.env.PILL_PNG, c.png()); }
+        else console.log('PILL_PNG: no frame', Object.keys(disp).filter((k) => /frame|layer|last/i.test(k)).join(','));
+      }
+      car.ev.volumeChanged({ sinkID: 1, volume: 11 });
+      assert.ok((await pill()).indexOf('11') >= 0, 'volume down: the pill shows 11');
+      car.ev.sinkMuteStateChanged({ sinkID: 1, muteState: 'MS_MUTED' });
+      const m = await pill();
+      assert.ok(m.indexOf('-') >= 0 && m.indexOf('11') < 0, 'muted: no level');
+      await sleep(2100);
+      assert.ok((await pill()).indexOf('-') < 0, 'gone 2 s later');
+      speed(0); await settle(); }                       // (the speed read again: an old one counts as moving)
     assert.ok([...home].filter((k) => /^h:\d+:/.test(k)).length >= 9 + 9 + 5 + 6, 'every Home tile');
     // a tile pushed: the player, the controller on its controls; pushed left: back on that tile
     disp.focusPage(keyOf(vid('HOMEB', 2))); await settle();

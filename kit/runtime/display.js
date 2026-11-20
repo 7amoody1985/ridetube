@@ -381,6 +381,11 @@ class Display {
     }
     /** The controller onto the page's target key (ctx.focus): kept while the next frames draw it. */
     focusPage(key) { this._focus(key ? { k: 'tgt:' + key, tgt: { key: String(key) } } : null); this._repaint(); }
+    /** ctx.scroll: what the page shows moved by dy logical px (+ = further down): an open sheet's list, else a scrolling page. */
+    scrollPage(dy) {
+        if (this.sheet) { if (!this.sheet.scroll) return false; this.sheet.scroll(dy); if (this.sheet.release) this.sheet.release(); this._paintSheet(); return true; }
+        return !!(this.pageScroll && this.onScroll && this._scrollBy(dy));
+    }
     /** A scrolling page (ctx.onScroll) moved by dy logical px; false when it was at its end already. */
     _scrollBy(dy) {
         let moved = false;

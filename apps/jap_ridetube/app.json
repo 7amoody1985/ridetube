@@ -2,7 +2,7 @@
   "id": "jap_ridetube",
   "title": "RideTube",
   "description": "Video in the car: an unofficial client for YouTube. Your Home, Subscriptions, Watch later, History and playlists (signed in on the car), search, channels and chapters; the sound through the car's media player, the picture only while parked (a podcast view while driving). Needs the jap-ridetube-d tool.",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "license": "GPL-3.0-or-later",
   "vendor": "custom",
   "loggingId": "OAA6",
@@ -17,6 +17,18 @@
     "de.bmw.infotainment.controlelements.SteeringWheelPushButton": {
       "statusSearchSwitch1": "rs",
       "_optional": "the steering wheel's next / previous"
+    },
+    "de.bmw.infotainment.controlelements.FrontCCU": {
+      "ccsControlTouchCCU": "w",
+      "_optional": "touch mode on the controller's touchpad while RideTube shows (two fingers scroll)"
+    },
+    "de.bmw.infotainment.ControllerElements": {
+      "ZBETouchFrontSide": "rs"
+    },
+    "org.genivi.am.commandinterface.CommandControl": {
+      "_instances": "1",
+      "_methods": ["getListMainSinks"],
+      "_broadcasts": ["volumeChanged", "sinkMuteStateChanged"]
     }
   },
   "screens": [

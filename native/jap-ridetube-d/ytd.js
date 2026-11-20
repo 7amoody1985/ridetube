@@ -2804,6 +2804,7 @@ Daemon.prototype.replayAt = async function (why) {
     this.sawPlay = false; // the new file's own STOP/PLAY is not a stop mid-file
     this.ytdecSeek(this.stoppedAt);
     this.toYtdec('resume');
+    this.frameSettle(true);   // LAB: its first stats line spans the pause (car, 2026-11-20: a "slow" stall at 15 fps)
     try {
         await this.audio.release();
         if (gen !== this.gen) return;

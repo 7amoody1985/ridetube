@@ -872,6 +872,69 @@ async function main() {
         }
     });
 
+    await t('LAB frames: the picture standing while the clock runs is logged with why, counted, and in stream_stats', async () => {
+        const P = ytdjs.Daemon.prototype, lines = [];
+        const f = { cur: { netDown: false }, state: 'playing', paused: false, buffering: false, videoOn: true, elapsed: 60000,
+            fetchedMs: 90000, opts: { streamBehindMs: 45000 }, log: (l) => lines.push(l) };
+        let dec = 0, drop = 0;
+        const st = (fps, dDec, dDrop) => {
+            dec += dDec;
+            drop += dDrop;
+            P.frameCheck.call(f, { ev: 'stats', decoded: dec, shown: 0, dropped: drop, late_ms: 12.4, cpu_pct: 40.2, fps: fps, pos_ms: 0 });
+        };
+        const stalls = () => lines.filter((l) => /^LAB frames: picture stalls/.test(l));
+        P.frameSettle.call(f);
+        st(2, 4, 0);                 // within 4 s of the start: not judged
+        f.fq.at -= 10000;
+        st(30, 60, 0);               // the interval before had run: judged, the video's rate 30
+        assert.strictEqual(f.cur.fr.nominal, 30);
+        st(5, 0, 0);                 // nothing decoded: starved
+        assert.strictEqual(stalls().length, 1);
+        assert.ok(/at 60 s \(starved\): fps 5 of 30, 0 decoded, 0 dropped, late 12 ms, ytdec cpu 40 %, load .*, ahead 30 s, link ok, free /.test(stalls()[0]), stalls()[0]);
+        assert.strictEqual(P.streamStats.call(f).video.stalled, true);
+        st(10, 30, 25);              // dropped behind the clock: late, the same stall
+        st(29, 58, 0);               // back
+        assert.strictEqual(stalls().length, 1);
+        const back = lines.filter((l) => /^LAB frames: picture back/.test(l));
+        assert.strictEqual(back.length, 1);
+        assert.ok(/after 4 s or less \(starved\+late, worst 5 fps\)/.test(back[0]), back[0]);
+        st(15, 30, 2);               // few drops: slow
+        assert.ok(/\(slow\)/.test(stalls()[1]), stalls()[1]);
+        st(30, 60, 0);
+        // paused, then playing again: neither that interval nor the next one is judged
+        f.paused = true;
+        st(0, 0, 0);
+        f.paused = false;
+        st(0, 0, 0);
+        assert.strictEqual(stalls().length, 2, 'not while paused, nor the interval it ended in');
+        st(30, 60, 0);
+        // a seek: 4 s settle, the same ytdec's counts go on
+        P.frameSettle.call(f, true);
+        st(30, 60, 0);
+        st(0, 0, 0);
+        assert.strictEqual(stalls().length, 2, 'not within 4 s of a seek');
+        // a new ytdec counts from 0: its first line is not compared with the old one's
+        P.frameSettle.call(f);
+        f.fq.at -= 10000;
+        dec = 0; drop = 0;
+        st(30, 60, 0);
+        assert.strictEqual(f.cur.fr.dropped, 27, 'drops add up over ytdecs');
+        st(30, 60, 0);
+        // a summary every 30 s of judged play
+        f.cur.fr.sum.at -= 31000;
+        st(30, 60, 0);
+        const sum = lines.filter((l) => /^LAB frames: last \d+ s: fps /.test(l));
+        assert.strictEqual(sum.length, 1);
+        assert.ok(/stalls this video 2$/.test(sum[0]), sum[0]);
+        const v = P.streamStats.call(f).video;
+        assert.deepStrictEqual([v.fps, v.of_fps, v.dropped, v.late_ms, v.ytdec_cpu, v.stalls, v.stall_s, v.stalled], [30, 30, 27, 12, 40, 2, 6, false]);
+        // the next video: no stall carried over, its own numbers
+        f.cur = { netDown: false };
+        P.frameSettle.call(f);
+        assert.strictEqual(f.fq.gap, null);
+        assert.strictEqual(P.streamStats.call(f).video, null, 'before its first stats line');
+    });
+
     await t('LAB files: status.json and a redacted log.txt in the runtime folder, 0644, for CarLink', async () => {
         const dir = path.dirname(d.opts.sock), st = path.join(dir, 'status.json'), lg = path.join(dir, 'log.txt');
         [st, lg].forEach((f) => { try { fs.unlinkSync(f); } catch (e) { /* none */ } });

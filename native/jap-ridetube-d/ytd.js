@@ -1728,7 +1728,9 @@ Daemon.prototype.streamStats = function () {
         restreams: c ? c.restreams || 0 : 0, stalls: c ? c.stalls || 0 : 0, waited_s: c ? c.waited || 0 : 0,
         mem_avail_mb: mb1(kbOf(mem, 'MemAvailable')), swap_used_mb: swapT === null || swapF === null ? null : mb1(swapT - swapF),
         rss_mb: { service: Math.round(process.memoryUsage().rss / 1048576), ytdec: rss(this.child), fetcher: rss(this.fetcher) },
-        load: Number(readText('/proc/loadavg').split(' ')[0]) || null
+        load: Number(readText('/proc/loadavg').split(' ')[0]) || null,
+        video: c && c.fr ? { fps: c.fr.fps, of_fps: c.fr.nominal || null, dropped: c.fr.dropped, late_ms: c.fr.late,
+            ytdec_cpu: c.fr.cpu, stalls: c.fr.stalls, stall_s: c.fr.stallS, stalled: !!(this.fq && this.fq.gap) } : null
     };
 };
 // LAB: what CarLink's Car log reads, in the runtime folder (RAM: no flash writes; gone when the service stops), 0644:
@@ -1759,8 +1761,73 @@ Daemon.prototype.writeLabFiles = function (force) {
         }
     } catch (e) { if (!this.labErr) { this.labErr = true; this.opts.log('lab files: ' + e.message); } }
 };
+// LAB: the picture standing while the sound plays on, which no state shows. Each ytdec stats line (every 2 s) is judged
+// when the clock ran through all of it (playing; not paused, buffering, waiting for the head or recovering; video on;
+// 4 s past a ytdec start, a seek or the video switched on) against the video's frame rate (the best seen this video,
+// once >= 20 fps). Under 75 % of it: a stall, logged when it starts and when it ends, with why: starved (nothing
+// decoded: the next frame not on file yet), late (frames dropped: the decoder behind the clock, CPU), slow (else).
+// Every 30 s of judged play a summary line too. stream_stats has the numbers (video: ...).
+const FRAME_SETTLE_MS = 4000, FRAME_LOW = 0.75, FRAME_SUM_MS = 30000, FRAME_STATS_S = 2;
+Daemon.prototype.frameSettle = function (sameYtdec) {
+    const was = this.fq && this.fq.cur === this.cur ? this.fq : {};   // (a stall goes on over a ytdec restart, not into the next video)
+    this.fq = { cur: this.cur, at: Date.now(), ran: false, gap: was.gap || null,
+        decoded: sameYtdec ? was.decoded : null, dropped: sameYtdec ? was.dropped : null };
+};
+Daemon.prototype.frameCheck = function (m) {
+    const c = this.cur, q = this.fq, now = Date.now();
+    if (!c || !q || typeof m.decoded !== 'number' || typeof m.fps !== 'number') return;
+    const fr = c.fr || (c.fr = { nominal: 0, stalls: 0, stallS: 0, dropped: 0, fps: null, late: null, cpu: null, sum: null });
+    const num = (x) => typeof x === 'number' && isFinite(x);
+    const dDec = num(q.decoded) && m.decoded >= q.decoded ? m.decoded - q.decoded : null;
+    const dDrop = num(q.dropped) && num(m.dropped) && m.dropped >= q.dropped ? m.dropped - q.dropped : null;
+    q.decoded = m.decoded;
+    q.dropped = m.dropped;
+    fr.fps = m.fps;
+    fr.late = num(m.late_ms) ? Math.round(m.late_ms) : null;
+    fr.cpu = num(m.cpu_pct) ? Math.round(m.cpu_pct) : null;
+    if (dDrop !== null) fr.dropped += dDrop;
+    const running = this.state === 'playing' && !this.paused && !this.buffering && !this.headWait && !this.recovering && this.videoOn;
+    const judged = running && q.ran && now - q.at >= FRAME_SETTLE_MS && dDec !== null && dDrop !== null;
+    q.ran = running;
+    if (!judged) return;
+    if (m.fps >= 20 && m.fps <= 61) fr.nominal = Math.max(fr.nominal, m.fps);
+    const s = fr.sum || (fr.sum = { at: now, n: 0, fps: 0, min: null, dropped: 0, late: 0, cpu: 0 });
+    s.n++;
+    s.fps += m.fps;
+    s.min = s.min === null ? m.fps : Math.min(s.min, m.fps);
+    s.dropped += dDrop;
+    s.late = Math.max(s.late, fr.late || 0);
+    s.cpu = Math.max(s.cpu, fr.cpu || 0);
+    const ahead = this.fetchedMs === Infinity ? 'all' : Math.round((this.fetchedMs - (this.elapsed || 0)) / 1000) + ' s';
+    const at = Math.round((this.elapsed || 0) / 1000) + ' s';
+    const ctx = () => 'fps ' + m.fps + ' of ' + fr.nominal + ', ' + dDec + ' decoded, ' + dDrop + ' dropped, late ' + fr.late +
+        ' ms, ytdec cpu ' + fr.cpu + ' %, load ' + (readText('/proc/loadavg').split(' ')[0] || '-') + ', ahead ' + ahead +
+        ', link ' + (c.netDown ? 'down' : 'ok') + ', free ' + mb1(kbOf(readText('/proc/meminfo'), 'MemAvailable')) + ' MB';
+    if (fr.nominal >= 20 && m.fps < FRAME_LOW * fr.nominal) {
+        const why = dDec === 0 ? 'starved' : dDrop > 0.2 * dDec ? 'late' : 'slow';
+        if (!q.gap) {
+            q.gap = { n: 0, why: {}, worst: m.fps };
+            fr.stalls++;
+            this.log('LAB frames: picture stalls at ' + at + ' (' + why + '): ' + ctx());
+        }
+        q.gap.n++;
+        q.gap.why[why] = true;
+        q.gap.worst = Math.min(q.gap.worst, m.fps);
+        fr.stallS += FRAME_STATS_S;
+    } else if (q.gap) {
+        this.log('LAB frames: picture back at ' + at + ' after ' + q.gap.n * FRAME_STATS_S + ' s or less (' +
+            Object.keys(q.gap.why).join('+') + ', worst ' + q.gap.worst + ' fps): ' + ctx());
+        q.gap = null;
+    }
+    if (now - s.at >= FRAME_SUM_MS) {
+        this.log('LAB frames: last ' + Math.round((now - s.at) / 1000) + ' s: fps ' + Math.round(s.fps / s.n * 10) / 10 + ' (min ' +
+            s.min + ', video ' + fr.nominal + '), dropped ' + s.dropped + ', late max ' + s.late + ' ms, ytdec cpu max ' + s.cpu +
+            ' %, load ' + (readText('/proc/loadavg').split(' ')[0] || '-') + ', ahead ' + ahead + '; stalls this video ' + fr.stalls);
+        fr.sum = null;
+    }
+};
 // where a video's folder goes: RAM when there is one
-Daemon.prototype.media = function () { return this.ram || this.opts.cacheDir; };
+Daemon.prototype.media =function () { return this.ram || this.opts.cacheDir; };
 Daemon.prototype.rmTree = function (p) {
     let st;
     try { st = fs.lstatSync(p); } catch (e) { return; }
@@ -2738,6 +2805,7 @@ Daemon.prototype.seek = async function (ms) {
     this.lastTickAt = Date.now();
     this.settle = null; // a seek back right after the switch: its times are ours
     this.ytdecSeek(ms);
+    this.frameSettle(true);   // LAB
     if (this.cur && this.cur.stream) {
         if (this.outsideRam(ms)) this.restream(ms, 'seek'); else this.feedPos(ms, true);
     }
@@ -2752,6 +2820,7 @@ Daemon.prototype.setVideo = function (on) {
     this.videoOn = on;
     this.lastProgress = Date.now(); this.played = 0;
     this.toYtdec('video ' + (on ? 1 : 0));
+    this.frameSettle(true);   // LAB
 };
 
 // zoom while playing: ytdec again at the clock with the other mode (the sound plays on)
@@ -2905,6 +2974,7 @@ Daemon.prototype.spawnYtdec = function (seekMs) {
     this.child = child;
     this.lastProgress = Date.now(); this.played = 0;
     this.lastDecoded = -1;
+    this.frameSettle();   // LAB: a new ytdec counts from 0
     this.eof = false;
     child.stdin.on('error', () => { /* EPIPE when it dies: handled by exit */ });
     child.on('error', (e) => this.ytdecDied(child, e.message));
@@ -2941,6 +3011,7 @@ Daemon.prototype.onYtdecLine = function (child, l) {
             this.lastDecoded = m.decoded;
             this.lastProgress = Date.now(); this.played = 0;
         }
+        this.frameCheck(m);   // LAB
     } else if (m.ev === 'ready') {
         this.lastProgress = Date.now(); this.played = 0;
     } else if (m.ev === 'eof') {

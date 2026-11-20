@@ -44,6 +44,13 @@ c = json.load(open(p))
 c['version'] = svcv
 c['title'] = 'RideTube service (fork by 7amoody1985)'
 open(p, 'w').write(json.dumps(c, indent=2) + '\n')
+p = 'native/mdq-ridetube-d/ytd.js'   # its VERSION (log reports, status.json) as component.json's
+s = open(p, encoding='utf-8').read()
+import re
+s, n = re.subn(r"^const VERSION = '[^']*';", "const VERSION = '%s';" % svcv, s, count=1, flags=re.M)
+if n != 1:
+    sys.exit('lab_build.sh: no VERSION line in ytd.js')
+open(p, 'w', encoding='utf-8').write(s)
 left = []
 import os
 for d, _, fs in os.walk('.'):

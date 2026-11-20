@@ -208,8 +208,11 @@ Daemon → app:
   and SponsorBlock segments (`sponsor`, `selfpromo`, `interaction`, `intro`, `outro`, `music_offtopic`), at the play and
   again when the segments come in.
 - `{"ev":"skipped","category","ms"}`: a SponsorBlock segment of a `skip` category was skipped (`ms`: its length).
-- `{"ev":"stream_stats","state","buffering","stored","ram":{used_mb,size_mb},"elapsed_s","ahead_s","behind_s","downloaded_mb","net","drops","restreams","stalls","waited_s","mem_avail_mb","swap_used_mb","rss_mb":{service,ytdec,fetcher},"load"}`:
-  LAB ONLY (branch `lab-ram`): the stats overlay's numbers (`streamStats`), no ids or titles.
+- `{"ev":"stream_stats","state","buffering","stored","ram":{used_mb,size_mb},"elapsed_s","ahead_s","behind_s","downloaded_mb","net","drops","restreams","stalls","waited_s","mem_avail_mb","swap_used_mb","rss_mb":{service,ytdec,fetcher},"load","video":{fps,of_fps,dropped,late_ms,ytdec_cpu,stalls,stall_s,stalled}}`:
+  LAB ONLY (branch `lab-ram`): the stats overlay's numbers (`streamStats`), no ids or titles. `video` (null before
+  ytdec's first stats line): the frame check (`frameCheck`), which also logs `LAB frames:` lines when the picture
+  stands while the sound plays on (under 75 % of the video's frame rate for a 2 s stats line: `starved`, nothing to
+  decode yet; `late`, frames dropped behind the clock; `slow`), when it is back, and every 30 s of play a summary.
 
 LAB ONLY (branch `lab-ram`): for CarLink's Car log the service also writes two files in its runtime folder
 (`/run/<service>/`, RAM, 0644, gone when it stops), every 10 s while in use and once more when it goes idle:

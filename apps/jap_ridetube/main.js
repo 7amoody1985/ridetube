@@ -1582,7 +1582,9 @@ mgu.run({
         // LAB: the stream stats panel, top right over the full-screen player while a video is loaded (setting stats_overlay):
         // where the video is held and the RAM folder's use, the window (s fetched ahead of the clock, s kept behind), the
         // download and the link, restarts / stalls, the head unit's free memory and swap, the decoder's and fetcher's
-        // memory, the load. Grey once the last answer is over 6 s old; the first line amber when the video is on flash.
+        // memory, the load; the picture: frames shown per s of the video's rate, ytdec's CPU, how late, dropped, freezes
+        // (the service's frame check). Grey once the last answer is over 6 s old; the first line amber when the video is
+        // on flash, the last one while the picture stands.
         function statsPanel(cv, SW) {
             if (settings.get('stats_overlay') !== true || !model.active()) return;
             const st = model.stats, old = !st || Date.now() - model.statsAt > 6000;
@@ -1594,13 +1596,16 @@ mgu.run({
                 'Downloaded ' + v(st.downloaded_mb, ' MB') + ' | link ' + v(st.net) + (st.drops ? ' (' + st.drops + ' drops)' : ''),
                 'Restarts ' + v(st.restreams) + ' | stalls ' + v(st.stalls) + ' | waited ' + v(st.waited_s, ' s'),
                 'Free RAM ' + v(st.mem_avail_mb, ' MB') + ' | swap ' + v(st.swap_used_mb, ' MB'),
-                'ytdec ' + v(st.rss_mb && st.rss_mb.ytdec, ' MB') + ' | fetch ' + v(st.rss_mb && st.rss_mb.fetcher, ' MB') + ' | load ' + v(st.load)
+                'ytdec ' + v(st.rss_mb && st.rss_mb.ytdec, ' MB') + ' | fetch ' + v(st.rss_mb && st.rss_mb.fetcher, ' MB') + ' | load ' + v(st.load),
+                st.video ? 'Video ' + v(st.video.fps) + '/' + v(st.video.of_fps) + ' fps | cpu ' + v(st.video.ytdec_cpu, '%') +
+                    ' | late ' + v(st.video.late_ms, ' ms') + ' | dropped ' + v(st.video.dropped) +
+                    ' | freezes ' + v(st.video.stalls) + (st.video.stall_s ? ' (' + st.video.stall_s + ' s)' : '') : 'Video -'
             ];
             cv.xf();
             const w = 420, x = SW - w - 24, y = 20, lh = 27;
             cv.roundRect(x, y, w, 18 + lines.length * lh, 14, '#000000c0');
             lines.forEach((t, i) => cv.text(fit(cv, t, 20, w - 28, LIT), x + 14, y + 31 + i * lh, 20,
-                i === 0 && st && st.stored !== 'ram' ? '#ffd27a' : old ? '#9a9a9a' : '#ffffff', LIT));
+                (i === 0 && st && st.stored !== 'ram') || (i === 6 && st && st.video && st.video.stalled) ? '#ffd27a' : old ? '#9a9a9a' : '#ffffff', LIT));
         }
         // the HMI's home and back arrow column: its taps stay the HMI's, but no black hole over the video;
         // the same two icons where the HMI has them (screen px), on the scrim

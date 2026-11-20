@@ -210,6 +210,12 @@ Daemon → app:
 - `{"ev":"skipped","category","ms"}`: a SponsorBlock segment of a `skip` category was skipped (`ms`: its length).
 - `{"ev":"stream_stats","state","buffering","stored","ram":{used_mb,size_mb},"elapsed_s","ahead_s","behind_s","downloaded_mb","net","drops","restreams","stalls","waited_s","mem_avail_mb","swap_used_mb","rss_mb":{service,ytdec,fetcher},"load"}`:
   LAB ONLY (branch `lab-ram`): the stats overlay's numbers (`streamStats`), no ids or titles.
+
+LAB ONLY (branch `lab-ram`): for CarLink's Car log the service also writes two files in its runtime folder
+(`/run/<service>/`, RAM, 0644, gone when it stops), every 10 s while in use and once more when it goes idle:
+`status.json` (`stream_stats`'s fields with `service`, `version`, `at`) and `log.txt` (the recent log `send_logs`
+reports, then `ytdec.log`'s last 100 lines, through `redactLog`: no tokens, titles, ids or addresses; a video
+keeps one tag for the service's life), written again only after a new line.
 - `{"ev":"positions","items":[{id,ms,total,done,at,title,channel,duration_s}]}`: where each video played on this car was
   left, newest first (`at`: when, epoch ms; `done`: within 5 % or 5 s of its end), at most 300.
 - `{"ev":"auth","state":"signed_out|code|signed_in|error","code","url","expires" (s left, with code),"msg" (with error)}`.

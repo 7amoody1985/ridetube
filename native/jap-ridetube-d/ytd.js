@@ -100,6 +100,9 @@ function defaults() {
         streamJumpMs: 30000,
         restreamMs: 10000,   // a catch-up restart at most this often
         ramBudget: 0,        // bytes a stream may plan for (0: what the tmpfs has free)
+        // LAB: log.txt and status.json for CarLink's Car log, in the runtime folder (RAM), every labFilesMs while in use
+        labDir: null,        // null: ctl.sock's folder (/run/<service>)
+        labFilesMs: 10000,
         watchdogMs: 5000,
         tickMs: 5000,
         availWaitMs: 5000,
@@ -1304,6 +1307,7 @@ function Daemon(o) {
     this.ring = [];
     this.opts.log = (m) => {
         this.ring.push(new Date().toISOString() + ' ' + m);
+        this.ringN = (this.ringN || 0) + 1;   // (lab: log.txt is written again only when a line came)
         if (this.ring.length > RING_MAX) this.ring.shift();
         out(m);
     };
@@ -1727,6 +1731,34 @@ Daemon.prototype.streamStats = function () {
         load: Number(readText('/proc/loadavg').split(' ')[0]) || null
     };
 };
+// LAB: what CarLink's Car log reads, in the runtime folder (RAM: no flash writes; gone when the service stops), 0644:
+// - status.json: streamStats() with the service and the time;
+// - log.txt: this service's recent log (the ring send_logs reports) and ytdec.log's tail, through redactLog as a
+//   report is (no tokens, titles, ids, addresses: a video id keeps one tag for the service's life, its salt).
+// Every labFilesMs while in use (a state other than idle, a fetch, the app connected); idle: once more, then nothing.
+// log.txt only when a log line came since. Each file whole: a temp file renamed over it.
+Daemon.prototype.writeLabFiles = function (force) {
+    const dir = this.opts.labDir || path.dirname(this.opts.sock);
+    const busy = this.state !== 'idle' || !!this.fetcher || !!this.client;
+    if (!force && !busy && this.labIdle) return;
+    this.labIdle = !busy;
+    const put = (name, text) => {
+        const f = path.join(dir, name);
+        fs.writeFileSync(f + '.tmp', text, { mode: 0o644 });
+        fs.chmodSync(f + '.tmp', 0o644);   // (whatever the umask)
+        fs.renameSync(f + '.tmp', f);
+    };
+    try {
+        put('status.json', JSON.stringify(Object.assign({ service: SELF, version: VERSION, at: new Date().toISOString() }, this.streamStats())) + '\n');
+        if (force || this.ringN !== this.labRingN) {
+            this.labRingN = this.ringN;
+            if (!this.labSalt) this.labSalt = crypto.randomBytes(16).toString('hex');
+            const ytdec = tailLines(path.join(this.opts.logDir, 'ytdec.log'), 100);
+            const log = ['--- ' + SELF + ' ' + VERSION + ', last ' + this.ring.length + ' lines'].concat(this.ring, ['--- ytdec.log, last ' + ytdec.length + ' lines'], ytdec);
+            put('log.txt', lastBytes(redactLog(log.join('\n'), this.known(), this.labSalt, this.opts.cacheDir).split('\n'), REPORT_MAX).join('\n') + '\n');
+        }
+    } catch (e) { if (!this.labErr) { this.labErr = true; this.opts.log('lab files: ' + e.message); } }
+};
 // where a video's folder goes: RAM when there is one
 Daemon.prototype.media = function () { return this.ram || this.opts.cacheDir; };
 Daemon.prototype.rmTree = function (p) {
@@ -1770,6 +1802,7 @@ Daemon.prototype.start = async function () {
     if (this.childFetch && this.fetchUid === null) { try { this.fetchUid = pickFetchUid(this.opts); } catch (e) { this.log('internet uid: ' + e.message); } }
     this.timers.push(setInterval(() => this.guard(() => this.watchdog()), 1000));
     this.timers.push(setInterval(() => this.guard(() => this.keepWarm()), this.opts.tickMs));
+    this.timers.push(setInterval(() => this.guard(() => this.writeLabFiles(false)), this.opts.labFilesMs));   // (lab)
     this.timers.push(setInterval(() => this.guard(() => this.lockSocket()), this.opts.tickMs));   // a reinstall can change the app's uid
     this.ytdlpNext = Date.now() + this.opts.ytdlpFirstMs;
     this.timers.push(setInterval(() => this.guard(() => this.ytdlpTick()), this.opts.tickMs));
@@ -2050,6 +2083,7 @@ Daemon.prototype.remoteUid = function () {
 };
 Daemon.prototype.proxy = function (mode) { return this.notImplemented('proxy'); };            // WP11, later
 Daemon.prototype.setState = function (s) {
+    if (this.state !== s) this.labIdle = false;   // (lab: the next writeLabFiles writes, even into idle)
     this.state = s;
     this.sendState();
 };

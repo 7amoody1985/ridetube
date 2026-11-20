@@ -872,6 +872,33 @@ async function main() {
         }
     });
 
+    await t('LAB files: status.json and a redacted log.txt in the runtime folder, 0644, for CarLink', async () => {
+        const dir = path.dirname(d.opts.sock), st = path.join(dir, 'status.json'), lg = path.join(dir, 'log.txt');
+        [st, lg].forEach((f) => { try { fs.unlinkSync(f); } catch (e) { /* none */ } });
+        d.log('play SECRETVID01 here, Bearer abc.def-123456');   // an id by its context, a token: neither may show
+        d.writeLabFiles(true);
+        const s = JSON.parse(fs.readFileSync(st, 'utf8'));
+        assert.strictEqual(s.service, 'jap-ridetube-d');
+        assert.strictEqual(s.version, VERSION);
+        assert.ok(s.at && 'stored' in s && 'mem_avail_mb' in s && 'ahead_s' in s, JSON.stringify(s));
+        const text = fs.readFileSync(lg, 'utf8');
+        assert.ok(text.indexOf('--- jap-ridetube-d ' + VERSION) === 0, text.slice(0, 80));
+        assert.ok(/play v#[0-9a-f]{4} here, Bearer \[secret\]/.test(text), 'the line, redacted');
+        assert.ok(text.indexOf('SECRETVID01') < 0 && text.indexOf('abc.def-123456') < 0, 'no id, no token');
+        assert.strictEqual(fs.statSync(st).mode & 0o777, 0o644);
+        assert.strictEqual(fs.statSync(lg).mode & 0o777, 0o644);
+        assert.ok(!fs.existsSync(st + '.tmp') && !fs.existsSync(lg + '.tmp'));
+        // log.txt again only after a new line: the same ring -> the file is left as it is
+        fs.writeFileSync(lg, 'marker');
+        d.labIdle = false;
+        d.labRingN = d.ringN;   // (nothing async between these: no line can come in)
+        d.writeLabFiles(false);
+        assert.strictEqual(fs.readFileSync(lg, 'utf8'), 'marker', 'no new line: log.txt left as it is');
+        d.log('one more line');
+        d.writeLabFiles(false);
+        assert.ok(fs.readFileSync(lg, 'utf8').indexOf('one more line') > 0, 'written again after a new line');
+    });
+
     await t('speed: a warm spare takes the prefetch (stream lookup); the next spare takes the play, with --info', async () => {
         fs.writeFileSync(ctl, ''); setMode('ok');
         const id = 'FFFFFFFFFF5';
@@ -1017,8 +1044,13 @@ async function main() {
         await sleep(500);
         assert.ok(!fs.existsSync(ctl + '.update.log'), 'off: no look');
         // on again: the update again, a look soon
+        const onAt = Date.now();
         c.send({ cmd: 'ytdlp', auto: true });
         await c.waitFor((x) => x.ev === 'ytdlp' && x.auto === true);
+        // ytdlpNext is 0 since the step above, so that look starts at the next tick: let it end here. Left running, it could
+        // start after the steps below removed update.log, answer their waits early, and leave a look of theirs to come
+        // after they reset the timers ("a refused video: no look" failed now and then, and WP2's next case saw its --pyz)
+        await waitUntil(() => (d.ytdlpAt || 0) >= onAt && !d.ytdlpRun, 3000);
         c.clear(); c.send({ cmd: 'ytdlp' });                      // auto left out: only the state
         assert.strictEqual((await c.waitFor((x) => x.ev === 'ytdlp')).auto, true);
         assert.deepStrictEqual(d.pyzArgs(), ['--pyz', pyz]);
@@ -1326,6 +1358,8 @@ async function main() {
         await waitUntil(() => ytdecLines().filter((l) => / argv /.test(l)).length === 2 && ytdecLines().some((l) => / in seek /.test(l)));
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(!/--fill/.test(argv[0]) && /--rect 1280x720 --fill /.test(argv[1]), argv.join('\n'));
+        // the seek reaches the fake's log a moment after its argv line (it raced, now and then): wait for it, then check where
+        await waitUntil(() => ytdecLines().filter((l) => / in seek /.test(l)).length > 0);
         assert.ok(ytdecLines().some((l) => / in seek 40\d\d$/.test(l)), 'at the clock');
         c.send({ cmd: 'fill', on: true });
         await sleep(300);

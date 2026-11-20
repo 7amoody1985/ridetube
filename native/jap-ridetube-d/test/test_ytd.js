@@ -557,6 +557,55 @@ async function main() {
         await wp8Stop();
     });
 
+    // car, 2026-11-20: a resume at 46.8 s streamed from there; a seek to 0 while the head played left ytdec at its first
+    // record (46.8 s) for good. The restream waits for audio.m4a (the fetcher writes it), then the first tick takes it.
+    const seekBackBeforeStream = async (id, atMs, playOnHead) => {
+        const was = d.opts.resume;
+        d.opts.resume = true;
+        try {
+            fs.writeFileSync(ctl, 'hold'); fs.writeFileSync(ytlog, ''); setMode('ok');
+            d.posFedAt = 0;
+            c.clear();
+            c.send({ cmd: 'play', id: id, rect: '1280x720', at: atMs });
+            await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+            const l0 = fetchLog();
+            assert.strictEqual(argAfter(l0.argv, '--start-ms'), String(atMs));
+            await waitUntil(() => d.cur.lowMs === atMs);
+            subs.playerState('PLAYER_STATE_PLAY');
+            tickAt(0);                                  // the first tick takes the play to its resume point
+            await waitUntil(() => ytdecLines().some((x) => new RegExp(' in seek ' + atMs + '$').test(x)));
+            if (playOnHead) tickAt(atMs); else await waitUntil(() => d.headWait);
+            c.send({ cmd: 'seek', ms: 0 });
+            await waitUntil(() => ytdecLines().some((x) => / in seek 0$/.test(x)));
+            await sleep(300);
+            assert.ok(!d.cur.restreams, 'no restream while the fetcher still writes the audio');
+            assert.strictEqual(fetchLog().pid, l0.pid);
+            fs.writeFileSync(ctl, 'full');
+            await waitUntil(() => d.head === null && !d.switching && !d.headWait, 4000);
+            // the player's times go on (the switch while waiting replays on a new connection, which takes its first one)
+            const ticks = setInterval(() => tickAt(d.elapsed + 200), 100);
+            let l;
+            try { l = await newFetch(l0.pid); } finally { clearInterval(ticks); }
+            assert.ok(l.argv.indexOf('--video-only') >= 0);
+            assert.ok(Number(argAfter(l.argv, '--start-ms')) < 5000, 'from where it plays: ' + argAfter(l.argv, '--start-ms'));
+            assert.strictEqual(d.cur.restreams, 1);
+            await waitUntil(() => d.cur.lowMs < 5000);
+            tickAt(d.elapsed + 400);
+            await sleep(200);
+            assert.strictEqual(d.cur.restreams, 1, 'once');
+        } finally {
+            d.opts.resume = was;
+        }
+        await wp8Stop();
+        fs.writeFileSync(ctl, '');
+    };
+    await t('WP8: a resume, then a seek back before the stream while the head plays: restreams there once audio.m4a is in', async () => {
+        await seekBackBeforeStream('WP8BEFORE01', 40000, true);
+    });
+    await t('WP8: a resume past the head, then a seek back before the stream while it waits for audio.m4a: restreams there after', async () => {
+        await seekBackBeforeStream('WP8BEFORE02', 90000, false);
+    });
+
     await t('WP8: catch-up: a clock past fetched + streamJumpMs restreams at the clock, at most every restreamMs', async () => {
         const was = d.opts.restreamMs;
         try {

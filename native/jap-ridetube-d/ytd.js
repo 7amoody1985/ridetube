@@ -2512,10 +2512,13 @@ Daemon.prototype.restream = function (ms, why) {
 };
 // the link was gone a while (a tunnel): playback is past what is fetched by more than streamJumpMs: the video from there,
 // not the gap; at most every restreamMs
+// Also back: a seek before where the stream starts (a resume, then a seek to 0) made while the head played, or while
+// waiting for audio.m4a, cannot restream then (the fetcher still writes the audio): the first tick on the full file does.
 Daemon.prototype.catchUp = function (elapsed) {
     const c = this.cur;
-    if (!c || !c.stream || !this.fullReady || this.head || this.fetchedMs === Infinity) return;
-    if (elapsed <= this.fetchedMs + this.opts.streamJumpMs || Date.now() - (c.restreamAt || 0) < this.opts.restreamMs) return;
+    if (!c || !c.stream || !this.fullReady || this.head || Date.now() - (c.restreamAt || 0) < this.opts.restreamMs) return;
+    if (elapsed + 2000 < (c.lowMs || 0)) return void this.restream(elapsed, 'before the stream');
+    if (this.fetchedMs === Infinity || elapsed <= this.fetchedMs + this.opts.streamJumpMs) return;
     this.restream(elapsed, 'behind the clock');
 };
 // the streaming fetcher ended early while playing: the video again from where it plays, after a wait, 5 times a video at

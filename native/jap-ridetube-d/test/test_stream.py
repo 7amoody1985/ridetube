@@ -384,6 +384,78 @@ class SourceTests(Served):
 
 # ---------------------------------------------------------------- PacedReader
 
+class _H11(_H):
+    """_H over HTTP/1.1: the connection stays open between requests; server.hangup_after: close it (as an idle
+    keep-alive one) after that many answers; server.redirect: a path answered 302 to server.base + '/v'."""
+    protocol_version = 'HTTP/1.1'
+
+    def do_GET(self):  # noqa: N802
+        srv = self.server
+        srv.conns.add(self.client_address)
+        if self.path in srv.redirect:
+            srv.seen.append((self.path, self.headers.get('Range'), None))
+            self.send_response(302)
+            self.send_header('Location', '/v')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        super().do_GET()
+        srv.answers += 1
+        if srv.hangup_after and srv.answers % srv.hangup_after == 0:
+            self.close_connection = True
+
+
+class KeepAliveTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = RangeServer(('127.0.0.1', 0), _H11)
+        cls.srv.data = DATA
+        cls.base = f'http://127.0.0.1:{cls.srv.server_address[1]}'
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        self.srv.seen, self.srv.script, self.srv.dead, self.srv.redirect = [], [], set(), set()
+        self.srv.conns, self.srv.answers, self.srv.hangup_after = set(), 0, 0
+        self.addCleanup(setattr, ytfetch, 'NET_BACKOFF', ytfetch.NET_BACKOFF)
+        ytfetch.NET_BACKOFF = (0.01,)
+
+    def src(self, path='/v'):
+        return ytfetch.Source({'url': self.base + path, 'filesize': len(DATA)}, ytfetch.Window(10 ** 9, 0))
+
+    def test_one_connection_for_many_requests(self):
+        s = self.src()
+        got = b''.join(s.get(o, min(o + 7000, len(DATA))) for o in range(0, len(DATA), 7000))
+        self.assertEqual(got, DATA)
+        self.assertEqual(s.connections, 1, 'kept open')
+        self.assertEqual(len(self.srv.conns), 1)
+
+    def test_a_kept_connection_the_server_closed_is_opened_again_silently(self):
+        self.srv.hangup_after = 2           # as an idle keep-alive connection the server drops
+        s = self.src()
+        ev = events(lambda: self.assertEqual(b''.join(s.get(o, o + 5000) for o in range(0, 30000, 5000)), DATA[:30000]))
+        self.assertEqual(ev, [], 'not the link down')
+        self.assertGreaterEqual(s.connections, 3)
+
+    def test_a_redirect_is_followed_and_kept(self):
+        self.srv.redirect = {'/moved'}
+        s = self.src('/moved')
+        self.assertEqual(s.get(100, 300), DATA[100:300])
+        self.assertTrue(s.url.endswith('/v'), s.url)
+        self.assertEqual(s.get(300, 500), DATA[300:500])
+        self.assertEqual([p for p, _, _ in self.srv.seen], ['/moved', '/v', '/v'])
+
+    def test_403_on_a_kept_connection_still_looks_up_again(self):
+        s = ytfetch.Source({'url': self.base + '/old', 'filesize': len(DATA)}, ytfetch.Window(10 ** 9, 0),
+                           refresh=lambda fid: {'url': self.base + '/v', 'filesize': len(DATA)})
+        self.srv.dead = {'/old'}
+        self.assertEqual(events(lambda: self.assertEqual(s.get(0, 100), DATA[:100])), [])
+        self.assertEqual(s.refreshed, 1)
+
+
 class PacedReaderTests(Served):
     def test_from_a_nonzero_start_it_returns_exactly_the_tail(self):
         start = 12345

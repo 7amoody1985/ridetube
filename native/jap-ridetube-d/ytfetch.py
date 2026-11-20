@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from fractions import Fraction
 
@@ -242,9 +243,20 @@ class Window:
             raise OSError('ytd.js closed the position feed')
 
 
+class HTTPStatus(OSError):
+    """an answer other than 206 to a Range request"""
+
+    def __init__(self, code):
+        super().__init__(f'HTTP {code}')
+        self.code = code
+
+
 class Source:
     """The video's stream URL: get(start, end) tries again for as long as the window lasts (backing off to 15 s), and
-    a 403/404/410 looks the video up again (refresh) for a new URL of the same format and size."""
+    a 403/404/410 looks the video up again (refresh) for a new URL of the same format and size. One connection, kept
+    open between requests (keep-alive): a fresh one for each 2 MiB paid a TCP and a TLS handshake and TCP's slow start
+    every time, a large share of each request over a phone's hotspot. A kept connection the server closed meanwhile
+    (idle while the window was full) is opened again at once, not counted as the link down."""
 
     def __init__(self, f, window, refresh=None, timeout=20):
         self.url, self.headers, self.size = f['url'], dict(f.get('http_headers') or {}), f['filesize']
@@ -252,6 +264,66 @@ class Source:
         self.ctx = tls_ctx()
         self.down = 0              # tries failed in a row (an event says so once, and when the link is back)
         self.refreshed = 0
+        self.conn, self.conn_to = None, None   # the kept connection, and the (scheme, host:port) it is to
+        self.connections = 0       # opened so far (tests: one for many requests)
+
+    def close(self):
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except OSError:
+                pass
+        self.conn, self.conn_to = None, None
+
+    def _once(self, s, e):
+        """bytes s..e-1 in one request on the kept connection (a new one when there is none, or it is to another host,
+        or the kept one turned out closed before an answer), following redirects; HTTPStatus for any other answer"""
+        for _ in range(5):   # redirects
+            u = urllib.parse.urlsplit(self.url)
+            target = (u.path or '/') + ('?' + u.query if u.query else '')
+            for fresh in (False, True):
+                reused = self.conn is not None and self.conn_to == (u.scheme, u.netloc) and not fresh
+                if not reused:
+                    self.close()
+                    if u.scheme == 'https':
+                        self.conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=self.timeout, context=self.ctx)
+                    else:
+                        self.conn = http.client.HTTPConnection(u.hostname, u.port, timeout=self.timeout)
+                    self.conn_to = (u.scheme, u.netloc)
+                    self.connections += 1
+                try:
+                    self.conn.request('GET', target, headers=dict(self.headers, Range=f'bytes={s}-{e - 1}'))
+                    r = self.conn.getresponse()
+                    break
+                except (OSError, http.client.HTTPException):
+                    self.close()
+                    if not reused:
+                        raise
+            if r.status in (301, 302, 303, 307, 308) and r.getheader('Location'):
+                r.read()
+                if r.will_close:
+                    self.close()
+                self.url = urllib.parse.urljoin(self.url, r.getheader('Location'))
+                continue
+            if r.status != 206:
+                r.read()
+                self.close()
+                raise HTTPStatus(r.status)
+            out = bytearray()
+            try:
+                while len(out) < e - s:
+                    b = r.read(min(1 << 16, e - s - len(out)))
+                    if not b:
+                        raise OSError(f'short read at {s + len(out)} of {s}-{e}')
+                    out += b
+            except BaseException:
+                self.close()
+                raise
+            if r.will_close or r.read(1):   # (a longer body than asked: the connection cannot be reused)
+                self.close()
+            return bytes(out)
+        self.close()
+        raise OSError('too many redirects')
 
     def refresh(self):
         f = self.refresh_fn(self.fid)
@@ -264,23 +336,13 @@ class Source:
         """bytes s..e-1"""
         while True:
             try:
-                req = urllib.request.Request(self.url, headers=dict(self.headers, Range=f'bytes={s}-{e - 1}'))
-                with urllib.request.urlopen(req, timeout=self.timeout, context=self.ctx) as r:
-                    if r.status != 206:
-                        raise OSError(f'HTTP {r.status} to a Range request')
-                    out = bytearray()
-                    while len(out) < e - s:
-                        b = r.read(min(1 << 16, e - s - len(out)))
-                        if not b:
-                            raise OSError(f'short read at {s + len(out)} of {s}-{e}')
-                        out += b
+                out = self._once(s, e)
                 if self.down:
                     emit(ev='net', ok=True, tries=self.down)
                     self.down = 0
-                return bytes(out)
-            except urllib.error.HTTPError as x:
+                return out
+            except HTTPStatus as x:
                 why = f'HTTP {x.code}'
-                x.close()
                 if x.code in REFRESH_ON and self.refresh_fn:
                     try:
                         self.refresh()

@@ -213,6 +213,8 @@ Daemon → app:
   ytdec's first stats line): the frame check (`frameCheck`), which also logs `LAB frames:` lines when the picture
   stands while the sound plays on (under 75 % of the video's frame rate for a 2 s stats line: `starved`, nothing to
   decode yet; `late`, frames dropped behind the clock; `slow`), when it is back, and every 30 s of play a summary.
+  A watchdog kill also logs `LAB watchdog:` (`labVideoState`): ytdec's last stats line, the clock, the index (records,
+  pts range, keyframes, the first record) and `video.h264` / `.part` with the NAL types the first record starts with.
 
 LAB ONLY (branch `lab-ram`): for CarLink's Car log the service also writes two files in its runtime folder
 (`/run/<service>/`, RAM, 0644, gone when it stops), every 10 s while in use and once more when it goes idle:

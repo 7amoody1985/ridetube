@@ -1826,8 +1826,38 @@ Daemon.prototype.frameCheck = function (m) {
         fr.sum = null;
     }
 };
+// LAB: what ytdec had said and what its files held when the watchdog kills it (a picture that never came on the car,
+// 2026-11-20, resumed mid-video in RAM): ytdec's last stats line, the clock, the index (records, first and last pts,
+// keyframes, the first record), video.h264 / .part sizes and the NAL types the first record's bytes start with.
+Daemon.prototype.labVideoState = function () {
+    const c = this.cur, s = this.lastStats || {}, out = [];
+    out.push('ytdec decoded ' + s.decoded + ' shown ' + s.shown + ' dropped ' + s.dropped + ' pos ' + s.pos_ms + ' fps ' + s.fps + ' cpu ' + s.cpu_pct);
+    out.push('clock ' + this.elapsed + ', fetched to ' + this.fetchedMs + ', state ' + this.state + (this.paused ? ' paused' : '') + (this.buffering ? ' buffering' : ''));
+    if (!c || !c.dir) return out.join('; ');
+    try {
+        const idx = fs.readFileSync(path.join(c.dir, 'index.bin'));
+        const n = idx.length >= 20 ? idx.readUInt32LE(16) : 0;
+        const rec = (i) => ({ ms: idx.readUInt32LE(32 + i * 17), pos: idx.readUInt32LE(36 + i * 17) + idx.readUInt32LE(40 + i * 17) * 4294967296,
+            size: idx.readUInt32LE(44 + i * 17), key: idx[48 + i * 17] });
+        const have = Math.max(0, Math.min(n, Math.floor((idx.length - 32) / 17)));
+        let keys = 0;
+        for (let i = 0; i < have; i++) keys += idx[48 + i * 17] ? 1 : 0;
+        out.push('index ' + have + ' records' + (have ? ', pts ' + rec(0).ms + '..' + rec(have - 1).ms + ', ' + keys + ' keys, first ' + JSON.stringify(rec(0)) : ''));
+        const size = (f) => { try { return fs.statSync(path.join(c.dir, f)).size; } catch (e) { return null; } };
+        out.push('video.h264 ' + size('video.h264') + ', .part ' + size('video.h264.part'));
+        if (have) {
+            const f = size('video.h264') !== null ? 'video.h264' : 'video.h264.part', r = rec(0), b = Buffer.alloc(Math.min(r.size, 64));
+            const fd = fs.openSync(path.join(c.dir, f), 'r');
+            try { fs.readSync(fd, b, 0, b.length, r.pos); } finally { fs.closeSync(fd); }
+            const types = [];
+            for (let i = 0; i + 3 < b.length; i++) if (b[i] === 0 && b[i + 1] === 0 && b[i + 2] === 1) types.push(b[i + 3] & 31);
+            out.push('first record in ' + f + ': ' + b.slice(0, 12).toString('hex') + ', nal ' + types.join(','));
+        }
+    } catch (e) { out.push('files: ' + e.message); }
+    return out.join('; ');
+};
 // where a video's folder goes: RAM when there is one
-Daemon.prototype.media =function () { return this.ram || this.opts.cacheDir; };
+Daemon.prototype.media = function () { return this.ram || this.opts.cacheDir; };
 Daemon.prototype.rmTree = function (p) {
     let st;
     try { st = fs.lstatSync(p); } catch (e) { return; }
@@ -3012,6 +3042,7 @@ Daemon.prototype.onYtdecLine = function (child, l) {
             this.lastProgress = Date.now(); this.played = 0;
         }
         this.frameCheck(m);   // LAB
+        this.lastStats = m;   // LAB: the watchdog's log line
     } else if (m.ev === 'ready') {
         this.lastProgress = Date.now(); this.played = 0;
     } else if (m.ev === 'eof') {
@@ -3048,6 +3079,7 @@ Daemon.prototype.watchdog = function () {
     // with no frame decoded, not of wall time (20/11: 3 plays went audio only on audio that ran ~3x slower than the clock)
     if (Date.now() - this.lastProgress < this.opts.watchdogMs || (this.played || 0) < this.opts.watchdogMs) return;
     this.log('watchdog: no decoded frames for ' + this.opts.watchdogMs + ' ms of audio');
+    this.log('LAB watchdog: ' + this.labVideoState());
     const c = this.child;
     try { c.kill('SIGKILL'); } catch (e) { /* gone */ }
     this.lastProgress = Date.now(); this.played = 0;

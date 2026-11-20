@@ -333,6 +333,7 @@ async function main() {
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(argv.length >= 2, 'restarted: ' + argv.length);
         assert.ok(logs.some((l) => /watchdog/.test(l)));
+        assert.ok(logs.some((l) => /^LAB watchdog: ytdec decoded .*; clock \d+, fetched to /.test(l)), 'LAB: the state at the kill');
         setMode('ok');
         c.send({ cmd: 'stop' });
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
@@ -870,6 +871,28 @@ async function main() {
             await wp8Stop();
             d.ram = null;
         }
+    });
+
+    await t('LAB watchdog line: ytdec\'s last stats, the index (records, pts, keys, the first record) and the video files', async () => {
+        const dir = path.join(tmp, 'labvs'), idx = Buffer.alloc(32 + 3 * 17);
+        mkdirp(dir);
+        idx.write('MGYI', 0);
+        idx.writeUInt32LE(3, 16);
+        [[196630, 0, 10, 1], [196663, 10, 4, 0], [196696, 14, 4, 0]].forEach((r, i) => {
+            idx.writeUInt32LE(r[0], 32 + i * 17); idx.writeUInt32LE(r[1], 36 + i * 17); idx.writeUInt32LE(0, 40 + i * 17);
+            idx.writeUInt32LE(r[2], 44 + i * 17); idx[48 + i * 17] = r[3];
+        });
+        fs.writeFileSync(path.join(dir, 'index.bin'), idx);
+        fs.writeFileSync(path.join(dir, 'video.h264.part'), Buffer.from('0000000167000000016865aa0000014100000141', 'hex'));
+        const f = { cur: { dir: dir }, lastStats: { decoded: 7, shown: 1, dropped: 0, pos_ms: 199793, fps: 0, cpu_pct: 3 },
+            elapsed: 199900, fetchedMs: 260000, state: 'playing' };
+        const s = ytdjs.Daemon.prototype.labVideoState.call(f);
+        assert.strictEqual(s, 'ytdec decoded 7 shown 1 dropped 0 pos 199793 fps 0 cpu 3; clock 199900, fetched to 260000, state playing; ' +
+            'index 3 records, pts 196630..196696, 1 keys, first {"ms":196630,"pos":0,"size":10,"key":1}; video.h264 null, .part 20; ' +
+            'first record in video.h264.part: 00000001670000000168, nal 7,8');
+        fs.writeFileSync(path.join(dir, 'index.bin'), 'x');   // anything broken: said, not thrown
+        assert.ok(/; index 0 records; video.h264 null, .part 20$/.test(ytdjs.Daemon.prototype.labVideoState.call(f)));
+        rmrf(dir);
     });
 
     await t('LAB frames: the picture standing while the clock runs is logged with why, counted, and in stream_stats', async () => {

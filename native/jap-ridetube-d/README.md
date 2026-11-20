@@ -64,6 +64,45 @@ Every internet request runs as the daemon's fetch uid (below, "Internet: the fet
   resamples to 320x180 if needed and writes 230400 bytes RGBA on stdout. DNS: the uplink lease's
   servers (`--lease`, default `/run/mgu-uplink/lease.json`), else the system resolver.
 
+## Videos in RAM (WP8)
+
+The playing video is held in RAM, not written whole to the head unit's flash (`/var/opt`, about 1.1 GB an hour of
+720p before). By [@7amoody1985](https://github.com/7amoody1985) ([#14](https://github.com/JustAnotherPU/ridetube/issues/14)).
+
+- The unit mounts a tmpfs capped at 256 MB at `/run/jap-ridetube-media` (`ExecStartPre`; unmounted at stop, kept when
+  busy). Without it ytd.js takes `/dev/shm/jap-ridetube-media`; without either, the cache on flash as before (the log
+  says which: `videos in RAM: ...` / `videos on flash: ...`). A video's folder there is 0711 as in the cache, and is
+  never played from as a cache (its video is punched): a play always fetches.
+- `ytfetch.py fetch --stream 120000,45000 --spill-dir <cache>/<id> [--start-ms N]`: the video's https format is read
+  from its fragment index (the `sidx` after `moov`; YouTube's every fragment starts with a keyframe), from the fragment
+  holding `--start-ms` on, in Range requests of 2 MiB, each only while less than 120 s is fetched past playback (ytd.js
+  writes `pos <ms>` on the fetcher's stdin, at most once a second, at once for a seek). `video.h264` is hole-punched
+  (`fallocate PUNCH_HOLE`) up to the last keyframe 45 s behind it. ytdec is unchanged: it preads each access unit at its
+  own offset and every keyframe carries its SPS/PPS. The index keeps the times a fetch from 0 would give (the first
+  fragment's time base). The audio is fetched whole, as before (a few MB). A video that cannot stream so (no ranges, no
+  size, no `sidx`, more RAM than the tmpfs has, no hole punching) goes whole into the spill folder on flash, as before
+  WP8 (`{"ev":"spill","why"}`; `stored: flash`).
+- The link: each Range request is tried again for as long as ytd.js feeds the window (1, 2, 4, 8 s, then every 15 s),
+  with `{"ev":"net","ok":false}` once and `{"ev":"net","ok":true,"tries"}` when it is back; a 403/404/410 (the stream URL
+  expired after ~6 h, or moved) looks the video up again for the same format and size. Meanwhile `buffering` is true
+  whenever playback is past what is fetched, with or without a fetcher running.
+- Restream (`--start-ms N --video-only --info <dir>/stream-info.json`, the first fetch's lookup): the video again from
+  the fragment holding N, into the same folder (a fresh `video.h264`/`index.bin`; ytdec again once its index starts, as
+  for `resumeFetch`), while the sound plays on from the whole `audio.m4a`. For: a seek before what RAM surely holds or
+  more than 30 s past what is fetched; playback 30 s past what is fetched (a dropped link: the video from there, not the
+  gap; at most every 10 s); a fetcher that ended early (after a wait, 5 times a video at most); a quality change and a
+  resume point (the first fetch starts there). What RAM surely holds is computed by ytd.js, not taken from the
+  fetcher's `trim` events: the fetcher punches only below the furthest `pos` it was told minus 45 s, so a seek above
+  that bound (plus 2 s) never lands in a punched part, whenever the `trim` event arrives.
+- Not covered: a seek in the first seconds of a play, before `audio.m4a` is whole, moves the window only (a restream
+  would stop the fetch that writes the audio); nothing is punched that early.
+- RAM while a 720p video plays: the 165 s window (about 50 MB at 2.5 Mbit/s) and its audio (about 1 MB a minute, twice
+  while it is made flat). A video's plan that does not fit the tmpfs (very long ones, about 90 minutes and up) spills.
+- Checked against YouTube with `test/live_stream.py`: the check video streamed with at most 11 MB in RAM (26.4 MB
+  whole), the index, the audio and every byte past the punched part identical to a whole fetch; a restream from 100 s
+  started at fragment 18 (96.3 s), took 1 s, fetched 14.4 of 26.4 MB, and matched the whole fetch frame for frame and
+  byte for byte from there.
+
 ## Updating yt-dlp
 
 `ytdlp.pyz` is built from the official yt-dlp zipapp of a pinned GitHub release
@@ -117,7 +156,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 
 | cmd | |
 |---|---|
-| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps, clock?}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`, `ytdlp`. A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
+| `{"cmd":"hello","app":"0.4.0","lang":"ru","region":"RU"}` | → `hello` `{service, caps, clock?}`. `lang` (`^[a-z]{2}$`) and `region` (`^[A-Z]{2}$`) are optional; one that does not match is dropped (logged), never refused. Both hold for this connection only, kept for the `hl` / `gl` of its feed, search and related requests. `caps` lists only what this build really answers, from the frozen names `health`, `related`, `hist`, `ytdlp`, `remote`, `proxy`, `stream`; this build: `related`, `hist`, `health`, `ytdlp`, and `stream` where the videos go to RAM (below, "Videos in RAM"). A service older than 0.4.0 answers `error` `unknown cmd hello`: the app reads that as no caps |
 | `{"cmd":"status"}` | → `state` (and `time` when known) |
 | `{"cmd":"search","q":".."}` | → `results` (InnerTube), or `error` `empty search` / `search offline` |
 | `{"cmd":"thumb","id":".."}` | → `thumb` (cache `thumb.rgba` first, else `thumb.js` on the car; nothing if neither works, or if the length is neither 57600 nor 230400) |
@@ -155,8 +194,8 @@ Daemon → app:
   the driver.
 - `{"ev":"clock","clock":"2026-10-13"|null}`: the clock went wrong, or right again (`null`), after `hello`. Checked at
   each fetch, lookup, request and health check.
-- `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`; later (not yet
-  implemented, cap `stream`) adds `"stored":"ram|flash"`: where the playing video is held.
+- `{"ev":"state","state":"idle|preparing|playing|paused|ended|error","pct","id","title","buffering"}`; with cap
+  `stream`, `"stored":"ram|flash"` too while a video is loaded: where it is held (below, "Videos in RAM").
 - `{"ev":"time","elapsed","total"}` (ms, ≤ 4/s).
 - `{"ev":"results","q","items":[item]}` (`meta: ["12K views"]` when there is a view count).
 - `{"ev":"thumb","id","w","h","rgba":"<base64 w*h*4 bytes>"}` (320x180; 160x90 from caches older than 0.1.6; the size comes
@@ -393,6 +432,8 @@ JSON block of the page that its script reads. The trust boundaries:
     node test/test_ytd.js           # fake someip, fake ytdec, fake fetcher, fake youtube.com, fake nft (the phone remote)
     node test/test_thumb.js         # Node 22+: ffmpeg-made JPEGs (baseline, resampled, progressive via jpegtran); online part skipped offline
     python3.12 -I test/test_ytfetch.py   # ffmpeg fixtures, local Range server (head MP4, ranged == one stream); online part skipped offline
+    python3 -I test/test_stream.py       # WP8: window, retries, sidx, a demux from a fragment, punching, the stream-or-spill plan
+    python3 -I test/live_stream.py $PWD/ytfetch.py $PWD/build/ytdlp.pyz   # WP8, online: streamed and restreamed == a whole fetch
     MGU_STORE=... ./build.sh [path/to/ytdec]   # → dist/jap-ridetube-d@<version>.tgz (default ../ytdec/build/target/ytdec)
 
 `build.sh`: checks ytdec is an x86-64 ELF, runs `tools/build_pyz.sh` (→ `build/ytdlp.pyz`),

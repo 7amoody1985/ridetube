@@ -5,7 +5,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-const { Daemon, Audio, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, pickUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = require('../ytd.js');
+const ytdjs = require('../ytd.js');
+const { Audio, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, pickUid, fetchRequest, isPlayable, VERSION, CAPS, REPORT_URL, BUILT, clockBehind } = ytdjs;
+// WP8: every daemon here keeps its videos in the cache folder (as before the RAM folder), unless the test says ramDir
+// (a host's /dev/shm would otherwise be taken as the car's tmpfs)
+function Daemon(o) { return new ytdjs.Daemon(Object.assign({ ramDir: null, ramFallback: null }, o)); }
 
 // (Node 8, as on the car: no mkdirSync {recursive}, no rmSync)
 const mkdirp = (d) => { if (!fs.existsSync(d)) { mkdirp(path.dirname(d)); fs.mkdirSync(d); } };
@@ -437,6 +441,271 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
         assert.ok(!alive(pid), 'gone by the idle state');
         assert.ok(d.fetcher === null && d.preparing === null);
+    });
+
+    // ---- WP8: the playing video streams through RAM (d.ram set for these cases, reset by the last one)
+    const ramRoot = path.join(tmp, 'ram-media');
+    mkdirp(ramRoot);
+    d.ram = ramRoot;
+    const tickAt = (ms) => subs.currentItemTime({ elapsed: ms, total: 600000 });
+    const posLines = () => { try { return fs.readFileSync(ctl + '.stdin', 'utf8').split('\n').filter(Boolean); } catch (e) { return []; } };
+    const argAfter = (argv, n) => argv[argv.indexOf(n) + 1];
+    const newFetch = async (oldPid) => {   // the next fetcher's log (a fresh pid)
+        await waitUntil(() => { try { return fetchLog().pid !== oldPid; } catch (e) { return false; } }, 4000);
+        return fetchLog();
+    };
+    const wp8Stop = async () => {
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+    };
+    const ramPlay = async (id) => {
+        fs.writeFileSync(ctl, '');
+        d.posFedAt = 0;
+        await fetchPlay(id);
+        return fetchLog();
+    };
+
+    await t('WP8: chownFetch takes a direct child of the RAM folder (the fetch uid owns it), still nothing deeper or elsewhere', async () => {
+        d.chownFetch(path.join(d.ram, 'WP8CHOWN001'));
+        assert.throws(() => d.chownFetch(path.join(d.ram, 'WP8CHOWN001', 'deeper')), /outside the cache/);
+        assert.throws(() => d.chownFetch(path.join(tmp, 'elsewhere')), /outside the cache/);
+    });
+
+    await t('WP8: in RAM the fetch streams (--stream, --spill-dir on flash), the folder is in RAM, the spill folder goes at the stream event', async () => {
+        const id = 'WP8RAMPLAY1', dir = path.join(ramRoot, id);
+        const l = await ramPlay(id);
+        assert.strictEqual(argAfter(l.argv, '--stream'), '120000,45000');
+        assert.strictEqual(argAfter(l.argv, '--spill-dir'), path.join(cache, id));
+        assert.strictEqual(l.argv[l.argv.length - 1], dir);
+        assert.strictEqual(path.dirname(l.argv[l.argv.length - 1]), d.ram);
+        assert.ok(l.argv.indexOf('--start-ms') < 0 && l.argv.indexOf('--video-only') < 0, 'a first fetch: from the start, audio too');
+        assert.ok(fs.statSync(dir).isDirectory());
+        assert.ok(!fs.existsSync(path.join(cache, id)), 'the spill folder is removed once it streams');
+        assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(dir, 'audio.m4a'));
+        assert.strictEqual(d.cur.stream, true);
+        const pl = c.evs.filter((x) => x.ev === 'state' && x.state === 'playing').pop();
+        assert.strictEqual(pl.stored, 'ram', 'a streaming play says so');
+        await wp8Stop();
+    });
+
+    await t('WP8: the position goes to the fetcher once a second, at once for a seek inside RAM (no new fetch)', async () => {
+        await ramPlay('WP8RAMPOS01');
+        const pid = fetchLog().pid;
+        tickAt(1000);
+        await waitUntil(() => posLines().length === 1);
+        tickAt(1300);
+        await sleep(200);
+        assert.deepStrictEqual(posLines(), ['pos 1000'], 'two ticks within a second: one line');
+        c.send({ cmd: 'seek', ms: 14000 });
+        await waitUntil(() => posLines().length === 2);
+        assert.deepStrictEqual(posLines(), ['pos 1000', 'pos 14000']);
+        await sleep(200);
+        assert.strictEqual(fetchLog().pid, pid, 'no new fetcher');
+        assert.ok(!d.cur.restreams, 'no restream');
+        await wp8Stop();
+    });
+
+    await t('WP8: a seek back outside RAM restreams from there: video only, audio kept, the old video files unlinked (no trim needed)', async () => {
+        const id = 'WP8SEEKBACK', dir = path.join(ramRoot, id);
+        await ramPlay(id);
+        const old = fetchLog().pid;
+        assert.strictEqual(d.cur.dir, dir);
+        d.fetchedMs = 120000;                       // as if the fetch had gone on (the fake stops at 12 s)
+        tickAt(100000);
+        await waitUntil(() => posLines().indexOf('pos 100000') >= 0);
+        assert.strictEqual(d.cur.fedMax, 100000);
+        assert.ok(!d.cur.restreams, 'ticks only');
+        // the old fetch's files: a marker video.h264, and hard links that keep the old index.bin / .part inodes
+        fs.writeFileSync(path.join(dir, 'video.h264'), 'OLD');
+        fs.writeFileSync(path.join(dir, 'index.bin'), 'OLDINDEX');
+        fs.writeFileSync(path.join(dir, 'video.h264.part'), 'OLDPART');
+        fs.linkSync(path.join(dir, 'index.bin'), path.join(tmp, 'wp8-old-index'));
+        fs.linkSync(path.join(dir, 'video.h264.part'), path.join(tmp, 'wp8-old-part'));
+        c.send({ cmd: 'seek', ms: 20000 });
+        const l = await newFetch(old);
+        assert.ok(!alive(old), 'the old fetcher is gone');
+        assert.ok(l.argv.indexOf('--video-only') >= 0);
+        assert.strictEqual(argAfter(l.argv, '--start-ms'), '20000');
+        assert.strictEqual(argAfter(l.argv, '--info'), path.join(dir, 'stream-info.json'));
+        assert.ok(l.argv.indexOf('--spill-dir') < 0, 'no spill folder on a restream');
+        assert.strictEqual(argAfter(l.argv, '--stream'), '120000,45000');
+        assert.strictEqual(l.argv[l.argv.length - 1], dir);
+        assert.ok(fs.existsSync(path.join(dir, 'audio.m4a')), 'the audio is kept');
+        assert.ok(!fs.existsSync(path.join(dir, 'video.h264')), 'video.h264 unlinked');
+        assert.strictEqual(fs.readFileSync(path.join(tmp, 'wp8-old-index'), 'utf8'), 'OLDINDEX', 'index.bin was unlinked, not written over');
+        assert.strictEqual(fs.readFileSync(path.join(tmp, 'wp8-old-part'), 'utf8'), 'OLDPART', 'video.h264.part was unlinked, not written over');
+        assert.strictEqual(d.cur.restreams, 1);
+        await waitUntil(() => d.fetchedMs === 32000);   // the new fetch's own events: from 20000
+        await wp8Stop();
+        fs.unlinkSync(path.join(tmp, 'wp8-old-index'));
+        fs.unlinkSync(path.join(tmp, 'wp8-old-part'));
+    });
+
+    await t('WP8: a seek forwards past what is fetched + streamJumpMs restreams there', async () => {
+        const id = 'WP8SEEKFWD1';
+        await ramPlay(id);
+        const old = fetchLog().pid;
+        assert.strictEqual(d.fetchedMs, 12000);
+        c.send({ cmd: 'seek', ms: 43000 });         // 12000 + 30000 + 1000
+        const l = await newFetch(old);
+        assert.ok(!alive(old));
+        assert.ok(l.argv.indexOf('--video-only') >= 0);
+        assert.strictEqual(argAfter(l.argv, '--start-ms'), '43000');
+        assert.strictEqual(argAfter(l.argv, '--info'), path.join(ramRoot, id, 'stream-info.json'));
+        assert.ok(l.argv.indexOf('--spill-dir') < 0);
+        assert.strictEqual(d.cur.restreams, 1);
+        await wp8Stop();
+    });
+
+    await t('WP8: catch-up: a clock past fetched + streamJumpMs restreams at the clock, at most every restreamMs', async () => {
+        const was = d.opts.restreamMs;
+        try {
+            const id = 'WP8CATCHUP1';
+            await ramPlay(id);
+            const p0 = fetchLog().pid;
+            tickAt(50000);                              // past 12000 + 30000
+            const l1 = await newFetch(p0);
+            assert.strictEqual(argAfter(l1.argv, '--start-ms'), '50000');
+            assert.ok(l1.argv.indexOf('--video-only') >= 0);
+            assert.strictEqual(d.cur.restreams, 1);
+            await waitUntil(() => d.fetchedMs === 62000);
+            d.posFedAt = 0;
+            tickAt(100000);                             // behind again, but a restream began just now: not again
+            await sleep(400);
+            assert.strictEqual(fetchLog().pid, l1.pid, 'no second restream within restreamMs');
+            assert.strictEqual(d.cur.restreams, 1);
+            d.opts.restreamMs = 100;                    // long enough passed
+            tickAt(101000);
+            const l2 = await newFetch(l1.pid);
+            assert.strictEqual(argAfter(l2.argv, '--start-ms'), '101000');
+            assert.strictEqual(d.cur.restreams, 2);
+        } finally {
+            d.opts.restreamMs = was;
+        }
+        await wp8Stop();
+    });
+
+    await t('WP8: the fetcher ends early while streaming: the video again from where it plays (not from zero), buffering meanwhile', async () => {
+        const was = d.opts.fetchRetryMs;
+        try {
+            d.opts.fetchRetryMs = [800, 800];           // a window to see the gap in (the test daemon has none)
+            const id = 'WP8DIED0001';
+            await ramPlay(id);
+            const old = fetchLog().pid;
+            tickAt(8000);                               // 9000 <= 12000 fetched: not buffering
+            assert.strictEqual(d.isBuffering(), false);
+            fs.writeFileSync(ctl, 'error');
+            await waitUntil(() => logs.some((m) => /WP8DIED0001: HTTP 403 - the video again in 800 ms \(1 of 5\)/.test(m)), 4000);
+            fs.writeFileSync(ctl, '');                  // the next fetcher lives
+            assert.strictEqual(d.fetcher, null);
+            c.clear();
+            tickAt(20000);                              // the clock is past what was fetched, and nothing fetches
+            const b = await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === true);
+            assert.strictEqual(b.buffering, true);
+            assert.strictEqual(d.isBuffering(), true);
+            const l = await newFetch(old);
+            assert.ok(l.argv.indexOf('--video-only') >= 0);
+            const at = Number(argAfter(l.argv, '--start-ms'));
+            assert.ok(at >= 20000 && at < 23000, 'from where it plays: ' + at);
+            assert.strictEqual(d.cur.restreamDied, 1);
+            assert.ok(!d.cur.fetchAgain, 'not resumeFetch\'s refetch from zero');
+            assert.strictEqual(c.evs.filter((x) => x.ev === 'error').length, 0, 'no "video incomplete"');
+            assert.strictEqual(d.state, 'playing');
+            await waitUntil(() => d.fetchedMs === at + 12000);
+            await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === false);
+        } finally {
+            d.opts.fetchRetryMs = was;
+        }
+        await wp8Stop();
+    });
+
+    await t('WP8: a video that cannot stream spills: the whole video on flash, the RAM folder gone, stream off', async () => {
+        const id = 'WP8SPILL001';
+        fs.writeFileSync(ctl, 'spill');
+        d.posFedAt = 0;
+        const spl = await fetchPlay(id);
+        assert.strictEqual(spl.stored, 'flash');
+        assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(cache, id, 'audio.m4a'));
+        assert.ok(!fs.existsSync(path.join(ramRoot, id)), 'the RAM folder is gone');
+        assert.strictEqual(d.cur.stream, false);
+        assert.strictEqual(d.cur.dir, path.join(cache, id));
+        assert.ok(fs.existsSync(path.join(cache, id, 'audio.m4a')));
+        tickAt(3000);                                   // no position feed for a whole fetch
+        await sleep(150);
+        assert.deepStrictEqual(posLines(), []);
+        await wp8Stop();
+        fs.writeFileSync(ctl, '');
+    });
+
+    await t('WP8: a quality change while streaming restarts the fetch at the position, at the new height', async () => {
+        const was = d.opts.streamJumpMs;
+        try {
+            d.opts.streamJumpMs = 120000;               // the fake fetches 12 s: no catch-up at 50 s
+            const id = 'WP8QUALITY1';
+            await ramPlay(id);
+            tickAt(50000);
+            assert.strictEqual(d.elapsed, 50000);
+            const old = fetchLog().pid;
+            c.send({ cmd: 'quality', quality: '480' });
+            const l = await newFetch(old);
+            await waitUntil(() => d.state === 'playing' && d.fetchedMs >= 62000, 4000);
+            assert.strictEqual(argAfter(l.argv, '--height'), '480');
+            assert.strictEqual(argAfter(l.argv, '--start-ms'), '50000');
+            assert.strictEqual(argAfter(l.argv, '--stream'), '120000,45000');
+            assert.strictEqual(l.argv[l.argv.length - 1], path.join(ramRoot, id));
+            assert.strictEqual(d.cur.stream, true);
+        } finally {
+            d.opts.streamJumpMs = was;
+        }
+        await wp8Stop();
+    });
+
+    await t('WP8: pickRam takes a folder on a tmpfs (ramDir, else ramFallback), never another one when ramCheck is on', async () => {
+        const mounts = fs.readFileSync('/proc/mounts', 'utf8');
+        const fsType = (p) => {   // the longest mount point holding p
+            let best = null;
+            mounts.split('\n').forEach((l) => {
+                const f = l.split(' ');
+                if (f.length < 3) return;
+                const m = f[1].replace(/\\040/g, ' ');
+                if ((p === m || p.indexOf(m === '/' ? '/' : m + '/') === 0) && (!best || m.length > best.m.length)) best = { m: m, type: f[2] };
+            });
+            return best ? best.type : null;
+        };
+        const mk = (o) => Daemon(Object.assign({ someip: someip, srcGen: srcGen, cacheDir: cache, logDir: tmp, sock: path.join(tmp, 'pick.sock'), stateDir: stateDir,
+            noSetuid: true, log: () => undefined, ramCheck: true }, o));
+        const made = [];
+        try {
+            const shm = fsType('/dev/shm') === 'tmpfs' && fs.existsSync('/dev/shm') ? fs.mkdtempSync('/dev/shm/ytd-ram-') : null;
+            if (shm) made.push(shm);
+            const flash = fsType(tmp) === 'tmpfs' ? null : path.join(tmp, 'notram');
+            if (shm) {
+                const r = path.join(shm, 'media', 'sub');
+                assert.strictEqual(mk({ ramDir: r, ramFallback: null }).pickRam(), r);
+                assert.ok(fs.statSync(r).isDirectory());
+                assert.strictEqual(fs.statSync(r).mode & 0o777, 0o711);
+                // no ramDir: the fallback
+                assert.strictEqual(mk({ ramDir: null, ramFallback: path.join(shm, 'fb') }).pickRam(), path.join(shm, 'fb'));
+            }
+            if (flash) {
+                assert.strictEqual(mk({ ramDir: flash, ramFallback: null }).pickRam(), null, 'not a tmpfs: none');
+                assert.ok(!fs.existsSync(flash), 'and not created');
+                if (shm) assert.strictEqual(mk({ ramDir: flash, ramFallback: path.join(shm, 'fb2') }).pickRam(), path.join(shm, 'fb2'), 'the fallback when ramDir is not on a tmpfs');
+                assert.strictEqual(mk({ ramDir: flash, ramFallback: null, ramCheck: false }).pickRam(), flash, 'ramCheck off: any folder');
+                made.push(flash);
+            }
+            assert.strictEqual(mk({ ramDir: null, ramFallback: null }).pickRam(), null);
+            // someone's symlink where the folder goes (/dev/shm is anyone's): refused, never followed or chmodded
+            const target = path.join(tmp, 'ram-target'), link = path.join(tmp, 'ram-link');
+            fs.mkdirSync(target, 0o755);
+            fs.symlinkSync(target, link);
+            made.push(link, target);
+            assert.strictEqual(mk({ ramDir: link, ramFallback: null, ramCheck: false }).pickRam(), null, 'a symlink: not used');
+            assert.strictEqual(fs.statSync(target).mode & 0o777, 0o755, 'its target left as it was');
+        } finally {
+            made.forEach(rmrf);
+            d.ram = null;
+        }
     });
 
     await t('speed: a warm spare takes the prefetch (stream lookup); the next spare takes the play, with --info', async () => {

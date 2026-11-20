@@ -88,6 +88,18 @@ function defaults() {
         thumbMax: 150,
         ytTimeoutMs: 10000,
         keep: 0,             // played videos kept in the cache (0: deleted once played; nothing is kept for offline)
+        // WP8: the playing video in RAM, not on flash. The unit mounts a capped tmpfs at ramDir; without it a folder on
+        // /dev/shm (a tmpfs too); without either, the cache on flash as before. ytfetch.py fetches the video at most
+        // streamAheadMs past playback and punches it streamBehindMs behind; a seek outside what RAM holds, or playback
+        // streamJumpMs past what is fetched (a dropped link), starts the video's fetch again at that point.
+        ramDir: env.MGU_YT_RAM || '/run/jap-ridetube-media',
+        ramFallback: '/dev/shm/jap-ridetube-media',
+        ramCheck: true,      // the folder must be on a tmpfs (/proc/mounts); tests turn it off
+        streamAheadMs: 120000,
+        streamBehindMs: 45000,
+        streamJumpMs: 30000,
+        restreamMs: 10000,   // a catch-up restart at most this often
+        ramBudget: 0,        // bytes a stream may plan for (0: what the tmpfs has free)
         watchdogMs: 5000,
         tickMs: 5000,
         availWaitMs: 5000,
@@ -1314,6 +1326,7 @@ function Daemon(o) {
     this.ticking = false;
     this.preparing = null; // id the fetcher is writing
     this.fetcher = null;   // ytfetch.py, as the fetch uid
+    this.ram = null;       // WP8: the RAM folder (start: pickRam), else null: the cache on flash
     this.fetchedMs = Infinity; // video fetched up to there (pts ms)
     this.ytdecKnew = Infinity; // fetchedMs when the running ytdec started (its index then)
     this.videoBehind = false; // its last seek went past the video fetched: a new ytdec at the clock once it is there
@@ -1376,6 +1389,18 @@ Daemon.prototype.certTime = function () {
     return c;
 };
 // a helper (ytfetch.py, thumb.js) as the fetch uid, as fetchRequest spawns its child
+// WP8: the streaming fetcher's window follows playback, "pos <ms>" on its stdin at most once a second (at once for a seek).
+// fedMax: the furthest point said since this fetch began; ytfetch.py punches only below fedMax - streamBehindMs.
+Daemon.prototype.feedPos = function (ms, now) {
+    const f = this.fetcher, c = this.cur;
+    if (!f || !f.stdin || !c || !c.stream) return;
+    const t = Date.now();
+    if (!now && t - (this.posFedAt || 0) < 1000) return;
+    this.posFedAt = t;
+    ms = Math.max(0, Math.floor(ms));
+    c.fedMax = Math.max(c.fedMax || 0, ms);
+    try { f.stdin.write('pos ' + ms + '\n'); } catch (e) { /* it ended */ }
+};
 Daemon.prototype.spawnFetchUid = function (cmd, args, stdin) {
     const ids = this.opts.noSetuid ? {} : { uid: this.uid(), gid: this.uid() };
     return cp.spawn(cmd[0], cmd.slice(1).concat(args), Object.assign(ids, { cwd: '/', env: {}, stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] }));
@@ -1496,11 +1521,12 @@ Daemon.prototype.spawnJob = function (job) {
     const s = this.spare;
     this.spare = null;
     if (s && s.child.exitCode === null && s.child.signalCode === null) { // still loading: serve reads the job once warm
-        s.child.stdin.end(JSON.stringify(job) + '\n');
+        if (job.indexOf('--stream') >= 0) s.child.stdin.write(JSON.stringify(job) + '\n');   // (WP8: it reads "pos" lines after it)
+        else s.child.stdin.end(JSON.stringify(job) + '\n');
         return s.child;
     }
     if (s) { try { s.child.kill('SIGKILL'); } catch (e) { /* gone */ } }
-    return this.spawnFetchUid(this.opts.fetcher, job);
+    return this.spawnFetchUid(this.opts.fetcher, job, job.indexOf('--stream') >= 0);
 };
 // from tick: a spare while the app is in use and no fetch is starting; none past warmMs
 Daemon.prototype.keepWarm = function () {
@@ -1622,13 +1648,48 @@ Daemon.prototype.prefetch = function (id) {
 };
 // hands a folder root just made to the fetch uid. chownSync follows symlinks, so only a direct child of root's
 // cache/ (nobody else can swap it); never a path below a fetch-owned folder (a symlink there: any file to the fetch uid)
+// (WP8: or a direct child of the RAM folder, which pickRam checked is root's own real folder, as checkCacheDir does cache/)
 Daemon.prototype.chownFetch = function (p) {
-    if (path.dirname(path.resolve(p)) !== path.resolve(this.opts.cacheDir)) throw new Error('chownFetch outside the cache: ' + p);
+    const up = path.dirname(path.resolve(p));
+    if (up !== path.resolve(this.opts.cacheDir) && !(this.ram && up === path.resolve(this.ram))) throw new Error('chownFetch outside the cache: ' + p);
     if (!this.opts.noSetuid) fs.chownSync(p, this.uid(), this.uid());
 };
 // a folder under cache/: a fetch-uid tree is emptied by its owner (rm -rf runs as that uid, so a symlink in it
 // reaches nothing that uid could not already touch), then root removes the empty folder (rmdir: never follows one).
 // A root-owned tree (or a file) as before. Throws if it stays (logged by the callers), never falls back to root's walk.
+// ---- WP8: the playing video in RAM. tmpfsOf: the mount dir is on, if a tmpfs (/proc/mounts' text); pickRam: the first of
+// ramDir, ramFallback on a tmpfs, made 0711 as the cache (the media engine passes through to a video's folder)
+function tmpfsOf(dir, mounts) {
+    let best = null;
+    String(mounts || '').split('\n').forEach((l) => {
+        const f = l.split(' ');
+        if (f.length < 4) return;
+        const mnt = f[1].replace(/\\040/g, ' ');
+        if ((dir === mnt || dir.indexOf(mnt === '/' ? '/' : mnt + '/') === 0) && (!best || mnt.length > best.mnt.length)) best = { mnt: mnt, type: f[2] };
+    });
+    return best && best.type === 'tmpfs' ? best : null;
+}
+Daemon.prototype.pickRam = function () {
+    const o = this.opts;
+    let mounts = '';
+    try { mounts = fs.readFileSync('/proc/mounts', 'utf8'); } catch (e) { /* not Linux: none unless ramCheck is off */ }
+    for (const d of [o.ramDir, o.ramFallback]) {
+        if (!d || (o.ramCheck && !tmpfsOf(d, mounts))) continue;
+        try {
+            mkdirp(d);
+            // root's own real folder, as cache/ (checkCacheDir): /dev/shm is anyone's, a folder or a symlink put there
+            // first would point chownFetch's and every root step's video folders elsewhere
+            const st = fs.lstatSync(d);
+            if (!st.isDirectory()) throw new Error('not a folder (a symlink?)');
+            if (st.uid !== process.getuid()) throw new Error('owned by uid ' + st.uid);
+            fs.chmodSync(d, 0o711);
+            return d;
+        } catch (e) { this.log('ram dir ' + d + ': ' + e.message + ': not used'); }
+    }
+    return null;
+};
+// where a video's folder goes: RAM when there is one
+Daemon.prototype.media = function () { return this.ram || this.opts.cacheDir; };
 Daemon.prototype.rmTree = function (p) {
     let st;
     try { st = fs.lstatSync(p); } catch (e) { return; }
@@ -1662,6 +1723,8 @@ Daemon.prototype.appRanges = function () {
 Daemon.prototype.start = async function () {
     this.checkCacheDir();
     try { mkdirp(this.opts.logDir); } catch (e) { this.log('log dir: ' + e.message); }
+    this.ram = this.pickRam();
+    this.log(this.ram ? 'videos in RAM: ' + this.ram : 'videos on flash: no tmpfs for ' + this.opts.ramDir);
     this.listen();
     this.rc.cleanup();   // a phone remote rule an earlier run left (a crash): removed; nothing listens until it is turned on
     // the uplink learns our fetch uid at start (its 5 s rescan), before anyone signs in
@@ -1903,7 +1966,9 @@ Daemon.prototype.hello = function (m) {
     const clk = clockBehind((this.opts.now || Date.now)());
     this.clockSaid = clk;
     if (clk) this.log('clock wrong (' + clk + '): certificate dates not checked');
-    return this.emit(Object.assign({ ev: 'hello', service: VERSION, caps: CAPS.slice() }, clk ? { clock: clk } : {}));
+    // WP8: `stream` only where the videos go to RAM (a car without a tmpfs keeps them on flash, as before)
+    const caps = CAPS.slice().concat(this.ram ? ['stream'] : []);
+    return this.emit(Object.assign({ ev: 'hello', service: VERSION, caps: caps }, clk ? { clock: clk } : {}));
 };
 // commands of the frozen protocol whose package has not landed: each answers this until its package replaces the body
 Daemon.prototype.notImplemented = function (cmd) { return this.emit({ ev: 'error', cmd: cmd, msg: 'not implemented ' + cmd }); };
@@ -1952,11 +2017,13 @@ Daemon.prototype.sendState = function (pct) {
     this.buffering = this.isBuffering();
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
         id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering };
+    if (this.ram && this.cur) o.stored = this.cur.stream ? 'ram' : 'flash';   // WP8 (cap `stream`): where the playing video is held
     this.emit(o);
 };
 // playing ahead of the video fetched so far, while the fetcher still writes it
 Daemon.prototype.isBuffering = function () {
-    return this.state === 'playing' && (this.headWait || (!!this.fetcher && this.elapsed + 1000 > this.fetchedMs));
+    const short = !!this.fetcher || !!(this.cur && this.cur.stream);   // (WP8: fetched again soon: not playing on)
+    return this.state === 'playing' && (this.headWait || (short && this.elapsed + 1000 > this.fetchedMs));
 };
 Daemon.prototype.checkBuffering = function () {
     if (this.isBuffering() !== this.buffering) this.sendState();
@@ -1974,6 +2041,7 @@ Daemon.prototype.prune = function () {
     const protect = [];
     if (this.cur) protect.push(this.cur.id);
     if (this.preparing) protect.push(this.preparing);
+    if (this.ram) pruneCache(this.ram, 0, protect, this.log, (p) => this.rmTree(p));   // nothing kept in RAM past its play
     return pruneCache(this.opts.cacheDir, this.opts.keep, protect, this.log, (p) => this.rmTree(p));
 };
 // ---- send_logs {app}: the ring and ytdec.log's tail, redacted (redactLog), to the log relay as the fetch uid
@@ -2119,7 +2187,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, resto
     if (this.restart !== own) return undefined;   // stopped, or replaced, while the one before stopped
     if (own.fill !== undefined) fill = own.fill;
     const gen = ++this.gen;
-    const dir = path.join(this.opts.cacheDir, id);
+    const dir = path.join(this.media(), id);
     try { fs.chmodSync(dir, VIDEO_DIR_MODE); } catch (e) { /* not fetched yet: fetchVideo makes it */ }   // (0700 before 0.3.9)
     const meta0 = readMeta(dir, id);
     // the chapters too: meta.json is the fetch uid's (a symlink or a FIFO there is no meta, never followed or waited on)
@@ -2143,7 +2211,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, resto
     this.settle = null;
     this.fullReady = true;
     let headMs = null;
-    if (!isPlayable(dir)) {
+    if (this.ram || !isPlayable(dir)) {
         this.fullReady = false;
         this.setState('preparing');
         const waits = this.opts.fetchRetryMs || [];
@@ -2198,7 +2266,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, resto
             this.setState('paused');
             return undefined;
         }
-        await this.startAudio(path.join(dir, this.head ? 'audio.head.m4a' : 'audio.m4a'), gen);
+        await this.startAudio(path.join(this.cur.dir, this.head ? 'audio.head.m4a' : 'audio.m4a'), gen);
     } catch (e) {
         if (gen !== this.gen) return this.audio.release();
         return this.failPlayback(e.message);
@@ -2291,33 +2359,50 @@ Daemon.prototype.waitFull = function (ms) {
 // or all of it), rejects if it ends before. Resolves with the head's ms when it starts on the head only, else null.
 // It keeps writing the video (and the rest of the audio) after that, while we play.
 // how: 'retry' (play's next try: a new extraction, no --info) or 'again' (resumeFetch: playing, into the folder as it is)
-Daemon.prototype.fetchVideo = function (id, dir, how) {
+// WP8, in RAM: --stream from where the play starts (its resume point), a video that cannot stream so going whole to
+// the spill folder on flash (its 'spill' event); at: {ms, videoOnly} for a restream (the video again from ms)
+Daemon.prototype.fetchVideo = function (id, dir, how, at) {
     return new Promise((resolve, reject) => {
-        const again = how === 'again';
+        const again = how === 'again', c = this.cur;
+        const stream = !!this.ram && dir.indexOf(this.ram + '/') === 0, spill = path.join(this.opts.cacheDir, id);
+        const startMs = at ? at.ms : (!again && this.restart ? Math.floor(this.restart.ms) || 0 : (again ? this.elapsed : 0));
         if (!again) {
             this.rmTree(dir); // a killed fetch's leftovers
             mkdirp(dir);
             fs.chmodSync(dir, VIDEO_DIR_MODE);
             this.chownFetch(dir);
         }
-        const info = !how && this.freshInfo(id) ? ['--info', this.infoFile(id)] : [];
-        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, this.pyzArgs(), ['--', id, dir]));
+        if (stream && !at) {   // where a video that cannot stream goes, whole, as before WP8
+            this.rmTree(spill);
+            mkdirp(spill);
+            fs.chmodSync(spill, VIDEO_DIR_MODE);
+            this.chownFetch(spill);
+        }
+        let info = !how && this.freshInfo(id) ? ['--info', this.infoFile(id)] : [];
+        if (at) info = ['--info', path.join(dir, 'stream-info.json')];   // the first fetch's lookup (it looks up again when stale)
+        const sargs = !stream ? [] : ['--stream', this.opts.streamAheadMs + ',' + this.opts.streamBehindMs]
+            .concat(at ? [] : ['--spill-dir', spill], startMs > 0 ? ['--start-ms', String(startMs)] : [], at && at.videoOnly ? ['--video-only'] : [],
+                this.opts.ramBudget ? ['--budget', String(this.opts.ramBudget)] : []);
+        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, sargs, this.pyzArgs(), ['--', id, dir]));
+        if (child.stdin) child.stdin.on('error', () => { /* it ended: close says */ });
         this.fetcher = child;
         this.preparing = id;
-        this.fetchedMs = 0;
+        this.fetchedMs = stream ? startMs : 0;
+        if (stream) { c.stream = true; c.lowMs = startMs; c.fedMax = startMs; c.dir = dir; }
         let audio = again && this.fullReady, head = null, done = false, started = again, err = null, ytdecAgain = again;
         const pct = (p) => {
             p = Math.min(99, Math.max(this.pct, Math.round(p)));
             if (p !== this.pct && this.state === 'preparing') { this.pct = p; this.sendState(); }
         };
         const check = () => {
-            if (!started && (audio || head !== null) && (done || this.fetchedMs >= this.opts.startVideoMs)) { started = true; resolve(audio ? null : head); }
+            if (!started && (audio || head !== null) && (done || this.fetchedMs >= (c.lowMs || 0) + this.opts.startVideoMs)) { started = true; resolve(audio ? null : head); }
         };
         const end = (why) => {
             if (child === this.fetcher) {
                 this.fetcher = null;
                 this.preparing = null;
                 if (done && why === 'exit 0') this.fetchedMs = Infinity;
+                else if (started && c.stream && this.restreamLater(err || why)) { /* the video again from where it plays */ }
                 else if (started && this.resumeFetch(id, dir, err || why)) { /* fetched again after a wait */ }
                 else if (started && !this.fullReady) { // playing the head: the rest of the audio never comes
                     this.failPlayback('fetch: ' + (err || why)).catch((e) => this.log(e));
@@ -2334,7 +2419,19 @@ Daemon.prototype.fetchVideo = function (id, dir, how) {
             if (child !== this.fetcher) return;
             let m;
             try { m = JSON.parse(l); } catch (e) { return; }
-            if (m.ev === 'meta') {
+            if (m.ev === 'stream') {
+                if (!at) this.rmTree(spill);
+                c.lowMs = Number(m.from_ms) || 0;
+                this.log('fetch ' + id + ': in RAM from ' + c.lowMs + ' ms (fragment ' + m.fragment + ' of ' + m.fragments + ')');
+            } else if (m.ev === 'spill') {
+                c.stream = false;
+                this.log('fetch ' + id + ': the whole video on flash: ' + m.why);
+                if (m.dir === spill) { c.dir = spill; this.rmTree(dir); }
+            } else if (m.ev === 'trim') {
+                c.trimMs = Number(m.ms) || 0;
+            } else if (m.ev === 'net') {
+                this.log('fetch ' + id + ': ' + (m.ok ? 'the link is back after ' + m.tries + ' tries' : 'no link (' + m.msg + '), trying again'));
+            } else if (m.ev === 'meta') {
                 if (m.title) this.cur.title = String(m.title);
                 if (m.duration_s > 0) this.cur.durationMs = m.duration_s * 1000;
                 if (Array.isArray(m.chapters)) this.cur.chapters = m.chapters;
@@ -2378,6 +2475,60 @@ Daemon.prototype.resumeFetch = function (id, dir, why) {
         if (gen !== this.gen) return undefined;
         if (!this.fullReady) return this.failPlayback('fetch: ' + e.message);
         return this.emit({ ev: 'error', msg: 'video incomplete: ' + e.message });
+    }).catch((e) => this.log(e));
+    return true;
+};
+// ---- WP8: the video again from a point (a seek, a dropped link, a fetcher that ended early), into the same folder. The sound
+// plays on from audio.m4a (whole, in the folder); the new fetch writes a fresh video.h264 and index.bin from the fragment
+// holding ms (its 'video' events restart ytdec at the clock, as resumeFetch's do). Only once the audio is whole: before
+// that the fetch that writes it must go on.
+// outsideRam: ms is before what RAM surely still holds, or past what is fetched by more than streamJumpMs. ytfetch.py
+// punches only below fedMax - streamBehindMs (what it was told), so that bound holds whether or not its 'trim' came yet.
+Daemon.prototype.outsideRam = function (ms) {
+    const c = this.cur;
+    if (!c || !c.stream || !this.fullReady || this.head) return false;
+    const low = Math.max(c.lowMs || 0, (c.fedMax || 0) - this.opts.streamBehindMs) + 2000;
+    return ms < low || (this.fetchedMs !== Infinity && ms > this.fetchedMs + this.opts.streamJumpMs);
+};
+Daemon.prototype.restream = function (ms, why) {
+    const c = this.cur;
+    if (!c || !c.stream || !this.fullReady) return false;
+    c.restreamAt = Date.now();
+    c.restreams = (c.restreams || 0) + 1;
+    this.log('restream ' + c.id + ' at ' + ms + ' (' + why + '; RAM from ' + (c.lowMs || 0) + ', fetched to ' + this.fetchedMs + ')');
+    const gen = this.gen;
+    this.stopFetch().then(() => {
+        if (gen !== this.gen || this.cur !== c) return undefined;
+        ['video.h264', 'video.h264.part', 'index.bin'].forEach((n) => { try { fs.unlinkSync(path.join(c.dir, n)); } catch (e) { /* none */ } });
+        this.fetchedMs = ms;
+        this.checkBuffering();
+        return this.fetchVideo(c.id, c.dir, 'again', { ms: ms, videoOnly: true });
+    }).catch((e) => {
+        if (gen !== this.gen) return;
+        this.log('restream ' + c.id + ': ' + e.message);
+        this.emit({ ev: 'error', msg: 'video incomplete: ' + e.message });
+    });
+    return true;
+};
+// the link was gone a while (a tunnel): playback is past what is fetched by more than streamJumpMs: the video from there,
+// not the gap; at most every restreamMs
+Daemon.prototype.catchUp = function (elapsed) {
+    const c = this.cur;
+    if (!c || !c.stream || !this.fullReady || this.head || this.fetchedMs === Infinity) return;
+    if (elapsed <= this.fetchedMs + this.opts.streamJumpMs || Date.now() - (c.restreamAt || 0) < this.opts.restreamMs) return;
+    this.restream(elapsed, 'behind the clock');
+};
+// the streaming fetcher ended early while playing: the video again from where it plays, after a wait, 5 times a video at
+// most (each fetch already tries the link again for as long as it runs: this is for what it could not get past)
+Daemon.prototype.restreamLater = function (why) {
+    const c = this.cur;
+    if (!c || !this.fullReady || PERMANENT_RE.test(why) || (c.restreamDied || 0) >= 5) return false;
+    c.restreamDied = (c.restreamDied || 0) + 1;
+    const gen = this.gen, wait = (this.opts.fetchRetryMs || [])[Math.min(c.restreamDied - 1, 1)] || 0;
+    this.log('fetch ' + c.id + ': ' + why + ' - the video again in ' + wait + ' ms (' + c.restreamDied + ' of 5)');
+    sleep(wait).then(() => {
+        if (gen !== this.gen || this.cur !== c || this.fetcher) return;
+        this.restream(this.paused || this.headWait ? this.elapsed : this.elapsed + (Date.now() - this.lastTickAt), 'the fetch ended: ' + why);
     }).catch((e) => this.log(e));
     return true;
 };
@@ -2503,6 +2654,9 @@ Daemon.prototype.seek = async function (ms) {
     this.lastTickAt = Date.now();
     this.settle = null; // a seek back right after the switch: its times are ours
     this.ytdecSeek(ms);
+    if (this.cur && this.cur.stream) {
+        if (this.outsideRam(ms)) this.restream(ms, 'seek'); else this.feedPos(ms, true);
+    }
     // shortcut: once waiting, a seek back into the head still waits for audio.m4a (a few s), simpler than replaying the head
     if (this.headWait) return this.checkBuffering();
     if (this.head && !this.switching && ms > this.head.ms - this.opts.headMarginMs) return this.waitFull(ms);
@@ -2575,6 +2729,8 @@ Daemon.prototype.onTime = function (v) {
     this.savePos(false);
     if (this.cur.track && Date.now() - this.cur.track.at > 60000) this.ping(this.cur, true);
     this.toYtdec('clock ' + v.elapsed + ' ' + monoMs());
+    this.feedPos(v.elapsed, false);
+    this.catchUp(v.elapsed);
     this.checkBuffering();
     const now = Date.now();
     if (now - this.lastTimeEv >= 240) { // <= 4/s

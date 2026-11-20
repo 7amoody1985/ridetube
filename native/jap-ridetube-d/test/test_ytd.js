@@ -1466,6 +1466,41 @@ async function main() {
         assert.deepStrictEqual([x.ev.items, x.ev.error], [undefined, 'feed offline'], 'both fail: offline');
     });
 
+    await t('playlist, Watch later: their next pages followed (TVHTML5 sends 15 a page, #17), the first page sent at once; a failing page keeps the rest; Home asks none', async () => {
+        const { Account, nextPageToken } = require('../ytd.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-')), file = path.join(dir, 'account.json');
+        fs.writeFileSync(file, JSON.stringify({ cid: 'c', sec: 's', access: 'tok', refresh: 'r', exp: Date.now() + 3600000 }));
+        const vid = (n) => 'V' + String(n).padStart(10, '0');   // 11 characters, as a video id
+        const tile = (n) => ({ tileRenderer: { contentId: vid(n), contentType: 'TILE_CONTENT_TYPE_VIDEO', onSelectCommand: { watchEndpoint: { videoId: vid(n) } },
+            metadata: { tileMetadataRenderer: { title: { simpleText: 'Song ' + n } } } } });
+        const list = (from, next) => ({ contents: [from, from + 1, from + 2].map(tile), continuations: next ? [{ nextContinuationData: { continuation: next } }] : undefined });
+        // as VL<id> answers (2026-11): the list in the right column, the next page's token under it; a next page in continuationContents
+        const first = { contents: { tvBrowseRenderer: { content: { tvSurfaceContentRenderer: { content: { twoColumnRenderer: { rightColumn: { playlistVideoListRenderer: list(0, 'p2') } } } } } } } };
+        const more = { p2: { continuationContents: { playlistVideoListContinuation: list(3, 'p3') } }, p3: { continuationContents: { playlistVideoListContinuation: list(6, null) } } };
+        assert.deepStrictEqual([nextPageToken(first), nextPageToken(more.p2), nextPageToken(more.p3), nextPageToken({})], ['p2', 'p3', null, null]);
+        const run = async (fail) => {
+            const asked = [], evs = [], logs2 = [];
+            const yt = (method, url, headers, body) => {
+                const b = body; asked.push(b.continuation || b.browseId);
+                if (b.continuation === fail) return Promise.reject(new Error('timeout'));
+                return Promise.resolve({ status: 200, body: JSON.stringify(b.continuation ? more[b.continuation] : first) });
+            };
+            const acc = new Account({ accountFile: file, ytRequest: yt, ytTimeoutMs: 1000, log: (m) => logs2.push(m) }, (e) => evs.push(e));
+            if (feed) await acc.feed(feed); else await acc.playlist('PLlongplaylist0001');
+            return { asked, evs, ev: evs[evs.length - 1], logs: logs2 };
+        };
+        let feed = null, x = await run(null);
+        assert.deepStrictEqual([x.asked, x.ev.items.map((v) => v.title)], [['VLPLlongplaylist0001', 'p2', 'p3'], [0, 1, 2, 3, 4, 5, 6, 7, 8].map((n) => 'Song ' + n)], 'all three pages');
+        assert.deepStrictEqual(x.evs.map((e) => [e.partial, e.items.length, e.title]), [[true, 3, ''], [undefined, 9, '']], 'the first page at once (partial), then the whole list');
+        x = await run('p3');
+        assert.deepStrictEqual([x.ev.error, x.ev.items.length], [undefined, 6], 'the third page fails: the first two still show');
+        assert.ok(x.logs.some((m) => /next page: browse timeout/.test(m)), 'logged');
+        feed = 'wl'; x = await run(null);
+        assert.deepStrictEqual([x.asked, x.evs.map((e) => [e.ev, e.which, e.partial, e.items.length])], [['VLWL', 'p2', 'p3'], [['feed', 'wl', true, 3, ], ['feed', 'wl', undefined, 9]]], 'Watch later: the same');
+        feed = 'home'; x = await run(null);
+        assert.deepStrictEqual([x.asked, x.evs.length, x.ev.items.length], [['FEwhat_to_watch'], 1, 3], 'Home: one page, no next one asked (only playlists are read page by page)');
+    });
+
     await t('setTime is never 0 (the car\'s player ignores it): the start is asked as 1 ms', async () => {
         const { Audio } = require('../ytd.js');
         const got = [];

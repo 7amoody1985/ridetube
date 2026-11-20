@@ -40,7 +40,7 @@ const SHELVES = 8, SHELF_MAX = 12;   // a feed's shelves, the videos in each
 const SIZES = ['160x90', '320x180']; // the thumb sizes the daemon sends
 const PL_RE = /^[\w-]{2,64}$/, VID_RE = /^[\w-]{11}$/;   // a playlist id (PL..., LL, OLAK5uy_...), a video id
 const isPl = (x) => typeof x === 'string' && PL_RE.test(x), isVid = (x) => typeof x === 'string' && VID_RE.test(x);
-const PL_MAX = 60, PL_ITEMS = 100;    // the playlists shown, the videos of one
+const PL_MAX = 60, PL_ITEMS = 1000;   // the playlists shown, the videos of one (and of Watch later)
 const HEALTH_MS = 60000;             // a health check row may take this long (the service tries a real extract)
 const LOG_ERRORS = ['closed', 'busy', 'offline', 'failed'];   // logs_error's msg; 'old': a service without send_logs
 
@@ -225,7 +225,7 @@ class Model {
         } else if (m.ev === 'playlist') {
             const p = this.plist;
             if (!p || m.id !== p.id) return;                                          // another playlist's late answer
-            p.loading = false;
+            p.loading = m.partial === true;                                           // its first page: the rest follows
             if (m.error) p.error = String(m.error); else {
                 p.error = null; p.items = valid(m.items, PL_ITEMS);
                 if (m.title) p.title = String(m.title);
@@ -234,16 +234,16 @@ class Model {
         } else if (m.ev === 'feed') {
             if (FEEDS.indexOf(m.which) < 0) return;
             const f = this.feeds[m.which] = this.feeds[m.which] || { items: [] };
-            f.loading = false;
+            f.loading = m.partial === true;                                           // a playlist feed's first page
             if (m.error) f.error = String(m.error); else {
-                f.error = null; f.items = valid(m.items, FEED_MAX);
+                f.error = null; f.items = valid(m.items, m.which === 'wl' ? PL_ITEMS : FEED_MAX);
                 // shelves: none (an older daemon, or a playlist) = the flat list as a grid
                 f.shelves = (Array.isArray(m.shelves) ? m.shelves : []).filter((s) => s && typeof s === 'object')
                     .map((s) => ({ title: String(s.title || ''), items: valid(s.items, SHELF_MAX) })).filter((s) => s.items.length).slice(0, SHELVES);
                 if (!f.shelves.length) f.shelves = null;
                 this._prune();
             }
-            if (f.again) { f.again = false; this.feed(m.which); }
+            if (f.again && !f.loading) { f.again = false; this.feed(m.which); }
         } else if (m.ev === 'positions') {
             this.pos = {};
             valid(m.items, 300).forEach((r) => { if (r.total > 0) this.pos[r.id] = r; });

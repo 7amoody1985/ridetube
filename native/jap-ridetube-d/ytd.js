@@ -23,7 +23,7 @@ const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
 const VIDEO_DIR_MODE = 0o711;
 // thumb.rgba length -> [w, h]: 160x90 in caches from older proxies, 320x180 since 0.1.6
 const THUMB_SIZES = { 57600: [160, 90], 230400: [320, 180] };
-const VERSION = '0.4.2';   // component.json's (test_ytd.js checks): sent with a log report
+const VERSION = '0.4.3';   // component.json's (test_ytd.js checks): sent with a log report
 // the day this build was released (UTC), bumped with VERSION at each release (tools/release.py refuses one in the
 // future). A head unit clock before it is provably wrong: only then does TLS skip the certificate dates (certTime)
 const BUILT = '2026-11-19';
@@ -368,6 +368,8 @@ const SCOPE = 'http://gdata.youtube.com https://www.googleapis.com/auth/youtube-
 const TOKEN_URL = YT + '/o/oauth2/token';
 const FEEDS = { home: 'FEwhat_to_watch', subs: 'FEsubscriptions', wl: 'VLWL', hist: 'FEhistory', liked: 'VLLL' };
 const FEED_MAX = 100;   // a feed's, channel's, playlist's, search's or related list's videos (a full feed line stays far under the app's 1 MiB)
+const PLAYLIST_MAX = 1000; // a playlist's (and Watch later's, Liked's) videos, ~150 B each on the line, read 15 a page
+const PAGES_MAX = 70;      // next pages read for one playlist (70 x 15 > PLAYLIST_MAX); shortcut: a longer playlist stops at PLAYLIST_MAX
 
 // method, url, headers, body (JSON or null) -> {status, body (utf8)}; no redirects (none seen on these URLs)
 function ytRequest(method, url, headers, body, timeoutMs, lookup) {
@@ -468,7 +470,20 @@ function videoTiles(o) {
     return out;
 }
 // A TVHTML5 browse answer -> its video tiles wherever they sit (shelves, tabs, the playlist), each id once.
+// root may be an array of pages (a playlist and its continuations): walked the same way, page order.
 function feedItems(root) { return videoTiles(root); }
+// A playlist page's (or a continuation's) next-page token, or null. TVHTML5 sends 15 videos a page (2026-11, #17).
+function nextPageToken(root) {
+    let tok = null;
+    (function walk(o) {
+        if (tok || !o || typeof o !== 'object') return;
+        const l = o.playlistVideoListRenderer || o.playlistVideoListContinuation;
+        const c = l && l.continuations && l.continuations[0], n = c && (c.nextContinuationData || c.reloadContinuationData);
+        if (n && typeof n.continuation === 'string') { tok = n.continuation; return; }
+        Object.keys(o).forEach((k) => walk(o[k]));
+    })(root);
+    return tok;
+}
 const SHELF_MAX = 8, SHELF_TILES = 12;
 // A TVHTML5 browse answer -> [{title, items}], one per shelfRenderer with video tiles, page order. An untitled
 // shelf (Subscriptions' per-channel groups) is named after its channel when all its tiles share one.
@@ -780,6 +795,21 @@ Account.prototype.refresh = async function (a, out) {
 Account.prototype.browse = function (browseId, token, client) {
     return this.json('POST', YT + '/youtubei/v1/browse', { context: { client: client || this.client() }, browseId: browseId }, { Authorization: 'Bearer ' + token });
 };
+// A playlist's first page plus its next pages until `max` videos -> [pages] (just [first] when it has no next one).
+// A next page that fails ends the list there: the videos already read still show. early([first]): called once, before
+// the next pages are read, so the first 15 show at once (a 1000-video playlist is ~70 requests)
+Account.prototype.morePages = async function (first, token, max, early) {
+    const pages = [first];
+    if (early && nextPageToken(first)) early(pages.slice());
+    for (let tok = nextPageToken(first), n = 0; tok && n < PAGES_MAX && feedItems(pages).length < max; n++) {
+        let r;
+        try { r = await this.json('POST', YT + '/youtubei/v1/browse', { context: { client: this.client() }, continuation: tok }, { Authorization: 'Bearer ' + token }); } catch (e) { r = { status: e.message }; }
+        if (r.status !== 200 || !r.j) { this.log('next page: browse ' + r.status); break; }
+        pages.push(r.j);
+        tok = nextPageToken(r.j);
+    }
+    return pages;
+};
 // `feed` {which: home|subs|wl|hist|liked} -> feed{which, items, shelves} or feed{which, error}; hist is the account's
 // watch history (FEhistory), liked its Liked videos (VLLL). Signed out: error 'signed out', as every feed
 Account.prototype.feed = function (which) {
@@ -795,11 +825,14 @@ Account.prototype.feed = function (which) {
 Account.prototype.loadFeed = async function (which) {
     const g = this.gen;
     try {
-        let r = await this.browse(FEEDS[which], await this.token(false));
-        if (r.status === 401) r = await this.browse(FEEDS[which], await this.token(true)); // the token died early
+        let tok = await this.token(false), r = await this.browse(FEEDS[which], tok);
+        if (r.status === 401) r = await this.browse(FEEDS[which], tok = await this.token(true)); // the token died early
         if (g !== this.gen) throw Object.assign(new Error('signed out'), { signedOut: true });
         if (r.status !== 200 || !r.j) throw new Error('browse ' + r.status);
-        this.emit({ ev: 'feed', which: which, items: feedItems(r.j).slice(0, FEED_MAX), shelves: feedShelves(r.j) });
+        const pl = which === 'wl' || which === 'liked', max = pl ? PLAYLIST_MAX : FEED_MAX;   // playlists: read page by page
+        const pages = !pl ? [r.j] : await this.morePages(r.j, tok, max, (p) => this.emit({ ev: 'feed', which: which, items: feedItems(p).slice(0, max), shelves: [], partial: true }));
+        if (g !== this.gen) throw Object.assign(new Error('signed out'), { signedOut: true });
+        this.emit({ ev: 'feed', which: which, items: feedItems(pages).slice(0, max), shelves: feedShelves(r.j) });
     } catch (e) {
         if (!e.signedOut) this.log('feed ' + which + ': ' + e.message);
         this.emit({ ev: 'feed', which: which, error: e.signedOut ? 'signed out' : e.noUid ? e.message : 'feed offline' });
@@ -817,7 +850,7 @@ Account.prototype.channel = function (id) {
 // when it refuses (seen 2026-11: 404 for an account a while, then 200) or lists none (a page we no longer read:
 // every account has Liked videos at least), the Save to playlist list (no counts). That one failing after the
 // page's 200: the page's (empty) answer.
-// `playlist` {id} -> playlist{id, title, items} (its videos, at most FEED_MAX) or playlist{id, error}
+// `playlist` {id} -> playlist{id, title, items} (its videos, at most PLAYLIST_MAX, read page by page) or playlist{id, error}
 const ANY_VIDEO = 'jNQXAC9IVRw';   // get_add_to_playlist lists the playlists for a video; any public one does
 Account.prototype.playlists = async function () {
     const g = this.gen, call = async (fn) => {
@@ -845,17 +878,21 @@ Account.prototype.playlists = async function () {
 };
 Account.prototype.playlist = function (id) {
     if (!isPl(id)) { this.emit({ ev: 'playlist', id: String(id), error: 'bad playlist' }); return Promise.resolve(); }
-    return this.browseEv({ ev: 'playlist', id: id }, 'VL' + id, (j) => ({ title: playlistTitle(j), items: feedItems(j).slice(0, FEED_MAX) }), 0);
+    return this.browseEv({ ev: 'playlist', id: id }, 'VL' + id, (j) => ({ title: playlistTitle(j), items: feedItems(j).slice(0, PLAYLIST_MAX) }), 0, PLAYLIST_MAX);
 };
-Account.prototype.browseEv = async function (head, browseId, parse, keepMs) {
+// pagesMax: follow a playlist's next pages up to that many videos; parse then gets the array of pages, and the
+// first page goes out at once with partial: true (the whole list follows, without it)
+Account.prototype.browseEv = async function (head, browseId, parse, keepMs, pagesMax) {
     const g = this.gen, c = this.kept || (this.kept = {}), k = c[browseId];
     try {
         if (k && keepMs && Date.now() - k.t < keepMs && k.g === g) { this.emit(Object.assign({}, head, k.v)); return undefined; }
-        let r = await this.browse(browseId, await this.token(false));
-        if (r.status === 401) r = await this.browse(browseId, await this.token(true));
+        let tok = await this.token(false), r = await this.browse(browseId, tok);
+        if (r.status === 401) r = await this.browse(browseId, tok = await this.token(true));
         if (g !== this.gen) throw Object.assign(new Error('signed out'), { signedOut: true });
         if (r.status !== 200 || !r.j) throw new Error('browse ' + r.status);
-        const v = parse(r.j);
+        const j = pagesMax ? await this.morePages(r.j, tok, pagesMax, (p) => this.emit(Object.assign({}, head, parse(p), { partial: true }))) : r.j;
+        if (g !== this.gen) throw Object.assign(new Error('signed out'), { signedOut: true });
+        const v = parse(j);
         if (keepMs) c[browseId] = { t: Date.now(), g: g, v: v };
         this.emit(Object.assign({}, head, v));
     } catch (e) {
@@ -2660,7 +2697,7 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { BUILT: BUILT, clockBehind: clockBehind, qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, pickUid: pickUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { BUILT: BUILT, nextPageToken: nextPageToken, clockBehind: clockBehind, qualityHeight: qualityHeight, channelTiles: channelTiles, playlistTiles: playlistTiles, playlistTitle: playlistTitle, addToPlaylistItems: addToPlaylistItems, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, redactLog: redactLog, VERSION: VERSION, CAPS: CAPS, REPORT_URL: REPORT_URL, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, pickUid: pickUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the head unit's date (YYYY-MM-DD) when its clock is provably wrong (before BUILT), else null. A clock ahead of real
 // time cannot be proven wrong: it gets nothing

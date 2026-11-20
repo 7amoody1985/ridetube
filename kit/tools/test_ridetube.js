@@ -391,7 +391,7 @@ async function appFrames() {
         assert.deepStrictEqual(bar(), [], 'no bar where the kit runs the screen');
         assert.ok(pl.extra > 0, 'so the page reaches the screen bottom: extra ' + pl.extra);
         assert.deepStrictEqual(frame().vrect, [0, 0, pl.w, pl.h], 'the player: the video over the whole screen at once');
-        assert.deepStrictEqual(keys(), ['ov:back', 'ov:qr', 'ov:close', 'ov:rw', 'ov:play', 'ov:ff', 'ov:q', 'ov:zoom', 'ov:bar'], 'the overlay controls');
+        assert.deepStrictEqual(keys(), ['ov:back', 'ov:qr', 'ov:close', 'ov:prev', 'ov:play', 'ov:next', 'ov:q', 'ov:zoom', 'ov:bar'], 'the overlay controls');
         // Quality: auto -> 720 (the setting too); zoom: whole picture (default, 0.3.6) -> fill
         disp.pageTargets.find((t) => t.key === 'ov:q').run();
         await lastIs(d, { cmd: 'quality', quality: '720' }, 'Quality: the next one');
@@ -409,8 +409,8 @@ async function appFrames() {
         await hu.loopFn();
         disp.pageTargets.find((t) => t.key === 'ov:play').run();
         await lastIs(d, { cmd: 'pause' }, 'play / pause on the overlay');
-        disp.pageTargets.find((t) => t.key === 'ov:ff').run();
-        await lastIs(d, { cmd: 'seek', ms: 11000 }, '+10 s on the overlay');
+        disp.pageTargets.find((t) => t.key === 'ov:prev').run();
+        await lastIs(d, { cmd: 'seek', ms: 0 }, 'previous on the overlay: nothing before it, back to the start');
         // the knob on the progress bar: 10 s a detent, one seek when it rests (through the kit's controller path)
         const nSeek = d.cmds('seek').length;
         disp.focusKey = 'tgt:ov:bar';
@@ -419,7 +419,7 @@ async function appFrames() {
         assert.strictEqual(disp.focusKey, 'tgt:ov:bar', 'turning on the bar stays on it');
         await sleep(500);
         assert.strictEqual(d.cmds('seek').length, nSeek + 1, 'one seek for the three detents');
-        await lastIs(d, { cmd: 'seek', ms: 21000 }, 'the knob on the bar: +10 s net');
+        await lastIs(d, { cmd: 'seek', ms: 10000 }, 'the knob on the bar: +10 s net (from the start previous went back to)');
         // a finger on the bar (the kit's touch path, page px): dragged, the time follows it, one seek where it lets go;
         // a tap on it jumps there (no play / pause); a touch beside it is the page's as before
         const barT = disp.pageTargets.find((t) => t.key === 'ov:bar'), at = (k) => [barT.x + 10 + (barT.w - 20) * k, barT.y + barT.h / 2];
@@ -450,7 +450,7 @@ async function appFrames() {
         const nPause1 = d.cmds('pause').length, nFill = d.cmds('fill').length;
         // (parked: the speed read again, as the car sends it - a reading older than 5 s counts as driving: podcast mode)
         const parkedNow = () => speedH({ speedVehicleCentreOfGravity: 0 });
-        const at50 = async () => { parkedNow(); d.send({ ev: 'time', elapsed: 50000, total: 200000 }); disp.onPageFocus('ov:rw'); await sleep(300); await hu.loopFn(); };
+        const at50 = async () => { parkedNow(); d.send({ ev: 'time', elapsed: 50000, total: 200000 }); disp.onPageFocus('ov:prev'); await sleep(300); await hu.loopFn(); };
         await at50();
         let nS = d.cmds('seek').length;
         const R = ovPt(SW * 0.85, SH * 0.3);
@@ -505,9 +505,9 @@ async function appFrames() {
         assert.ok(disp.pageTargets.find((t) => t.key === 'ov:play').w < 300, 'shown again');
         disp.onTap(800, 300);
         await hu.loopFn();
-        disp.onPageFocus('ov:rw');                           // the knob turned
+        disp.onPageFocus('ov:prev');                         // the knob turned
         await hu.loopFn();
-        assert.ok(disp.pageTargets.find((t) => t.key === 'ov:rw').w < 300, 'the controller shows it');
+        assert.ok(disp.pageTargets.find((t) => t.key === 'ov:prev').w < 300, 'the controller shows it');
         console.log('ok   full-screen player: overlay controls, hides on a tap, a tap or the controller shows it');
         // driving: podcast mode - no picture, the big controls always there (no overlay to wake)
         speedH({ speedVehicleCentreOfGravity: 50 * 64 });
@@ -544,9 +544,9 @@ async function appFrames() {
         await sleep(300); await hu.loopFn();
         assert.ok(!frame().vrect, 'setting off: no video while driving again');
         console.log('ok   Video while driving setting keeps the picture while moving');
-        ['ov:rw', 'ov:play', 'ov:ff', 'ov:close'].forEach((k) => assert.ok(disp.pageTargets.some((t) => t.key === k && t.w > 120 && t.w < 300), 'podcast control ' + k + ': ' + keys()));
-        disp.pageTargets.find((t) => t.key === 'ov:ff').run();
-        await until(() => d.cmds('seek').length > seeks, 2000, 'a podcast +10 s');
+        ['ov:prev', 'ov:play', 'ov:next', 'ov:close'].forEach((k) => assert.ok(disp.pageTargets.some((t) => t.key === k && t.w > 120 && t.w < 300), 'podcast control ' + k + ': ' + keys()));
+        disp.pageTargets.find((t) => t.key === 'ov:prev').run();
+        await until(() => d.cmds('seek').length > seeks, 2000, 'podcast previous, nothing before it: back to the start');
         assert.ok(disp.pageTargets.some((t) => t.key === 'ov:bar' && t.turn), 'podcast: the knob seeks on the bar');
         await sleep(300); await hu.loopFn();
         const podBar = disp.pageTargets.find((t) => t.key === 'ov:bar'), pAt = (k) => [podBar.x + 10 + (podBar.w - 20) * k, podBar.y + podBar.h / 2];
@@ -882,6 +882,17 @@ async function appFrames() {
         await on('plvideo0004', 500);
         await wheel('next'); await wheel('next');
         assert.deepStrictEqual(plays().slice(n0), ['plvideo0005', 'plvideo0004', 'plvideo0005', 'plvideo0006'], 'next, next: back through the list');
+        // podcast mode's buttons do the same (#18: previous / next took the place of -10 s / +10 s; the player's too)
+        const ovb = async (k) => {
+            disp.onPageFocus(k); await sleep(60); await hu.loopFn();          // (shown first: hidden, a press only wakes it)
+            disp.pageTargets.find((t) => t.key === k && t.w < 300).run(); await sleep(80); await hu.loopFn();
+        };
+        await on('plvideo0006', 500);
+        const nO = plays().length;
+        await ovb('ov:prev');
+        await on('plvideo0005', 500);
+        await ovb('ov:next');
+        assert.deepStrictEqual(plays().slice(nO), ['plvideo0005', 'plvideo0006'], 'the overlay: previous, then next');
         await on('plvideo0006', 500);
         const n1 = plays().length;
         rock('SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS'); rock('SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS'); rock('SUCHLAUF_ABWAERTS_MENUE_SKIP_LINKS'); rock(3); rock(0);
@@ -1150,7 +1161,15 @@ function wp5Model() {
     m.feed('hist'); assert.deepStrictEqual(sent.pop(), { cmd: 'feed', which: 'hist' }, 'History is a feed');
     m.onMsg({ ev: 'feed', which: 'hist', items: n(130) }); assert.strictEqual(m.feeds.hist.items.length, 100, 'History: at most 100');
     m.q = 'q'; m.onMsg({ ev: 'results', q: 'q', items: n(130) }); assert.strictEqual(m.results.length, 100, 'results: at most 100');
-    m.openPlaylist('PLaaaaaaaaaa'); m.onMsg({ ev: 'playlist', id: 'PLaaaaaaaaaa', items: n(130) }); assert.strictEqual(m.plist.items.length, 100, 'a playlist: at most 100');
+    // a playlist (and Watch later): at most 1000 (service 0.4.3 reads its pages, #17); its first page comes
+    // first (partial: still loading, not asked again), then the whole list
+    m.openPlaylist('PLaaaaaaaaaa'); m.onMsg({ ev: 'playlist', id: 'PLaaaaaaaaaa', items: n(15), partial: true });
+    assert.deepStrictEqual([m.plist.items.length, m.plist.loading, m.openPlaylist('PLaaaaaaaaaa')], [15, true, false], 'the first page: shown, still loading');
+    m.onMsg({ ev: 'playlist', id: 'PLaaaaaaaaaa', items: n(1100) });
+    assert.deepStrictEqual([m.plist.items.length, m.plist.loading], [1000, false], 'a playlist: at most 1000');
+    m.feed('wl'); sent.pop(); m.onMsg({ ev: 'feed', which: 'wl', items: n(15), shelves: [], partial: true });
+    assert.deepStrictEqual([m.feeds.wl.items.length, m.feeds.wl.loading, m.feed('wl')], [15, true, false], 'Watch later\'s first page: still loading');
+    m.onMsg({ ev: 'feed', which: 'wl', items: n(1100), shelves: [] }); assert.deepStrictEqual([m.feeds.wl.items.length, m.feeds.wl.loading], [1000, false], 'Watch later: at most 1000');
     m.onMsg({ ev: 'feed', which: 'hist', items: [{ id: 'SHORT000001', short: true }] }); assert.strictEqual(m.feeds.hist.items[0].short, true, 'short:true kept (main.js filters)');
     const shorts = n(120).map((r) => Object.assign({ short: true }, r));
     m.onMsg({ ev: 'feed', which: 'hist', items: shorts.slice(0, 90).concat(n(5)) });
@@ -1778,12 +1797,12 @@ async function wp12Frames(x) {
     d.send({ ev: 'state', state: 'playing', id: vid('HOMEB', 2), title: 'HOMEB 2' }); d.send({ ev: 'time', elapsed: 1000, total: 60000 });
     await sleep(300); await settle(); await sleep(10); await settle();
     kept('tile to the player');
-    const pl = await sweep('player', ['ov:back', 'ov:close', 'ov:rw', 'ov:play', 'ov:ff', 'ov:q', 'ov:zoom', 'ov:bar']);
+    const pl = await sweep('player', ['ov:back', 'ov:close', 'ov:prev', 'ov:play', 'ov:next', 'ov:q', 'ov:zoom', 'ov:bar']);
     assert.ok(pl.size >= 8, 'the overlay');
     // driving: podcast mode, its big controls and the bar (the knob seeks there: so it comes last)
     speed(50 * 64); await sleep(300); await settle(); await sleep(10); await settle();
     kept('player to podcast mode');
-    await sweep('podcast mode', ['ov:rw', 'ov:play', 'ov:ff', 'ov:close', 'ov:bar']);
+    await sweep('podcast mode', ['ov:prev', 'ov:play', 'ov:next', 'ov:close', 'ov:bar']);
     speed(0); await sleep(300); await settle();
     await tilt('W');
     assert.ok(here().endsWith(':' + vid('HOMEB', 2)), 'pushed left: back on the tile: ' + here());

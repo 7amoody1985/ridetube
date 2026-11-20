@@ -187,14 +187,16 @@ resume point) and `members: true` (a members-only badge) when the tile has them;
 line as YouTube writes them, without
 the `•` and the badges (`["125K views","1 day ago"]`, `[]` when none), `short: true` for a Short (the app decides
 whether it shows them), and `live: true` for a live stream or an upcoming premiere (`duration_s` null; not playable yet,
-the app shows a LIVE tag and does not ask to play it). `items`: every video tile once, page order, ≤ 100.
+the app shows a LIVE tag and does not ask to play it). `items`: every video tile once, page order, ≤ 100 (`wl` and `liked`:
+≤ 1000, read 15 a page since 0.4.3, the first page sent at once with `partial: true` and `shelves: []`, then the whole list).
 `shelves`: YouTube's rows in page order (≤ 8, ≤ 12 tiles each, video tiles and Shorts only, deduped per row, empty rows
 dropped); `title` is the row header, else the channel when all its tiles share one (Subscriptions' per-channel rows), else `""`.
 Watch later is a playlist with no rows: `shelves: []`, use `items`.
 `{"ev":"playlists","items":[{id,title,count,meta,thumb}]}` or `{"ev":"playlists","error"}`: the library page's playlists, page
 order, each once, Watch later left out (`feed` `wl` has it). `count` is the tile's "N videos" (null when it shows none), `meta`
 its other texts (`["Private","Updated today"]`), `thumb` the video whose picture the tile shows (ask it with `thumb`; null when
-none). `{"ev":"playlist","id","title","items":[item]}` or `{"ev":"playlist","id","error"}`: a playlist's videos (≤ 100), `title`
+none). `{"ev":"playlist","id","title","items":[item]}` or `{"ev":"playlist","id","error"}`: a playlist's videos (≤ 1000 since 0.4.3, YouTube's next pages read 15 at a time, the first page sent at once with `partial: true`
+and the whole list after it; before, the first 15), `title`
 its name (`""` when the page has none).
 `{"ev":"logs_sent","id":"ABC123"}`: the relay took the report, `id` is the code the user quotes in a GitHub issue.
 `{"ev":"logs_error","msg":"closed|busy|offline|failed"}`: reporting switched off at the relay (410), too many reports

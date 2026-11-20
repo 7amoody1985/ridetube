@@ -1,6 +1,6 @@
 # Changelog
 
-## Service 0.4.3 and app 0.4.8
+## Service 0.4.3 and app 0.4.9
 
 - Playlists show all their videos (#17). YouTube's TV answer holds 15 videos a page, and the service only read the
   first one. It now reads the next pages too, up to 1000 videos, for playlists and Watch later. The first 15 show
@@ -12,7 +12,9 @@
 - Two fingers on the controller's touchpad scroll the page, as on an iPhone: fingers up, the videos go up. RideTube
   turns the touchpad's touch mode on while it shows and off again when it hides, as the HMI's speller does.
 - One finger on the touchpad moves a pointer, a round dot. The video under it is selected, and a tap on the
-  touchpad or a press of the knob plays it. Turning the knob hides the pointer; it also hides 2.5 s after the finger stops.
+  touchpad or a press of the knob plays it. Turning the knob hides the pointer; it also hides 5 s after the finger stops.
+- With Video while driving switched on and its disclaimer agreed to (while parked), typing a search works while
+  driving too, from the Search page and the menu. Before that, or with the setting off, it stays parked only.
 - A volume display: turning the volume knob (or the wheel's buttons, or muting) shows the level as a bar and a
   number, with an arrow up or down, for 2 seconds. The car's own volume pop-up is hidden behind the video.
 - The controller knob goes straight from tile to tile. Before, its first turn put a red frame round the whole page

@@ -1770,6 +1770,17 @@ async function wp10Frames(x) {
     assert.strictEqual(wp5.spells, sp, 'still no keyboard');
     hu.handlers.BTN_SEARCH(); await sleep(50);
     assert.deepStrictEqual([wp5.spells, hmi.MAIN_INFO], [sp, 'Typing works only while parked'], 'the menu\'s Search too: no keyboard, why in the info line');
+    // Video while driving agreed to (parked): typing works while driving too, as the picture does
+    speed(0); await sleep(50);
+    hu.ctx.settings.set('video_driving', true); await sleep(300); await drawn();
+    await until(() => disp.pageTargets.some((t) => t.key === 'risk:ok'), 2000, 'the disclaimer');
+    disp.pageTargets.find((t) => t.key === 'risk:ok').run(); await sleep(300); await drawn();
+    speed(50 * 64); await sleep(50);
+    hu.handlers.BTN_SEARCH(); await sleep(50);
+    assert.strictEqual(wp5.spells, sp + 1, 'agreed: the menu\'s Search opens the keyboard while driving');
+    hu.ctx.settings.set('video_driving', false); await sleep(300); await drawn();
+    hu.handlers.BTN_SEARCH(); await sleep(50);
+    assert.strictEqual(wp5.spells, sp + 1, 'switched off: no keyboard while driving again');
     // Menu: the HMI menu (the account, Settings, Send logs)
     tgt('r:0:::menu').run();
     await sleep(50);
@@ -1853,6 +1864,7 @@ async function wp12Frames(x) {
       const yC = t3().y;
       await stroke(200, 203, true);
       assert.strictEqual(t3().y, yC, 'a resting hand (3 units): no scroll');
+
       // one finger, slowly: the pointer moves, what is under it gets the controller, the page stays put;
       // a short tap on the pad plays the tile it is on; a turn of the knob hides it
       const one = async (x, y) => { car.padH({ statusSystemModeFrontSide: 3, touchCoordinatesX1FrontSide: x, touchCoordinatesY1FrontSide: y, touchCoordinatesZ1FrontSide: 0 }); await sleep(20); };

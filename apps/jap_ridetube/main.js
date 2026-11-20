@@ -208,7 +208,7 @@ mgu.run({
         const flash = (text) => { note = { text, until: Date.now() + 4000 }; dirty = true; };
         let toResults = false;                       // a search just run: its results brought into view when they come
         const page = require('./search')({ settings, legacy: path.join(ctx.dataDir, 'recent.json'), model, t: translate, whole, message,
-            moving: () => parked.moving(), type: () => typeSearch(true), run: (q) => search(q), menu: () => ui.open('MAIN'), flash,
+            moving: () => noVideo(), type: () => typeSearch(true), run: (q) => search(q), menu: () => ui.open('MAIN'), flash,
             changed: () => { showSlots(); dirty = true; }, glyphs: () => ({ KEYS, ALL, X: (cv, x, y, c) => xGlyph(cv, x, y, 22, c) }) });
         let suggestions = SUGGEST.map(translate);
         const slots = () => { const recent = page.list(); return recent.concat(suggestions.filter((s) => recent.indexOf(s) < 0)).slice(0, SLOTS.length); };
@@ -225,10 +225,10 @@ mgu.run({
             if (!quiet) ui.open('VIEW');
             return true;
         }
-        // the HMI's speller, parked only: from the menu (an error or why not in its info line), or the Search page
-        // (left without a search: back on the page)
+        // the HMI's speller, parked or with Video while driving agreed to (the same lock as the picture): from the menu
+        // (an error or why not in its info line), or the Search page (left without a search: back on the page)
         function typeSearch(fromPage) {
-            if (parked.moving()) {
+            if (noVideo()) {
                 if (fromPage) flash(translate('Typing works only while parked'));
                 else ui.text('MAIN_INFO', translate('Typing works only while parked'), 0, 'Text', { literal: true });
                 return Promise.resolve();

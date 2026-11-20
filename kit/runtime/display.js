@@ -78,7 +78,7 @@ const LAYOUTS = ['full', 'standard'];
 
 // the HMI's page animation when a screen opens (the picture shows after it)
 const SHOW_DELAY_MS = 350;
-const PTR_MS = 2500;   // the touchpad's pointer hides this long after the finger stops
+const PTR_MS = 5000;   // the touchpad's pointer hides this long after the finger stops (time to read a title, then tap)
 
 class Display {
     constructor(ui, log, spec, settings, themeFn) {

@@ -1796,6 +1796,14 @@ async function wp12Frames(x) {
     await sleep(80); await settle();
     // Home: three shelves (two of them past the screen's edge), Watch later, the rail
     const home = await sweep('Home', ['rail:search', 'rail:hist', vid('HOMEA', 8), vid('HOMEB', 8), vid('HOMEC', 4)]);
+    // the knob goes tile to tile from its first turn: no page-wide scroll place, so no frame round the page
+    disp._focus(null); await turn(1);
+    assert.ok(here() && here() !== 'scroll' && keys().indexOf(here()) >= 0, 'first turn on Home: a tile or the rail, not the page frame: ' + here());
+    assert.ok(!disp._ring().some((p) => p.scroll), 'Home has no scroll place in the knob\'s ring');
+    // a finger still drags the page (the sweep left it at its bottom): dragged down, a tile of the third row moves down
+    { const t3 = () => disp.pageTargets.find((t) => /^h:2:/.test(t.key)), y0 = t3().y, pl = disp.place, X = pl.ox + pl.w * 0.6, Y = pl.oy + pl.h * 0.3;
+      disp._touch(1, X, Y); disp._touch(2, X, Y + 80); disp._touch(2, X, Y + 200); disp._touch(3, X, Y + 200); await settle(); await sleep(300); await settle();
+      assert.ok(t3().y > y0 + 50, 'dragged down: the page moved (' + y0 + ' -> ' + t3().y + ')'); }
     assert.ok([...home].filter((k) => /^h:\d+:/.test(k)).length >= 9 + 9 + 5 + 6, 'every Home tile');
     // a tile pushed: the player, the controller on its controls; pushed left: back on that tile
     disp.focusPage(keyOf(vid('HOMEB', 2))); await settle();

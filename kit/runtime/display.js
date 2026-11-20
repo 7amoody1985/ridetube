@@ -236,13 +236,14 @@ class Display {
     /**
      * What the controller's knob goes through, in order: the header's tabs, the page's targets, the bar. A
      * scrolling page is one more place, before its targets; with cv.scroll = { y, bar } (a list on the page that
-     * scrolls, from y down) after the targets that end over y (the page's buttons over the list).
+     * scrolls, from y down) after the targets that end over y (the page's buttons over the list). cv.scroll =
+     * { tiles: true }: no such place (every item is a target that brings itself into view; a finger still drags).
      */
     _ring() {
         const tl = this._tabList();
         // ("fill": no header, so no tabs)
         const tabs = !this.fill() && (tl.tabs.length > 1 || tl.settings >= 0) ? tl.tabs.map((x, i) => ({ k: 'tab:' + i, tab: i })) : [];
-        const scroll = this.pageScroll && this.onScroll ? [{ k: 'scroll', scroll: true }] : [];
+        const scroll = this.pageScroll && this.onScroll && !this.pageScroll.tiles ? [{ k: 'scroll', scroll: true }] : [];
         const tgts = (this.pageTargets || []).map((q) => ({ k: 'tgt:' + q.key, tgt: q }));
         const top = this.pageScroll && this.pageScroll.y != null ? this.pageScroll.y : -Infinity;
         const over = tgts.filter((p) => p.tgt.y + p.tgt.h <= top);

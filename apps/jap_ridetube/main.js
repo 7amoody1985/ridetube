@@ -933,7 +933,8 @@ mgu.run({
             after.forEach((fn) => fn());
             cv.noclip();
             laid = { mode, rows: L.rows, viewH, where };
-            if (cv.own && st.max > 0) cv.scroll = true;
+            // a finger drags the page; the knob goes tile to tile (onPageFocus scrolls), no page-wide scroll place
+            if (cv.own && st.max > 0) cv.scroll = { tiles: true };
         }
         // the controller on a tile: its shelf turned and the page scrolled so that it shows whole
         if (ctx.onPageFocus) ctx.onPageFocus((key) => {

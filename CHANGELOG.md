@@ -10,6 +10,8 @@
   it. Previous goes back to the start, or to the video before when pressed in the first 3 seconds. To seek, double
   tap the picture's left or right side (player), turn the knob on the progress bar, or hold the steering wheel's
   skip button.
+- The controller knob goes straight from tile to tile. Before, its first turn put a red frame round the whole page
+  and scrolled it to the end before reaching any tile. A finger still drags the page.
 - Where the car's own menu bar runs the screen (not the kit), its buttons are still -10 s and +10 s.
 - Chinese: three texts no longer show gaps (the two full-width touch notices and the yt-dlp setting). The Chinese
   font was missing 7 of their characters; a test now checks every Chinese text against it.

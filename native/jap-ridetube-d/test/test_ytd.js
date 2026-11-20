@@ -572,8 +572,13 @@ async function main() {
         await sleep(500);
         assert.ok(!fs.existsSync(ctl + '.update.log'), 'off: no look');
         // on again: the update again, a look soon
+        const onAt = Date.now();
         c.send({ cmd: 'ytdlp', auto: true });
         await c.waitFor((x) => x.ev === 'ytdlp' && x.auto === true);
+        // ytdlpNext is 0 since the step above, so that look starts at the next tick: let it end here. Left running, it could
+        // start after the steps below removed update.log, answer their waits early, and leave a look of theirs to come
+        // after they reset the timers ("a refused video: no look" failed now and then, and WP2's next case saw its --pyz)
+        await waitUntil(() => (d.ytdlpAt || 0) >= onAt && !d.ytdlpRun, 3000);
         c.clear(); c.send({ cmd: 'ytdlp' });                      // auto left out: only the state
         assert.strictEqual((await c.waitFor((x) => x.ev === 'ytdlp')).auto, true);
         assert.deepStrictEqual(d.pyzArgs(), ['--pyz', pyz]);
@@ -823,6 +828,8 @@ async function main() {
         await waitUntil(() => ytdecLines().filter((l) => / argv /.test(l)).length === 2);
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(!/--fill/.test(argv[0]) && /--rect 1280x720 --fill /.test(argv[1]), argv.join('\n'));
+        // the seek reaches the fake's log a moment after its argv line (it raced, now and then): wait for it, then check where
+        await waitUntil(() => ytdecLines().filter((l) => / in seek /.test(l)).length > 0);
         assert.ok(ytdecLines().some((l) => / in seek 40\d\d$/.test(l)), 'at the clock');
         c.send({ cmd: 'fill', on: true });
         await sleep(300);

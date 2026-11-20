@@ -1593,7 +1593,15 @@ function rideTubeWords() {
     return out;
 }
 
-clientAndModel().then(helloCaps).then(wp5Model).then(wp10Unit).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+// every character of the Chinese catalog is in RideTube's Chinese atlas (a missing glyph draws as a gap: three strings
+// had gaps until 0.4.6); rebake kit/localization/fonts/ridetube-zh-CN.json after adding Chinese strings
+function zhGlyphs() {
+    const words = require('../runtime/locales/zh-CN.json'), atlas = require('../localization/fonts/ridetube-zh-CN.json').sizes[0];
+    const gaps = [...new Set([...Object.values(words).join('')])].filter((c) => c.codePointAt(0) > 0x2e7f && !atlas.glyphs[c.codePointAt(0)]);
+    assert.deepStrictEqual(gaps, [], 'Chinese characters missing from ridetube-zh-CN.json');
+    console.log('ok   every Chinese character of the catalog is in the atlas');
+}
+Promise.resolve().then(zhGlyphs).then(clientAndModel).then(helloCaps).then(wp5Model).then(wp10Unit).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
 
 // ======== WP10 Search page (apps/jap_ridetube/search.js): the rail's Search, Type a search (parked only), the
 // recent searches (10, newest first, in the settings), Clear, Menu, then the results

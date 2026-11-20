@@ -11,6 +11,8 @@
   tap the picture's left or right side (player), turn the knob on the progress bar, or hold the steering wheel's
   skip button.
 - Where the car's own menu bar runs the screen (not the kit), its buttons are still -10 s and +10 s.
+- Chinese: three texts no longer show gaps (the two full-width touch notices and the yt-dlp setting). The Chinese
+  font was missing 7 of their characters; a test now checks every Chinese text against it.
 - With an older service, playlists still stop at their first 15 videos. With an older app, at 100.
 
 ## Service 0.4.2 and app 0.4.5

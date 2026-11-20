@@ -11,6 +11,7 @@
 // WP8 --stream A,B: says {ev:stream, from_ms (--start-ms or 0), fragment, fragments...} after meta, or, when <ctl> says "spill" at start,
 // {ev:spill, dir: --spill-dir} and writes its files there. Its video events' ms start at from_ms (+5000, +12000). --video-only: no audio
 // steps or files. Every stdin line after the job (the daemon's "pos <ms>") is appended to <ctl>.stdin (emptied when a job starts).
+// <ctl> "net" while running: one {ev:net, ok:false, msg:'x'}; "netup" after it: one {ev:net, ok:true, tries:2}. Under --stream the second video event carries dl: 3 MiB, waited: 2.
 // <ctl> "trim" while running: one {ev:trim, ms:30000, bytes:1048576}. A done ends the process even with stdin open.
 const fs = require('fs');
 const path = require('path');
@@ -56,13 +57,15 @@ if (!videoOnly) steps.push(
 else steps.push(failStart);
 steps.push(
     () => { fs.writeFileSync(path.join(dir, 'index.bin'), 'i'); fs.writeFileSync(path.join(dir, 'video.h264.part'), 'v'); say({ ev: 'video', ms: fromMs + 5000, frames: 150, bytes: 1, pct: 8 }); },
-    () => say({ ev: 'video', ms: fromMs + 12000, frames: 360, bytes: 2, pct: 20 }));
-let i = 0;
+    () => say({ ev: 'video', ms: fromMs + 12000, frames: 360, bytes: 2, pct: 20, dl: 3145728, waited: 2 }));
+let i = 0, netDown = false, netUp = false;
 const t = setInterval(() => {
     if (i < steps.length) return steps[i++]();
     const m = mode();
     if (!full && (start === 'head' || m === 'full' || m === 'done')) audioReady();
     if (m === 'trim' && !trimmed) { trimmed = true; say({ ev: 'trim', ms: 30000, bytes: 1048576 }); }
+    if (m === 'net' && !netDown) { netDown = true; say({ ev: 'net', ok: false, msg: 'x' }); }   // lab stats: the link drops, then (<ctl> netup) comes back
+    if (m === 'netup' && netDown && !netUp) { netUp = true; say({ ev: 'net', ok: true, tries: 2 }); }
     if (m === 'done') { fs.renameSync(path.join(dir, 'video.h264.part'), path.join(dir, 'video.h264')); say({ ev: 'done' }); clearInterval(t); process.stdin.destroy(); }
     if (m === 'error' || m === 'dead') { say({ ev: 'error', msg: 'HTTP 403' }); process.exit(1); }
     return undefined;

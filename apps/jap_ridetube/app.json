@@ -257,6 +257,12 @@
       ]
     },
     {
+      "key": "stats_overlay",
+      "label": "Stream stats over the video (RAM, buffer, network): for testing",
+      "type": "bool",
+      "default": false
+    },
+    {
       "key": "video_driving",
       "label": "Video while driving - at your own risk, only for a car coded for video in motion (passengers); takes effect once parked",
       "type": "bool",

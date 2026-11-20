@@ -1665,7 +1665,10 @@ function tmpfsOf(dir, mounts) {
         const f = l.split(' ');
         if (f.length < 4) return;
         const mnt = f[1].replace(/\\040/g, ' ');
-        if ((dir === mnt || dir.indexOf(mnt === '/' ? '/' : mnt + '/') === 0) && (!best || mnt.length > best.mnt.length)) best = { mnt: mnt, type: f[2] };
+        if ((dir === mnt || dir.indexOf(mnt === '/' ? '/' : mnt + '/') === 0) && (!best || mnt.length > best.mnt.length)) {
+            const size = /(?:^|,)size=(\d+)k(?:,|$)/.exec(f[3]);   // (lab: the stats overlay's RAM size)
+            best = { mnt: mnt, type: f[2], sizeKb: size ? Number(size[1]) : null };
+        }
     });
     return best && best.type === 'tmpfs' ? best : null;
 }
@@ -1675,6 +1678,7 @@ Daemon.prototype.pickRam = function () {
     try { mounts = fs.readFileSync('/proc/mounts', 'utf8'); } catch (e) { /* not Linux: none unless ramCheck is off */ }
     for (const d of [o.ramDir, o.ramFallback]) {
         if (!d || (o.ramCheck && !tmpfsOf(d, mounts))) continue;
+        this.ramSizeKb = o.ramCheck ? tmpfsOf(d, mounts).sizeKb : null;
         try {
             mkdirp(d);
             // root's own real folder, as cache/ (checkCacheDir): /dev/shm is anyone's, a folder or a symlink put there
@@ -1687,6 +1691,41 @@ Daemon.prototype.pickRam = function () {
         } catch (e) { this.log('ram dir ' + d + ': ' + e.message + ': not used'); }
     }
     return null;
+};
+// LAB: the stats overlay's numbers ({"cmd":"stream_stats"}), from what the service knows plus a few /proc reads; no ids,
+// no titles. MB with one decimal; s whole; null when unknown.
+function kbOf(text, key) { const m = new RegExp('^' + key + ':\\s+(\\d+)', 'm').exec(text || ''); return m ? Number(m[1]) : null; }
+function readText(f) { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return ''; } }
+function duKb(p) {   // what p holds: blocks, so punched holes do not count
+    let st;
+    try { st = fs.lstatSync(p); } catch (e) { return 0; }
+    if (!st.isDirectory()) return Math.ceil(st.blocks / 2);
+    let n = 0;
+    try { fs.readdirSync(p).forEach((x) => { n += duKb(path.join(p, x)); }); } catch (e) { /* gone */ }
+    return n;
+}
+const mb1 = (kb) => (kb === null || kb === undefined ? null : Math.round(kb / 102.4) / 10);
+Daemon.prototype.streamStats = function () {
+    const c = this.cur, mem = readText('/proc/meminfo'), rss = (ch) => {
+        const k = ch && ch.pid ? kbOf(readText('/proc/' + ch.pid + '/status'), 'VmRSS') : null;
+        return k === null ? null : Math.round(k / 1024);
+    };
+    const swapT = kbOf(mem, 'SwapTotal'), swapF = kbOf(mem, 'SwapFree');
+    const low = c && c.stream ? Math.max(c.lowMs || 0, (c.fedMax || 0) - this.opts.streamBehindMs) : null;
+    return {
+        state: this.state, buffering: !!this.buffering,
+        stored: !c ? null : c.stream ? 'ram' : this.ram && c.dir.indexOf(this.ram + '/') === 0 ? 'ram' : 'flash',
+        ram: this.ram ? { used_mb: mb1(duKb(this.ram)), size_mb: mb1(this.ramSizeKb) } : null,
+        elapsed_s: Math.round((this.elapsed || 0) / 1000),
+        ahead_s: !c ? null : this.fetchedMs === Infinity ? 'all' : Math.round((this.fetchedMs - (this.elapsed || 0)) / 1000),
+        behind_s: low === null ? null : Math.max(0, Math.round(((this.elapsed || 0) - low) / 1000)),
+        downloaded_mb: c ? mb1(((c.dlBefore || 0) + (c.dl || 0)) / 1024) : null,
+        net: c ? (c.netDown ? 'down' : 'ok') : null, drops: c ? c.netDrops || 0 : 0,
+        restreams: c ? c.restreams || 0 : 0, stalls: c ? c.stalls || 0 : 0, waited_s: c ? c.waited || 0 : 0,
+        mem_avail_mb: mb1(kbOf(mem, 'MemAvailable')), swap_used_mb: swapT === null || swapF === null ? null : mb1(swapT - swapF),
+        rss_mb: { service: Math.round(process.memoryUsage().rss / 1048576), ytdec: rss(this.child), fetcher: rss(this.fetcher) },
+        load: Number(readText('/proc/loadavg').split(' ')[0]) || null
+    };
 };
 // where a video's folder goes: RAM when there is one
 Daemon.prototype.media = function () { return this.ram || this.opts.cacheDir; };
@@ -1927,6 +1966,7 @@ Daemon.prototype.onLine = function (line) {
     switch (m.cmd) {
     case 'prefetch': return this.prefetch(m.id);
     case 'positions': return this.sendPositions();
+    case 'stream_stats': return this.emit(Object.assign({ ev: 'stream_stats' }, this.streamStats()));   // (lab)
     case 'status': this.sendState(); if (this.total) this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total }); return undefined;
     case 'ytdlp': return typeof m.auto === 'boolean' ? this.setYtdlpAuto(m.auto) : this.sendYtdlp();
     case 'search': return this.search(m.q);
@@ -2014,7 +2054,9 @@ Daemon.prototype.setState = function (s) {
     this.sendState();
 };
 Daemon.prototype.sendState = function (pct) {
+    const was = this.buffering;
     this.buffering = this.isBuffering();
+    if (this.buffering && !was && this.cur) this.cur.stalls = (this.cur.stalls || 0) + 1;   // (lab stats)
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
         id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering };
     if (this.ram && this.cur) o.stored = this.cur.stream ? 'ram' : 'flash';   // WP8 (cap `stream`): where the playing video is held
@@ -2430,6 +2472,8 @@ Daemon.prototype.fetchVideo = function (id, dir, how, at) {
             } else if (m.ev === 'trim') {
                 c.trimMs = Number(m.ms) || 0;
             } else if (m.ev === 'net') {
+                c.netDown = !m.ok;
+                if (!m.ok) c.netDrops = (c.netDrops || 0) + 1;
                 this.log('fetch ' + id + ': ' + (m.ok ? 'the link is back after ' + m.tries + ' tries' : 'no link (' + m.msg + '), trying again'));
             } else if (m.ev === 'meta') {
                 if (m.title) this.cur.title = String(m.title);
@@ -2445,6 +2489,7 @@ Daemon.prototype.fetchVideo = function (id, dir, how, at) {
             }
             else if (m.ev === 'video') {
                 this.fetchedMs = Number(m.ms) || 0;
+                if (m.dl !== undefined) { c.dl = Number(m.dl) || 0; c.waited = Number(m.waited) || 0; }
                 if (ytdecAgain && this.child && this.ticking) { // the index begun again: a ytdec reading it from the start, at the clock
                     ytdecAgain = false;
                     this.killYtdec();
@@ -2500,6 +2545,8 @@ Daemon.prototype.restream = function (ms, why) {
     this.stopFetch().then(() => {
         if (gen !== this.gen || this.cur !== c) return undefined;
         ['video.h264', 'video.h264.part', 'index.bin'].forEach((n) => { try { fs.unlinkSync(path.join(c.dir, n)); } catch (e) { /* none */ } });
+        c.dlBefore = (c.dlBefore || 0) + (c.dl || 0);   // (lab stats: the downloads of the fetches before this one)
+        c.dl = 0;
         this.fetchedMs = ms;
         this.checkBuffering();
         return this.fetchVideo(c.id, c.dir, 'again', { ms: ms, videoOnly: true });

@@ -267,6 +267,9 @@ class Model {
             this.caps = Array.isArray(m.caps) ? m.caps.filter((x) => typeof x === 'string') : [];
             this.ev_clock(m);
             if (this.can('ytdlp')) this.send({ cmd: 'ytdlp', auto: this.ytdlpAuto });   // the setting, once the service says it has it
+        } else if (m.ev === 'stream_stats') {   // LAB: the stats overlay's numbers
+            this.stats = m;
+            this.statsAt = Date.now();
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
@@ -403,6 +406,8 @@ class Model {
         return any;
     }
     stop() { return this.active() ? this.send({ cmd: 'stop' }) : false; }
+    /** LAB: the service's stream stats for the overlay (an older service answers "unknown cmd": the panel stays "...") */
+    askStats() { return this.connected ? this.send({ cmd: 'stream_stats' }) : false; }
     /** while playing: the same video again at this quality, from where it is */
     quality(q) { return this.active() ? this.send({ cmd: 'quality', quality: q }) : false; }
     /** fill (crop to the screen) or fit (the whole picture) for the playing video */

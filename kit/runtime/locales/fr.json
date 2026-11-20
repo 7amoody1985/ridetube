@@ -225,5 +225,6 @@
   "One finger on the touchpad moves a pointer: tap, or press the knob, to play the video under it": "Un doigt sur le pavé tactile déplace un pointeur : touchez, ou appuyez sur la molette, pour lire la vidéo dessous",
   "Turning the volume shows the level, and whether it goes up or down": "Tourner le volume affiche le niveau, et s'il monte ou descend",
   "The knob goes straight from video to video": "La molette passe directement de vidéo en vidéo",
-  "With Video while driving agreed to, you can type a search while driving": "Avec Vidéo en roulant acceptée, la recherche au clavier marche aussi en roulant"
+  "With Video while driving agreed to, you can type a search while driving": "Avec Vidéo en roulant acceptée, la recherche au clavier marche aussi en roulant",
+  "Stream stats over the video (RAM, buffer, network): for testing": "Statistiques du flux sur la vidéo (RAM, tampon, réseau) : pour tester"
 }

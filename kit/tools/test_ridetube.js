@@ -1098,6 +1098,31 @@ function extrasModel() {
     console.log('ok   extras: Continue watching, positions, chapters, the skipped toast');
 }
 
+// LAB stream stats: the service's numbers kept for the overlay, asked only while connected
+function statsModel() {
+    const sent = [];
+    const m = new Model((o) => { sent.push(o); return true; });
+    assert.ok(!m.stats && !m.statsAt, 'nothing before an answer');
+    assert.strictEqual(m.askStats(), false, 'not connected: not asked');
+    assert.deepStrictEqual(sent, []);
+    m.connected = true;
+    assert.ok(m.askStats(), 'connected: asked');
+    assert.deepStrictEqual(sent, [{ cmd: 'stream_stats' }]);
+    const rev = m.rev, before = Date.now();
+    const msg = { ev: 'stream_stats', state: 'playing', stored: 'ram', ram: { used_mb: 12.3, size_mb: 256 }, ahead_s: 7, behind_s: 2, downloaded_mb: 3,
+        net: 'ok', drops: 0, restreams: 1, stalls: 0, waited_s: 0, mem_avail_mb: 900, swap_used_mb: 0, rss_mb: { service: 20, ytdec: 30, fetcher: null }, load: 0.5 };
+    m.onMsg(msg);
+    assert.strictEqual(m.stats, msg, 'the answer kept as it came');
+    assert.ok(m.statsAt >= before && m.statsAt <= Date.now(), 'stamped');
+    assert.ok(m.rev > rev, 'the screens redraw');
+    m.onMsg({ ev: 'stream_stats', state: 'idle', stored: null, ahead_s: 'all' });
+    assert.strictEqual(m.stats.ahead_s, 'all', 'the newest answer replaces it');
+    m.setConnected(false);
+    assert.strictEqual(m.askStats(), false, 'the service gone: not asked');
+    assert.strictEqual(sent.length, 1);
+    console.log('ok   LAB stream stats: the answer kept and stamped (rev bumped), asked only when connected');
+}
+
 // the log report's states: one at a time, the service's answers, an older service, no answer, the service gone
 function logsModel() {
     const sent = [];
@@ -1646,7 +1671,7 @@ function zhGlyphs() {
     assert.deepStrictEqual(gaps, [], 'Chinese characters missing from ridetube-zh-CN.json');
     console.log('ok   every Chinese character of the catalog is in the atlas');
 }
-Promise.resolve().then(zhGlyphs).then(clientAndModel).then(helloCaps).then(wp5Model).then(wp10Unit).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+Promise.resolve().then(zhGlyphs).then(clientAndModel).then(helloCaps).then(wp5Model).then(wp10Unit).then(appFrames).then(logsModel).then(channelSearch).then(extrasModel).then(statsModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
 
 // ======== WP10 Search page (apps/jap_ridetube/search.js): the rail's Search, Type a search (parked only), the
 // recent searches (10, newest first, in the settings), Clear, Menu, then the results

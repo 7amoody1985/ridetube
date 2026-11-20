@@ -169,6 +169,7 @@ App → daemon (every `case` of `onLine` in `ytd.js`, no more, no fewer: `test_y
 | `{"cmd":"quality","quality":q}` | while playing, at another height (as `play`): the video fetched again from where it is (in the first 10 s too), paused if it was; the same height: nothing. A pause, resume, seek, stop or play sent during that restart is applied or cancels it |
 | `{"cmd":"stop"}` | STOP, disconnect, ytdec `quit` (SIGKILL after 1 s) |
 | `{"cmd":"positions"}` | → `positions` |
+| `{"cmd":"stream_stats"}` | LAB ONLY (7amoody1985's branch `lab-ram`, not for a pull request): → `stream_stats`, the app's stats overlay |
 | `{"cmd":"auth_status"}` | → `auth` |
 | `{"cmd":"auth"}` | signed in, or a code still valid: → that `auth` again; else a new device code → `auth` `code`, then polled until `signed_in`, `signed_out` (expired, denied) or `error` |
 | `{"cmd":"sign_out"}` | deletes the account → `auth` `signed_out` |
@@ -207,6 +208,8 @@ Daemon → app:
   and SponsorBlock segments (`sponsor`, `selfpromo`, `interaction`, `intro`, `outro`, `music_offtopic`), at the play and
   again when the segments come in.
 - `{"ev":"skipped","category","ms"}`: a SponsorBlock segment of a `skip` category was skipped (`ms`: its length).
+- `{"ev":"stream_stats","state","buffering","stored","ram":{used_mb,size_mb},"elapsed_s","ahead_s","behind_s","downloaded_mb","net","drops","restreams","stalls","waited_s","mem_avail_mb","swap_used_mb","rss_mb":{service,ytdec,fetcher},"load"}`:
+  LAB ONLY (branch `lab-ram`): the stats overlay's numbers (`streamStats`), no ids or titles.
 - `{"ev":"positions","items":[{id,ms,total,done,at,title,channel,duration_s}]}`: where each video played on this car was
   left, newest first (`at`: when, epoch ms; `done`: within 5 % or 5 s of its end), at most 300.
 - `{"ev":"auth","state":"signed_out|code|signed_in|error","code","url","expires" (s left, with code),"msg" (with error)}`.

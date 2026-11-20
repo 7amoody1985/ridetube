@@ -757,6 +757,121 @@ async function main() {
         }
     });
 
+    // ---- LAB: the stats overlay's numbers ({"cmd":"stream_stats"})
+    const askStats = async () => {
+        c.clear();
+        c.send({ cmd: 'stream_stats' });
+        return c.waitFor((x) => x.ev === 'stream_stats', 3000);
+    };
+
+    await t('LAB stream_stats: idle, RAM off: nothing stored, no RAM, the numbers there', async () => {
+        d.ram = null;
+        const s = await askStats();
+        assert.strictEqual(s.state, 'idle');
+        assert.strictEqual(s.stored, null);
+        assert.strictEqual(s.ram, null);
+        assert.strictEqual(s.ahead_s, null);
+        assert.strictEqual(s.behind_s, null);
+        assert.strictEqual(s.downloaded_mb, null);
+        assert.strictEqual(s.net, null);
+        assert.deepStrictEqual([s.drops, s.restreams, s.stalls, s.waited_s], [0, 0, 0, 0]);
+        assert.ok(s.rss_mb.service > 0, 'service rss');
+        assert.strictEqual(s.rss_mb.ytdec, null);
+        assert.strictEqual(s.rss_mb.fetcher, null);
+        assert.ok(s.mem_avail_mb > 0, 'MemAvailable');
+        assert.ok(s.swap_used_mb === null || s.swap_used_mb >= 0);
+        assert.ok(s.load === null || s.load >= 0);
+    });
+
+    await t('LAB stream_stats: a streaming play in RAM: stored ram, RAM used, seconds ahead of the clock, megabytes downloaded', async () => {
+        d.ram = ramRoot;
+        try {
+            await ramPlay('LABSTATS001');
+            await waitUntil(() => d.fetchedMs === 12000 && d.cur.dl === 3145728, 4000);
+            tickAt(5000);
+            fs.writeFileSync(path.join(ramRoot, 'LABSTATS001', 'filler.bin'), Buffer.alloc(2 * 1048576, 1));
+            const s = await askStats();
+            assert.strictEqual(s.state, 'playing');
+            assert.strictEqual(s.stored, 'ram');
+            assert.strictEqual(typeof s.ram.used_mb, 'number');
+            assert.ok(s.ram.used_mb >= 2, 'the folder holds at least the 2 MiB filler: ' + s.ram.used_mb);
+            assert.ok(s.ram.size_mb === null || typeof s.ram.size_mb === 'number');
+            assert.strictEqual(s.elapsed_s, 5);
+            assert.strictEqual(s.ahead_s, Math.round((12000 - 5000) / 1000));
+            assert.strictEqual(s.downloaded_mb, 3);
+            assert.strictEqual(s.waited_s, 2);
+            assert.ok(s.behind_s >= 0);
+            assert.strictEqual(s.net, 'ok');
+            assert.deepStrictEqual([s.drops, s.restreams], [0, 0]);
+            assert.ok(Number.isInteger(s.stalls) && s.stalls >= 0);
+            assert.ok(s.rss_mb.fetcher === null || s.rss_mb.fetcher > 0);
+            tickAt(9000);
+            assert.strictEqual((await askStats()).ahead_s, 3, 'follows the clock');
+        } finally {
+            await wp8Stop();
+            d.ram = null;
+        }
+    });
+
+    await t('LAB stream_stats: net events from the fetcher: down (one drop), then ok again, the drop still counted', async () => {
+        d.ram = ramRoot;
+        try {
+            await ramPlay('LABSTATS002');
+            fs.writeFileSync(ctl, 'net');
+            await waitUntil(() => d.cur.netDown === true, 4000);
+            let s = await askStats();
+            assert.strictEqual(s.net, 'down');
+            assert.strictEqual(s.drops, 1);
+            fs.writeFileSync(ctl, 'netup');
+            await waitUntil(() => d.cur.netDown === false, 4000);
+            s = await askStats();
+            assert.strictEqual(s.net, 'ok');
+            assert.strictEqual(s.drops, 1);
+        } finally {
+            await wp8Stop();
+            fs.writeFileSync(ctl, '');
+            d.ram = null;
+        }
+    });
+
+    await t('LAB stream_stats: a video that spilled is stored on flash', async () => {
+        d.ram = ramRoot;
+        try {
+            fs.writeFileSync(ctl, 'spill');
+            d.posFedAt = 0;
+            await fetchPlay('LABSTATS003');
+            const s = await askStats();
+            assert.strictEqual(s.stored, 'flash');
+            assert.strictEqual(s.state, 'playing');
+            assert.strictEqual(s.restreams, 0);
+        } finally {
+            await wp8Stop();
+            fs.writeFileSync(ctl, '');
+            d.ram = null;
+        }
+    });
+
+    await t('LAB stream_stats: restreams are counted and the downloads of the fetches before one add up', async () => {
+        d.ram = ramRoot;
+        try {
+            await ramPlay('LABSTATS004');
+            await waitUntil(() => d.cur.dl === 3145728, 4000);
+            assert.strictEqual((await askStats()).downloaded_mb, 3);
+            const p0 = fetchLog().pid;
+            tickAt(50000);                              // past 12000 + streamJumpMs: restream at the clock
+            await newFetch(p0);
+            assert.strictEqual(d.cur.restreams, 1);
+            await waitUntil(() => d.fetchedMs === 62000 && d.cur.dl === 3145728, 4000);
+            const s = await askStats();
+            assert.strictEqual(s.restreams, 1);
+            assert.strictEqual(s.downloaded_mb, 6, 'the first fetch 3 MiB + the second 3 MiB');
+            assert.strictEqual(s.stored, 'ram');
+        } finally {
+            await wp8Stop();
+            d.ram = null;
+        }
+    });
+
     await t('speed: a warm spare takes the prefetch (stream lookup); the next spare takes the play, with --info', async () => {
         fs.writeFileSync(ctl, ''); setMode('ok');
         const id = 'FFFFFFFFFF5';

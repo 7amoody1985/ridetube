@@ -736,6 +736,10 @@ mgu.run({
             if (on !== videoShown) { videoShown = on; dirty = true; }
         }
         setInterval(() => { try { sync(); } catch (e) { log.error('sync', e); } }, 250);
+        // LAB: the stream stats overlay (setting stats_overlay): asked every 2 s, only while it shows (the player, a video)
+        setInterval(() => {
+            try { if (settings.get('stats_overlay') === true && mode === 'player' && model.active() && model.connected) model.askStats(); } catch (e) { log.error('stats', e); }
+        }, 2000);
         ui.onVisible((name, v) => { if (name === 'VIEW') { sync(); dirty = true; } });
         if (ui.onFocus) ui.onFocus(() => sync());
         if (ctx.onLayout) ctx.onLayout(() => { dirty = true; });
@@ -1427,6 +1431,7 @@ mgu.run({
             if (!overlay() && !pod) {
                 cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined));
                 picArea.ctls = [];                         // (hidden: those keys only wake it, no control under a tap)
+                statsPanel(cv, SW);
                 return;
             }
             cv.xf(s, 0, 0);
@@ -1571,7 +1576,31 @@ mgu.run({
                 cv.text(t, hx + tw / 2, hy + 44, 34, '#ffffff', { literal: true, font: 'bold', align: 'center' });
             }
             if (barT) barT();
+            statsPanel(cv, SW);
             hmiIcons(cv);
+        }
+        // LAB: the stream stats panel, top right over the full-screen player while a video is loaded (setting stats_overlay):
+        // where the video is held and the RAM folder's use, the window (s fetched ahead of the clock, s kept behind), the
+        // download and the link, restarts / stalls, the head unit's free memory and swap, the decoder's and fetcher's
+        // memory, the load. Grey once the last answer is over 6 s old; the first line amber when the video is on flash.
+        function statsPanel(cv, SW) {
+            if (settings.get('stats_overlay') !== true || !model.active()) return;
+            const st = model.stats, old = !st || Date.now() - model.statsAt > 6000;
+            const v = (x, u) => (x === null || x === undefined ? '-' : x + (u || ''));
+            const lines = !st ? ['Stream stats...'] : [
+                st.stored === 'ram' ? 'RAM ' + v(st.ram && st.ram.used_mb) + ' / ' + v(st.ram && st.ram.size_mb) + ' MB, video in RAM'
+                    : 'Video on flash' + (st.ram ? ' (RAM ' + v(st.ram.used_mb) + ' MB)' : ''),
+                'Ahead ' + (st.ahead_s === 'all' ? 'all' : v(st.ahead_s, ' s')) + ' | behind ' + v(st.behind_s, ' s'),
+                'Downloaded ' + v(st.downloaded_mb, ' MB') + ' | link ' + v(st.net) + (st.drops ? ' (' + st.drops + ' drops)' : ''),
+                'Restarts ' + v(st.restreams) + ' | stalls ' + v(st.stalls) + ' | waited ' + v(st.waited_s, ' s'),
+                'Free RAM ' + v(st.mem_avail_mb, ' MB') + ' | swap ' + v(st.swap_used_mb, ' MB'),
+                'ytdec ' + v(st.rss_mb && st.rss_mb.ytdec, ' MB') + ' | fetch ' + v(st.rss_mb && st.rss_mb.fetcher, ' MB') + ' | load ' + v(st.load)
+            ];
+            cv.xf();
+            const w = 420, x = SW - w - 24, y = 20, lh = 27;
+            cv.roundRect(x, y, w, 18 + lines.length * lh, 14, '#000000c0');
+            lines.forEach((t, i) => cv.text(fit(cv, t, 20, w - 28, LIT), x + 14, y + 31 + i * lh, 20,
+                i === 0 && st && st.stored !== 'ram' ? '#ffd27a' : old ? '#9a9a9a' : '#ffffff', LIT));
         }
         // the HMI's home and back arrow column: its taps stay the HMI's, but no black hole over the video;
         // the same two icons where the HMI has them (screen px), on the scrim
